@@ -15,12 +15,6 @@
     "description": "当无法访问服务器时解释可用操作的副标题"
   },
   "account": "賬戶",
-  "supportConduit": "支持 Conduit",
-  "supportConduitSubtitle": "通過資助持續開發來保持 Conduit 的獨立性。",
-  "githubSponsorsTitle": "GitHub 贊助",
-  "githubSponsorsSubtitle": "成爲定期贊助者以資助路線圖項目。",
-  "buyMeACoffeeTitle": "Buy Me a Coffee",
-  "buyMeACoffeeSubtitle": "一次性捐贈以表達感謝。",
   "signOut": "退出登錄",
   "endYourSession": "結束您的會話",
   "defaultModel": "默認模型",

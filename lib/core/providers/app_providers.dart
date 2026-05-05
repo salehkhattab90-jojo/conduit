@@ -39,6 +39,7 @@ import '../../shared/theme/tweakcn_themes.dart';
 import '../../shared/theme/app_theme.dart';
 import '../../features/tools/providers/tools_providers.dart';
 import '../models/socket_transport_availability.dart';
+import '../constants/locked_server.dart';
 import 'storage_providers.dart';
 import 'package:drift/drift.dart' show Value;
 import '../database/database_provider.dart';
@@ -176,11 +177,30 @@ class AppLocale extends _$AppLocale {
   }
 }
 
-// Server connection providers - optimized with caching
+// Server connection providers - optimized with caching.
+//
+// This build is locked to a single OpenWebUI server (see [kLockedServerUrl]).
+// The provider auto-bootstraps a [ServerConfig] for that server on first run,
+// preserving any previously saved apiKey if storage already held a matching
+// entry. There is no in-app way to add, switch, or remove servers.
 @Riverpod(keepAlive: true)
 Future<List<ServerConfig>> serverConfigs(Ref ref) async {
   final storage = ref.watch(optimizedStorageServiceProvider);
-  return storage.getServerConfigs();
+  final stored = await storage.getServerConfigs();
+  final locked = _ensureLockedConfig(stored);
+
+  // Persist normalized state if anything changed (different URL, missing
+  // entry, or migrated id), so storage stays the source of truth.
+  final needsWrite =
+      stored.length != 1 ||
+      stored.first.id != locked.id ||
+      stored.first.url != locked.url;
+  if (needsWrite) {
+    await storage.saveServerConfigs([locked]);
+    await storage.setActiveServerId(locked.id);
+  }
+
+  return [locked];
 }
 
 @Riverpod(keepAlive: true)
@@ -189,22 +209,46 @@ Future<ServerConfig?> activeServer(Ref ref) async {
   final configs = await ref.watch(serverConfigsProvider.future);
   final activeId = await storage.getActiveServerId();
 
-  if (configs.isEmpty) return null;
-
-  ServerConfig? fallback;
-  for (final config in configs) {
-    if (activeId != null && config.id == activeId) {
-      return config;
-    }
-    if (fallback == null && config.isActive) {
-      fallback = config;
-    }
+  // The locked-server build always has exactly one config; ensure the active
+  // pointer matches it even if storage was wiped or contained stale state.
+  if (activeId != kLockedServerId) {
+    await storage.setActiveServerId(kLockedServerId);
   }
-  fallback ??= configs.length == 1 ? configs.first : null;
-  if (fallback == null) return null;
 
-  await storage.setActiveServerId(fallback.id);
-  return fallback.isActive ? fallback : fallback.copyWith(isActive: true);
+  return configs.first;
+}
+
+/// Returns a [ServerConfig] for the locked URL, carrying over the apiKey from
+/// any previously saved config so credentials survive provider rebuilds.
+ServerConfig _ensureLockedConfig(List<ServerConfig> stored) {
+  final existing = stored.firstWhere(
+    (c) => c.url == kLockedServerUrl,
+    orElse: () => stored.firstWhere(
+      (c) => c.id == kLockedServerId,
+      orElse: () => const ServerConfig(
+        id: kLockedServerId,
+        name: kLockedServerName,
+        url: kLockedServerUrl,
+        isActive: true,
+      ),
+    ),
+  );
+
+  return ServerConfig(
+    id: kLockedServerId,
+    name: kLockedServerName,
+    url: kLockedServerUrl,
+    apiKey: existing.apiKey,
+    customHeaders: existing.customHeaders,
+    isActive: true,
+    allowSelfSignedCertificates: existing.allowSelfSignedCertificates,
+    mtlsCertificateChainPem: existing.mtlsCertificateChainPem,
+    mtlsCertificateLabel: existing.mtlsCertificateLabel,
+    mtlsPrivateKeyPem: existing.mtlsPrivateKeyPem,
+    mtlsPrivateKeyLabel: existing.mtlsPrivateKeyLabel,
+    mtlsPrivateKeyPassword: existing.mtlsPrivateKeyPassword,
+    lastConnected: existing.lastConnected,
+  );
 }
 
 final serverConnectionStateProvider = Provider<bool>((ref) {

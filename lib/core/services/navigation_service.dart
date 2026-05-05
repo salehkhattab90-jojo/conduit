@@ -102,16 +102,14 @@ class NavigationService {
   static Future<void> navigateToChat() => navigateTo(Routes.chat);
   static Future<void> navigateToFolder(String folderId) =>
       navigateTo(Routes.folderPath(folderId));
-  static Future<void> navigateToLogin() => navigateTo(Routes.serverConnection);
+  static Future<void> navigateToLogin() => navigateTo(Routes.authentication);
   static Future<void> navigateToProfile() => navigateTo(Routes.profile);
-  static Future<void> navigateToServerConnection() =>
-      navigateTo(Routes.serverConnection);
 
   /// Clear navigation history. With GoRouter this becomes a simple go call.
   static void clearNavigationStack() {
     final router = _router;
     if (router == null) return;
-    router.go(Routes.serverConnection);
+    router.go(Routes.authentication);
   }
 }
 
@@ -121,7 +119,6 @@ class Routes {
   static const String chat = '/chat';
   static const String folder = '/folder/:id';
   static const String login = '/login';
-  static const String serverConnection = '/server-connection';
   static const String connectionIssue = '/connection-issue';
   static const String authentication = '/authentication';
   static const String ssoAuth = '/sso-auth';
@@ -145,7 +142,6 @@ class RouteNames {
   static const String chat = 'chat';
   static const String folder = 'folder';
   static const String login = 'login';
-  static const String serverConnection = 'server-connection';
   static const String connectionIssue = 'connection-issue';
   static const String authentication = 'authentication';
   static const String ssoAuth = 'sso-auth';

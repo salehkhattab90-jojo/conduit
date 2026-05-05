@@ -15,12 +15,6 @@
     "description": "Ondertitel die beschikbare acties uitlegt wanneer de server niet bereikbaar is"
   },
   "account": "Account",
-  "supportConduit": "Ondersteun Conduit",
-  "supportConduitSubtitle": "Houd Conduit onafhankelijk door doorlopende ontwikkeling te financieren.",
-  "githubSponsorsTitle": "GitHub Sponsors",
-  "githubSponsorsSubtitle": "Word een terugkerende sponsor om roadmap-items te financieren.",
-  "buyMeACoffeeTitle": "Buy Me a Coffee",
-  "buyMeACoffeeSubtitle": "Doe een eenmalige donatie om bedankt te zeggen.",
   "signOut": "Uitloggen",
   "endYourSession": "Beëindig je sessie",
   "defaultModel": "Standaardmodel",

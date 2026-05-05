@@ -15,7 +15,6 @@ import '../../features/auth/views/authentication_page.dart';
 import '../../features/auth/views/connect_signin_page.dart';
 import '../../features/auth/views/connection_issue_page.dart';
 import '../../features/auth/views/proxy_auth_page.dart';
-import '../../features/auth/views/server_connection_page.dart';
 import '../../features/auth/views/sso_auth_page.dart';
 import '../../features/chat/views/chat_page.dart';
 import '../../features/navigation/views/folder_page.dart';
@@ -95,33 +94,17 @@ class RouterNotifier extends ChangeNotifier {
       return location == Routes.connectionIssue ? null : Routes.connectionIssue;
     }
 
+    // Locked-server build: activeServerProvider always bootstraps a config,
+    // so the legacy "no server configured" branch has been removed. If
+    // activeServer is null here it means bootstrap is still in flight; keep
+    // the user on the splash/auth routes rather than redirecting elsewhere.
     final activeServer = activeServerAsync.asData?.value;
-    final hasActiveServer = activeServer != null;
-    if (!hasActiveServer) {
-      // No server configured - redirect to server connection
-      // Exception: allow staying on server connection, authentication,
-      // proxy auth, and SSO pages during the connection/auth flow.
-      // But always redirect away from connection issue page (user logged out)
-      if (location == Routes.serverConnection ||
-          location == Routes.authentication ||
-          location == Routes.proxyAuth ||
-          location == Routes.ssoAuth ||
-          location == Routes.login) {
-        return null;
-      }
-      return Routes.serverConnection;
+    if (activeServer == null) {
+      if (_isAuthLocation(location) || location == Routes.splash) return null;
+      return Routes.splash;
     }
 
     final authState = ref.read(authNavigationStateProvider);
-
-    // Allow staying on server connection page
-    if (location == Routes.serverConnection) {
-      // If authenticated but on server connection page, go to chat
-      // Otherwise stay on server connection page (for back navigation)
-      return authState == AuthNavigationState.authenticated
-          ? Routes.chat
-          : null;
-    }
 
     switch (authState) {
       case AuthNavigationState.loading:
@@ -162,8 +145,7 @@ class RouterNotifier extends ChangeNotifier {
   }
 
   bool _isAuthLocation(String location) {
-    return location == Routes.serverConnection ||
-        location == Routes.login ||
+    return location == Routes.login ||
         location == Routes.authentication ||
         location == Routes.connectionIssue ||
         location == Routes.ssoAuth ||
@@ -258,12 +240,6 @@ final goRouterProvider = Provider<GoRouter>((ref) {
           _buildPlatformPage(state: state, child: const ConnectAndSignInPage()),
     ),
     GoRoute(
-      path: Routes.serverConnection,
-      name: RouteNames.serverConnection,
-      pageBuilder: (context, state) =>
-          _buildPlatformPage(state: state, child: const ServerConnectionPage()),
-    ),
-    GoRoute(
       path: Routes.connectionIssue,
       name: RouteNames.connectionIssue,
       pageBuilder: (context, state) =>
@@ -311,10 +287,11 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       pageBuilder: (context, state) {
         final config = state.extra;
         if (config is! ProxyAuthConfig) {
-          // Fallback - should not happen in normal flow
+          // Fallback - should not happen in normal flow.
+          // Locked-server build has no connection page, so route to sign-in.
           return _buildPlatformPage(
             state: state,
-            child: const ServerConnectionPage(),
+            child: const AuthenticationPage(),
           );
         }
         return _buildPlatformPage(

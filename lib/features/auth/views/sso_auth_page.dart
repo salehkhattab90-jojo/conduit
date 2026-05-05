@@ -20,12 +20,14 @@ import '../../../shared/widgets/conduit_components.dart';
 import 'package:conduit/l10n/app_localizations.dart';
 import '../providers/unified_auth_providers.dart';
 
-/// SSO Authentication page that uses a WebView to handle OAuth/OIDC flows.
+/// SSO Authentication page that uses a WebView to handle the Google OAuth flow.
 ///
-/// This page loads the Open-WebUI `/auth` page in a WebView, allowing users
-/// to authenticate via configured OAuth providers (Google, Microsoft, GitHub,
-/// OIDC, etc.). After successful authentication, the JWT token is captured
-/// from cookies or localStorage and used to authenticate in Conduit.
+/// This build is locked to Google as the only SSO provider, so the WebView
+/// loads `${serverUrl}/oauth/google/login` directly — Open-WebUI immediately
+/// redirects to Google's consent screen, skipping the OWUI sign-in page that
+/// would otherwise force the user to tap a second "Sign in with Google" button.
+/// After Google returns the user, Open-WebUI sets the token cookie and we
+/// capture it from cookies or localStorage to authenticate in Conduit.
 class SsoAuthPage extends ConsumerStatefulWidget {
   final ServerConfig? serverConfig;
 
@@ -120,8 +122,11 @@ class _SsoAuthPageState extends ConsumerState<SsoAuthPage> {
     }
 
     try {
+      // Locked to Google SSO: jump straight into Open-WebUI's
+      // /oauth/google/login, which 302s to Google's consent screen and
+      // skips the OWUI sign-in page (no second "Sign in with Google" tap).
       await controller.loadUrl(
-        urlRequest: URLRequest(url: WebUri('$serverUrl/auth')),
+        urlRequest: URLRequest(url: WebUri('$serverUrl/oauth/google/login')),
       );
     } catch (e) {
       DebugLogger.error(
@@ -482,7 +487,7 @@ class _SsoAuthPageState extends ConsumerState<SsoAuthPage> {
     if (!mounted) return;
 
     await controller.loadUrl(
-      urlRequest: URLRequest(url: WebUri('$_serverUrl/auth')),
+      urlRequest: URLRequest(url: WebUri('$_serverUrl/oauth/google/login')),
     );
   }
 

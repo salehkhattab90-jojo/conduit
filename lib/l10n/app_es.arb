@@ -15,12 +15,6 @@
     "description": "Subtítulo que explica las acciones disponibles cuando no se puede acceder al servidor"
   },
   "account": "Cuenta",
-  "supportConduit": "Apoyar Conduit",
-  "supportConduitSubtitle": "Mantén Conduit independiente financiando el desarrollo continuo.",
-  "githubSponsorsTitle": "GitHub Sponsors",
-  "githubSponsorsSubtitle": "Conviértete en un patrocinador recurrente para financiar elementos del roadmap.",
-  "buyMeACoffeeTitle": "Buy Me a Coffee",
-  "buyMeACoffeeSubtitle": "Haz una donación única para agradecer.",
   "signOut": "Cerrar sesión",
   "endYourSession": "Finalizar tu sesión",
   "defaultModel": "Modelo predeterminado",

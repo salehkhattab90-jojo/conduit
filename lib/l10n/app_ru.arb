@@ -15,12 +15,6 @@
     "description": "Подзаголовок с доступными действиями при недоступности сервера"
   },
   "account": "Аккаунт",
-  "supportConduit": "Поддержать Conduit",
-  "supportConduitSubtitle": "Сохраните независимость Conduit, финансируя разработку.",
-  "githubSponsorsTitle": "GitHub Sponsors",
-  "githubSponsorsSubtitle": "Станьте регулярным спонсором для финансирования дорожной карты.",
-  "buyMeACoffeeTitle": "Buy Me a Coffee",
-  "buyMeACoffeeSubtitle": "Сделайте разовое пожертвование в знак благодарности.",
   "signOut": "Выйти",
   "endYourSession": "Завершить сеанс",
   "defaultModel": "Модель по умолчанию",

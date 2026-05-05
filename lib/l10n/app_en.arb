@@ -36,30 +36,6 @@
   "@account": {
     "description": "Section header for account-related options."
   },
-  "supportConduit": "Support Conduit",
-  "@supportConduit": {
-    "description": "Section header inviting the user to financially support the project."
-  },
-  "supportConduitSubtitle": "Keep Conduit independent by funding ongoing development.",
-  "@supportConduitSubtitle": {
-    "description": "Subtitle explaining why donations are helpful."
-  },
-  "githubSponsorsTitle": "GitHub Sponsors",
-  "@githubSponsorsTitle": {
-    "description": "Tile title linking to the GitHub Sponsors page."
-  },
-  "githubSponsorsSubtitle": "Become a recurring sponsor to fund roadmap items.",
-  "@githubSponsorsSubtitle": {
-    "description": "Subtitle explaining the impact of recurring sponsorship."
-  },
-  "buyMeACoffeeTitle": "Buy Me a Coffee",
-  "@buyMeACoffeeTitle": {
-    "description": "Tile title linking to the Buy Me a Coffee page."
-  },
-  "buyMeACoffeeSubtitle": "Make a one-time donation to say thanks.",
-  "@buyMeACoffeeSubtitle": {
-    "description": "Subtitle encouraging one-time donations via Buy Me a Coffee."
-  },
   "signOut": "Sign Out",
   "@signOut": {
     "description": "Button/title for signing out of the app."

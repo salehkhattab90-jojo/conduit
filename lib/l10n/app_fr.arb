@@ -15,12 +15,6 @@
     "description": "Sous-titre expliquant les actions possibles quand le serveur est injoignable"
   },
   "account": "Compte",
-  "supportConduit": "Soutenir Conduit",
-  "supportConduitSubtitle": "Financez le développement continu et les nouvelles fonctionnalités.",
-  "githubSponsorsTitle": "GitHub Sponsors",
-  "githubSponsorsSubtitle": "Devenez sponsor récurrent pour soutenir la feuille de route.",
-  "buyMeACoffeeTitle": "Buy Me a Coffee",
-  "buyMeACoffeeSubtitle": "Faites un don ponctuel pour nous encourager.",
   "signOut": "Se déconnecter",
   "endYourSession": "Terminer votre session",
   "defaultModel": "Modèle par défaut",
