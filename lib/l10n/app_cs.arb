@@ -626,7 +626,7 @@
   "@chatQueuedPendingTitle": {
     "description": "Title shown when a queued assistant response is waiting for sync/backoff."
   },
-  "chatQueuedPendingMessage": "Conduit spustí tuto odpověď, jakmile poběží synchronizace.",
+  "chatQueuedPendingMessage": "FADI spustí tuto odpověď, jakmile poběží synchronizace.",
   "@chatQueuedPendingMessage": {
     "description": "Body text shown for a queued assistant response that is waiting to be sent."
   },
@@ -2860,7 +2860,7 @@
   "@inactiveStatus": {
     "description": "Label for an inactive account status."
   },
-  "appInformation": "Aplikace Conduit",
+  "appInformation": "Aplikace FADI",
   "@appInformation": {
     "description": "Heading for local app information."
   },

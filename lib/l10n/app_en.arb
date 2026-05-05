@@ -1,6 +1,6 @@
 {
   "@@locale": "en",
-  "appTitle": "Conduit",
+  "appTitle": "FADI",
   "@appTitle": {
     "description": "Application name displayed in the app and OS UI."
   },
@@ -490,7 +490,7 @@
   "@voiceCallErrorHelp": {
     "description": "Guidance shown when the voice call encounters an error."
   },
-  "messageHintText": "Ask Conduit",
+  "messageHintText": "Ask FADI",
   "@messageHintText": {
     "description": "Short placeholder text in the message input."
   },
@@ -602,7 +602,7 @@
   "@chatQueuedPendingTitle": {
     "description": "Title shown when a queued assistant response is waiting for sync/backoff."
   },
-  "chatQueuedPendingMessage": "Conduit will start this response as soon as sync runs.",
+  "chatQueuedPendingMessage": "FADI will start this response as soon as sync runs.",
   "@chatQueuedPendingMessage": {
     "description": "Body text shown for a queued assistant response that is waiting to be sent."
   },
@@ -900,7 +900,7 @@
   "@aboutApp": {
     "description": "Settings tile title to view app information."
   },
-  "aboutAppSubtitle": "Conduit information and links",
+  "aboutAppSubtitle": "FADI information and links",
   "@aboutAppSubtitle": {
     "description": "Subtitle/description for the About section."
   },
@@ -1205,13 +1205,13 @@
   "@themePalette": {
     "description": "Title for selecting the app color palette."
   },
-  "themePaletteConduitLabel": "Conduit",
+  "themePaletteConduitLabel": "FADI",
   "@themePaletteConduitLabel": {
-    "description": "Palette name for the default Conduit theme."
+    "description": "Palette name for the default brand theme."
   },
-  "themePaletteConduitDescription": "Clean neutral theme designed for Conduit.",
+  "themePaletteConduitDescription": "Clean neutral theme designed for FADI.",
   "@themePaletteConduitDescription": {
-    "description": "Description of the Conduit palette."
+    "description": "Description of the brand palette."
   },
   "themePaletteClaudeLabel": "Claude",
   "@themePaletteClaudeLabel": {
@@ -1257,7 +1257,7 @@
   "@currentlyUsingLightTheme": {
     "description": "Status text indicating light theme is active."
   },
-  "aboutConduit": "About Conduit",
+  "aboutConduit": "About FADI",
   "@aboutConduit": {
     "description": "Dialog title for app information."
   },
@@ -1365,7 +1365,7 @@
   "@androidAssistantOverlayOption": {
     "description": "Option label for keeping the current assistant overlay."
   },
-  "androidAssistantNewChatOption": "Open Conduit with a new chat",
+  "androidAssistantNewChatOption": "Open FADI with a new chat",
   "@androidAssistantNewChatOption": {
     "description": "Option label for opening the app to a fresh chat from the assistant trigger."
   },
@@ -2892,7 +2892,7 @@
   "@inactiveStatus": {
     "description": "Label for an inactive account status."
   },
-  "appInformation": "Conduit app",
+  "appInformation": "FADI app",
   "@appInformation": {
     "description": "Heading for local app information."
   },

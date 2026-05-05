@@ -1,6 +1,6 @@
 {
   "@@locale": "nl",
-  "appTitle": "Conduit",
+  "appTitle": "FADI",
   "retry": "Opnieuw proberen",
   "back": "Terug",
   "you": "Jij",
@@ -97,7 +97,7 @@
   "voicePromptTapStart": "Tik op Start om te beginnen",
   "voiceActionStop": "Stop",
   "voiceActionStart": "Start",
-  "messageHintText": "Vraag Conduit",
+  "messageHintText": "Vraag FADI",
   "stopGenerating": "Stop met genereren",
   "codeCopiedToClipboard": "Code gekopieerd naar klembord.",
   "send": "Verzenden",
@@ -119,7 +119,7 @@
   "chatQueuedOfflineTitle": "Offline in wachtrij",
   "chatQueuedOfflineMessage": "Deze reactie start wanneer de server bereikbaar is.",
   "chatQueuedPendingTitle": "In wachtrij voor verzending",
-  "chatQueuedPendingMessage": "Conduit start deze reactie zodra synchronisatie wordt uitgevoerd.",
+  "chatQueuedPendingMessage": "FADI start deze reactie zodra synchronisatie wordt uitgevoerd.",
   "chatQueuedFailedTitle": "Verzenden mislukt",
   "chatQueuedFailedMessage": "Probeer de reactie in de wachtrij opnieuw of annuleer deze.",
   "chatQueuedSnackBar": "Bericht in wachtrij geplaatst. Het wordt verzonden wanneer de server bereikbaar is.",
@@ -195,7 +195,7 @@
   "deleteFolderMessage": "Deze map en zijn toewijzingen worden verwijderd.",
   "failedToDeleteFolder": "Kan map niet verwijderen",
   "aboutApp": "Over",
-  "aboutAppSubtitle": "Conduit informatie en links",
+  "aboutAppSubtitle": "FADI informatie en links",
   "web": "Web",
   "imageGen": "Afbeeldingsgeneratie",
   "pinned": "Vastgepind",
@@ -284,7 +284,7 @@
   "themeLight": "Licht",
   "currentlyUsingDarkTheme": "Momenteel donker thema in gebruik",
   "currentlyUsingLightTheme": "Momenteel licht thema in gebruik",
-  "aboutConduit": "Over Conduit",
+  "aboutConduit": "Over FADI",
   "versionLabel": "Versie: {version} ({build})",
   "@versionLabel": {
     "placeholders": {
@@ -323,7 +323,7 @@
   "androidAssistantTitle": "Digitale Android-assistent",
   "androidAssistantDescription": "Kies wat er gebeurt wanneer je de digitale Android-assistent activeert.",
   "androidAssistantOverlayOption": "Snelle overlay tonen (standaard)",
-  "androidAssistantNewChatOption": "Conduit openen met een nieuwe chat",
+  "androidAssistantNewChatOption": "FADI openen met een nieuwe chat",
   "androidAssistantVoiceCallOption": "Spraakoproep starten",
   "sttSettings": "Spraak naar tekst",
   "sttEngineLabel": "Herkenningsengine",
@@ -662,13 +662,13 @@
   "@nextLabel": {
     "description": "Label for navigating to the next item."
   },
-  "themePaletteConduitLabel": "Conduit",
+  "themePaletteConduitLabel": "FADI",
   "@themePaletteConduitLabel": {
-    "description": "Palette name for the default Conduit theme."
+    "description": "Palette name for the default brand theme."
   },
-  "themePaletteConduitDescription": "Strak neutraal thema ontworpen voor Conduit.",
+  "themePaletteConduitDescription": "Strak neutraal thema ontworpen voor FADI.",
   "@themePaletteConduitDescription": {
-    "description": "Description of the Conduit palette."
+    "description": "Description of the brand palette."
   },
   "themePaletteClaudeLabel": "Claude",
   "@themePaletteClaudeLabel": {
@@ -1217,7 +1217,7 @@
   "passwordUpdated": "Wachtwoord bijgewerkt.",
   "activeStatus": "Actief",
   "inactiveStatus": "Inactief",
-  "appInformation": "Conduit-app",
+  "appInformation": "FADI-app",
   "appVersion": "Versie",
   "serverInformation": "Serverinformatie",
   "serverInfoUnavailable": "Serverinformatie is nu niet beschikbaar.",

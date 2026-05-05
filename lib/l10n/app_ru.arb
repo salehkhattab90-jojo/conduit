@@ -1,6 +1,6 @@
 {
   "@@locale": "ru",
-  "appTitle": "Conduit",
+  "appTitle": "FADI",
   "retry": "Повторить",
   "back": "Назад",
   "you": "Вы",
@@ -97,7 +97,7 @@
   "voicePromptTapStart": "Нажмите «Начать» для запуска",
   "voiceActionStop": "Стоп",
   "voiceActionStart": "Начать",
-  "messageHintText": "Спросите Conduit",
+  "messageHintText": "Спросите FADI",
   "stopGenerating": "Остановить генерацию",
   "codeCopiedToClipboard": "Код скопирован в буфер обмена.",
   "send": "Отправить",
@@ -119,7 +119,7 @@
   "chatQueuedOfflineTitle": "В очереди офлайн",
   "chatQueuedOfflineMessage": "Этот ответ начнется, когда сервер станет доступен.",
   "chatQueuedPendingTitle": "В очереди на отправку",
-  "chatQueuedPendingMessage": "Conduit начнет этот ответ, как только запустится синхронизация.",
+  "chatQueuedPendingMessage": "FADI начнет этот ответ, как только запустится синхронизация.",
   "chatQueuedFailedTitle": "Отправка не удалась",
   "chatQueuedFailedMessage": "Повторите ответ из очереди или отмените его.",
   "chatQueuedSnackBar": "Сообщение поставлено в очередь. Оно будет отправлено, когда сервер станет доступен.",
@@ -195,7 +195,7 @@
   "deleteFolderMessage": "Эта папка и ее ссылки будут удалены.",
   "failedToDeleteFolder": "Не удалось удалить папку",
   "aboutApp": "О",
-  "aboutAppSubtitle": "Информация и ссылки Conduit",
+  "aboutAppSubtitle": "Информация и ссылки FADI",
   "web": "Веб",
   "imageGen": "Генерация изображений",
   "pinned": "Закреплено",
@@ -284,7 +284,7 @@
   "themeLight": "Светлая",
   "currentlyUsingDarkTheme": "Используется темная тема",
   "currentlyUsingLightTheme": "Используется светлая тема",
-  "aboutConduit": "О Conduit",
+  "aboutConduit": "О FADI",
   "versionLabel": "Версия: {version} ({build})",
   "@versionLabel": {
     "placeholders": {
@@ -323,7 +323,7 @@
   "androidAssistantTitle": "Цифровой ассистент Android",
   "androidAssistantDescription": "Выберите, что произойдёт при запуске цифрового ассистента Android.",
   "androidAssistantOverlayOption": "Показать быстрое наложение (по умолчанию)",
-  "androidAssistantNewChatOption": "Открыть Conduit с новым чатом",
+  "androidAssistantNewChatOption": "Открыть FADI с новым чатом",
   "androidAssistantVoiceCallOption": "Начать голосовой вызов",
   "sttSettings": "Речь в текст",
   "sttEngineLabel": "Движок распознавания",
@@ -662,13 +662,13 @@
   "@nextLabel": {
     "description": "Label for navigating to the next item."
   },
-  "themePaletteConduitLabel": "Conduit",
+  "themePaletteConduitLabel": "FADI",
   "@themePaletteConduitLabel": {
-    "description": "Palette name for the default Conduit theme."
+    "description": "Palette name for the default brand theme."
   },
-  "themePaletteConduitDescription": "Нейтральная чистая тема, созданная для Conduit.",
+  "themePaletteConduitDescription": "Нейтральная чистая тема, созданная для FADI.",
   "@themePaletteConduitDescription": {
-    "description": "Description of the Conduit palette."
+    "description": "Description of the brand palette."
   },
   "themePaletteClaudeLabel": "Claude",
   "@themePaletteClaudeLabel": {
@@ -1217,7 +1217,7 @@
   "passwordUpdated": "Пароль обновлен.",
   "activeStatus": "Активен",
   "inactiveStatus": "Неактивен",
-  "appInformation": "Приложение Conduit",
+  "appInformation": "Приложение FADI",
   "appVersion": "Версия",
   "serverInformation": "Информация о сервере",
   "serverInfoUnavailable": "Информация о сервере сейчас недоступна.",

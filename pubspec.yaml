@@ -108,6 +108,7 @@ dev_dependencies:
   freezed: ^3.2.0
   json_serializable: ^6.11.1
   flutter_native_splash: ^2.4.6
+  flutter_launcher_icons: ^0.14.4
   riverpod_generator: ^4.0.0+1
   riverpod_lint: ^3.1.0
   mocktail: ^1.0.4
@@ -161,19 +162,31 @@ flutter:
         - asset: assets/fonts/geist/GeistMono-Bold.ttf
           weight: 700
 
-flutter_native_splash:
-  # Splash background matches the light theme; `color_dark` handles dark mode.
-  color: "#FFFFFF"
-  color_dark: "#000000"
-  # Image to display on the splash screen
-  image: assets/icons/icon.png
+# FADI app launcher icons — generated from the Faceted Gem master.
+# Regenerate native icons with: dart run flutter_launcher_icons
+flutter_launcher_icons:
+  image_path: "assets/icons/icon.png"
+  android: true
+  ios: true
+  remove_alpha_ios: true
+  min_sdk_android: 21
+  adaptive_icon_background: "#0E0F14"
+  adaptive_icon_foreground: "assets/icons/icon_foreground.png"
 
-  
+flutter_native_splash:
+  # FADI brand splash: paper (light) / charcoal (dark) with the Faceted Gem mark.
+  color: "#F4F1EA"
+  color_dark: "#0E0F14"
+  image: assets/icons/splash.png
+  image_dark: assets/icons/splash_dark.png
+
   # Android specific settings
   android_12:
-    color: "#FFFFFF"
-    color_dark: "#000000"
-  
+    color: "#F4F1EA"
+    color_dark: "#0E0F14"
+    image: assets/icons/splash.png
+    image_dark: assets/icons/splash_dark.png
+
   # Web specific settings
   web: false
-    
+

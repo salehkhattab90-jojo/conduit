@@ -1,6 +1,6 @@
 {
   "@@locale": "zh_Hant",
-  "appTitle": "Conduit",
+  "appTitle": "FADI",
   "retry": "重試",
   "back": "返回",
   "you": "你",
@@ -97,7 +97,7 @@
   "voicePromptTapStart": "點擊開始以開始",
   "voiceActionStop": "停止",
   "voiceActionStart": "開始",
-  "messageHintText": "問 Conduit",
+  "messageHintText": "問 FADI",
   "stopGenerating": "停止生成",
   "codeCopiedToClipboard": "代碼已複製到剪貼板。",
   "send": "發送",
@@ -119,7 +119,7 @@
   "chatQueuedOfflineTitle": "離線排隊中",
   "chatQueuedOfflineMessage": "伺服器可連線時，這則回應就會開始。",
   "chatQueuedPendingTitle": "已排入傳送佇列",
-  "chatQueuedPendingMessage": "同步執行後，Conduit 會立即開始這則回應。",
+  "chatQueuedPendingMessage": "同步執行後，FADI 會立即開始這則回應。",
   "chatQueuedFailedTitle": "傳送失敗",
   "chatQueuedFailedMessage": "重試佇列中的回應或取消。",
   "chatQueuedSnackBar": "訊息已排入佇列。伺服器可連線時會傳送。",
@@ -195,7 +195,7 @@
   "deleteFolderMessage": "此文件夾及其分配引用將被刪除。",
   "failedToDeleteFolder": "無法刪除文件夾",
   "aboutApp": "關於",
-  "aboutAppSubtitle": "Conduit 信息和鏈接",
+  "aboutAppSubtitle": "FADI 信息和鏈接",
   "web": "網頁",
   "imageGen": "圖像生成",
   "pinned": "已置頂",
@@ -284,7 +284,7 @@
   "themeLight": "淺色",
   "currentlyUsingDarkTheme": "當前使用深色主題",
   "currentlyUsingLightTheme": "當前使用淺色主題",
-  "aboutConduit": "關於 Conduit",
+  "aboutConduit": "關於 FADI",
   "versionLabel": "版本：{version}（{build}）",
   "@versionLabel": {
     "placeholders": {
@@ -323,7 +323,7 @@
   "androidAssistantTitle": "Android 數位助理",
   "androidAssistantDescription": "選擇觸發 Android 數位助理時要執行的操作。",
   "androidAssistantOverlayOption": "顯示快速浮層（預設）",
-  "androidAssistantNewChatOption": "開啟 Conduit 並建立新聊天",
+  "androidAssistantNewChatOption": "開啟 FADI 並建立新聊天",
   "androidAssistantVoiceCallOption": "開始語音通話",
   "sttSettings": "語音轉文字",
   "sttEngineLabel": "識別引擎",
@@ -662,13 +662,13 @@
   "@nextLabel": {
     "description": "Label for navigating to the next item."
   },
-  "themePaletteConduitLabel": "Conduit",
+  "themePaletteConduitLabel": "FADI",
   "@themePaletteConduitLabel": {
-    "description": "Palette name for the default Conduit theme."
+    "description": "Palette name for the default brand theme."
   },
-  "themePaletteConduitDescription": "爲 Conduit 設計的簡潔中性色主題。",
+  "themePaletteConduitDescription": "爲 FADI 設計的簡潔中性色主題。",
   "@themePaletteConduitDescription": {
-    "description": "Description of the Conduit palette."
+    "description": "Description of the brand palette."
   },
   "themePaletteClaudeLabel": "Claude",
   "@themePaletteClaudeLabel": {
@@ -1217,7 +1217,7 @@
   "passwordUpdated": "密碼已更新。",
   "activeStatus": "啟用",
   "inactiveStatus": "未啟用",
-  "appInformation": "Conduit 應用程式",
+  "appInformation": "FADI 應用程式",
   "appVersion": "版本",
   "serverInformation": "伺服器資訊",
   "serverInfoUnavailable": "伺服器資訊目前無法使用。",

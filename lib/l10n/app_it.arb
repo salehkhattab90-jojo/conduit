@@ -1,6 +1,6 @@
 {
   "@@locale": "it",
-  "appTitle": "Conduit",
+  "appTitle": "FADI",
   "retry": "Riprova",
   "back": "Indietro",
   "you": "Tu",
@@ -97,7 +97,7 @@
   "voicePromptTapStart": "Tocca \"Avvia\" per iniziare",
   "voiceActionStop": "Stop",
   "voiceActionStart": "Avvia",
-  "messageHintText": "Chiedi a Conduit",
+  "messageHintText": "Chiedi a FADI",
   "stopGenerating": "Interrompi generazione",
   "codeCopiedToClipboard": "Codice copiato negli appunti.",
   "send": "Invia",
@@ -119,7 +119,7 @@
   "chatQueuedOfflineTitle": "In coda offline",
   "chatQueuedOfflineMessage": "Questa risposta inizierà quando il server sarà raggiungibile.",
   "chatQueuedPendingTitle": "In coda per l'invio",
-  "chatQueuedPendingMessage": "Conduit avvierà questa risposta appena parte la sincronizzazione.",
+  "chatQueuedPendingMessage": "FADI avvierà questa risposta appena parte la sincronizzazione.",
   "chatQueuedFailedTitle": "Invio non riuscito",
   "chatQueuedFailedMessage": "Riprova la risposta in coda o annullala.",
   "chatQueuedSnackBar": "Messaggio in coda. Verrà inviato quando il server sarà raggiungibile.",
@@ -195,7 +195,7 @@
   "deleteFolderMessage": "Questa cartella e le sue associazioni verranno rimosse.",
   "failedToDeleteFolder": "Impossibile eliminare la cartella",
   "aboutApp": "Informazioni",
-  "aboutAppSubtitle": "Informazioni e link di Conduit",
+  "aboutAppSubtitle": "Informazioni e link di FADI",
   "web": "Web",
   "imageGen": "Gen. immagini",
   "pinned": "Fissati",
@@ -284,7 +284,7 @@
   "themeLight": "Chiaro",
   "currentlyUsingDarkTheme": "Attualmente tema scuro",
   "currentlyUsingLightTheme": "Attualmente tema chiaro",
-  "aboutConduit": "Informazioni su Conduit",
+  "aboutConduit": "Informazioni su FADI",
   "versionLabel": "Versione: {version} ({build})",
   "@versionLabel": {
     "placeholders": {
@@ -323,7 +323,7 @@
   "androidAssistantTitle": "Assistente digitale Android",
   "androidAssistantDescription": "Scegli cosa succede quando attivi l’assistente digitale Android.",
   "androidAssistantOverlayOption": "Mostra overlay rapido (predefinito)",
-  "androidAssistantNewChatOption": "Apri Conduit con una nuova chat",
+  "androidAssistantNewChatOption": "Apri FADI con una nuova chat",
   "androidAssistantVoiceCallOption": "Avvia una chiamata vocale",
   "sttSettings": "Voce in testo",
   "sttEngineLabel": "Motore di riconoscimento",
@@ -662,13 +662,13 @@
   "@nextLabel": {
     "description": "Label for navigating to the next item."
   },
-  "themePaletteConduitLabel": "Conduit",
+  "themePaletteConduitLabel": "FADI",
   "@themePaletteConduitLabel": {
-    "description": "Palette name for the default Conduit theme."
+    "description": "Palette name for the default brand theme."
   },
-  "themePaletteConduitDescription": "Tema neutro e pulito progettato per Conduit.",
+  "themePaletteConduitDescription": "Tema neutro e pulito progettato per FADI.",
   "@themePaletteConduitDescription": {
-    "description": "Description of the Conduit palette."
+    "description": "Description of the brand palette."
   },
   "themePaletteClaudeLabel": "Claude",
   "@themePaletteClaudeLabel": {
@@ -1217,7 +1217,7 @@
   "passwordUpdated": "Password aggiornata.",
   "activeStatus": "Attivo",
   "inactiveStatus": "Inattivo",
-  "appInformation": "App Conduit",
+  "appInformation": "App FADI",
   "appVersion": "Versione",
   "serverInformation": "Informazioni server",
   "serverInfoUnavailable": "Le informazioni del server non sono disponibili al momento.",

@@ -13,7 +13,6 @@ import '../../../core/providers/app_providers.dart';
 import '../../../core/services/input_validation_service.dart';
 import '../../../core/services/navigation_service.dart';
 import '../../../core/widgets/error_boundary.dart';
-import '../../../shared/services/brand_service.dart';
 import '../../../shared/theme/theme_extensions.dart';
 import '../../../shared/widgets/adaptive_route_shell.dart';
 import '../../../shared/widgets/conduit_components.dart';
@@ -304,10 +303,11 @@ class _AuthenticationPageState extends ConsumerState<AuthenticationPage> {
             ),
           ),
           child: Center(
-            child: BrandService.createBrandIcon(
-              size: 36,
-              useGradient: true,
-              context: context,
+            child: Image.asset(
+              'assets/icons/brand_mark.png',
+              width: 44,
+              height: 44,
+              fit: BoxFit.contain,
             ),
           ),
         ),

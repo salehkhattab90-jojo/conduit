@@ -1,6 +1,6 @@
 {
   "@@locale": "ja",
-  "appTitle": "Conduit",
+  "appTitle": "FADI",
   "@appTitle": {
     "description": "Application name displayed in the app and OS UI."
   },
@@ -490,7 +490,7 @@
   "@voiceCallErrorHelp": {
     "description": "Guidance shown when the voice call encounters an error."
   },
-  "messageHintText": "Conduit に質問",
+  "messageHintText": "FADI に質問",
   "@messageHintText": {
     "description": "Short placeholder text in the message input."
   },
@@ -602,7 +602,7 @@
   "@chatQueuedPendingTitle": {
     "description": "Title shown when a queued assistant response is waiting for sync/backoff."
   },
-  "chatQueuedPendingMessage": "同期が実行され次第、Conduit がこの応答を開始します。",
+  "chatQueuedPendingMessage": "同期が実行され次第、FADI がこの応答を開始します。",
   "@chatQueuedPendingMessage": {
     "description": "Body text shown for a queued assistant response that is waiting to be sent."
   },
@@ -900,7 +900,7 @@
   "@aboutApp": {
     "description": "Settings tile title to view app information."
   },
-  "aboutAppSubtitle": "Conduit の情報とリンク",
+  "aboutAppSubtitle": "FADI の情報とリンク",
   "@aboutAppSubtitle": {
     "description": "Subtitle/description for the About section."
   },
@@ -1205,13 +1205,13 @@
   "@themePalette": {
     "description": "Title for selecting the app color palette."
   },
-  "themePaletteConduitLabel": "Conduit",
+  "themePaletteConduitLabel": "FADI",
   "@themePaletteConduitLabel": {
-    "description": "Palette name for the default Conduit theme."
+    "description": "Palette name for the default brand theme."
   },
-  "themePaletteConduitDescription": "Conduit 向けに設計されたクリーンなニュートラルテーマ。",
+  "themePaletteConduitDescription": "FADI 向けに設計されたクリーンなニュートラルテーマ。",
   "@themePaletteConduitDescription": {
-    "description": "Description of the Conduit palette."
+    "description": "Description of the brand palette."
   },
   "themePaletteClaudeLabel": "Claude",
   "@themePaletteClaudeLabel": {
@@ -1257,7 +1257,7 @@
   "@currentlyUsingLightTheme": {
     "description": "Status text indicating light theme is active."
   },
-  "aboutConduit": "Conduit について",
+  "aboutConduit": "FADI について",
   "@aboutConduit": {
     "description": "Dialog title for app information."
   },
@@ -1365,7 +1365,7 @@
   "@androidAssistantOverlayOption": {
     "description": "Option label for keeping the current assistant overlay."
   },
-  "androidAssistantNewChatOption": "新しいチャットで Conduit を開く",
+  "androidAssistantNewChatOption": "新しいチャットで FADI を開く",
   "@androidAssistantNewChatOption": {
     "description": "Option label for opening the app to a fresh chat from the assistant trigger."
   },
@@ -2618,7 +2618,7 @@
   "passwordUpdated": "パスワードを更新しました。",
   "activeStatus": "有効",
   "inactiveStatus": "無効",
-  "appInformation": "Conduit アプリ",
+  "appInformation": "FADI アプリ",
   "appVersion": "バージョン",
   "serverInformation": "サーバー情報",
   "serverInfoUnavailable": "現在サーバー情報を利用できません。",
