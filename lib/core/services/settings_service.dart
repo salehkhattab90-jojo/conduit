@@ -240,7 +240,7 @@ class SettingsService {
       case 'device':
         return TtsEngine.device;
       default:
-        return TtsEngine.device;
+        return TtsEngine.server;
     }
   }
 
@@ -255,7 +255,7 @@ class SettingsService {
       case 'server':
         return SttPreference.serverOnly;
       default:
-        return SttPreference.deviceOnly;
+        return SttPreference.serverOnly;
     }
   }
 
@@ -597,13 +597,13 @@ class AppSettings {
     this.chatWebSearchEnabled,
     this.chatImageGenerationEnabled,
     this.sendOnEnter = false,
-    this.sttPreference = SttPreference.deviceOnly,
+    this.sttPreference = SttPreference.serverOnly,
     this.sttLanguageCode,
     this.ttsVoice,
     this.ttsSpeechRate = 0.5,
     this.ttsPitch = 1.0,
     this.ttsVolume = 1.0,
-    this.ttsEngine = TtsEngine.device,
+    this.ttsEngine = TtsEngine.server,
     this.ttsServerVoiceId,
     this.ttsServerVoiceName,
     this.androidAssistantTrigger = AndroidAssistantTrigger.overlay,
