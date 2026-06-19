@@ -29,7 +29,9 @@ void main() {
           'locale': 'en-US',
         },
       ];
-      final settings = const AppSettings().copyWith(ttsVoice: 'Samantha');
+      final settings = const AppSettings(
+        ttsEngine: TtsEngine.device,
+      ).copyWith(ttsVoice: 'Samantha');
 
       check(selectedTtsVoiceOptionId(settings, voices))
           .equals('com.apple.voice.enhanced.en-US.Samantha');

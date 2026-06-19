@@ -203,7 +203,10 @@ void main() {
   });
 
   test('native speech-rate slider shows its value only once', () {
-    final parts = buildNativeAudioSheetParts(l10n, const AppSettings());
+    final parts = buildNativeAudioSheetParts(
+      l10n,
+      const AppSettings(ttsEngine: TtsEngine.device),
+    );
     final speechRate = parts.mainSections
         .expand((section) => section.items)
         .singleWhere((item) => item.id == 'tts-speech-rate');

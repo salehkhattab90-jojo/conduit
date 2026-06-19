@@ -71,8 +71,8 @@ void main() {
         check(settings.sendOnEnter).equals(false);
       });
 
-      test('sttPreference defaults to deviceOnly', () {
-        check(settings.sttPreference).equals(SttPreference.deviceOnly);
+      test('sttPreference defaults to serverOnly', () {
+        check(settings.sttPreference).equals(SttPreference.serverOnly);
       });
 
       test('sttLanguageCode defaults to null', () {
@@ -99,8 +99,8 @@ void main() {
         check(settings.ttsVolume).equals(1.0);
       });
 
-      test('ttsEngine defaults to device', () {
-        check(settings.ttsEngine).equals(TtsEngine.device);
+      test('ttsEngine defaults to server', () {
+        check(settings.ttsEngine).equals(TtsEngine.server);
       });
 
       test('ttsServerVoiceId defaults to null', () {
