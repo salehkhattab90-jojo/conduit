@@ -15,6 +15,7 @@ import '../../../shared/widgets/sidebar_ios26_scaffold.dart';
 import '../providers/sidebar_providers.dart';
 import '../utils/sidebar_create_action.dart';
 import '../../channels/widgets/channel_list_tab.dart';
+import '../../email/views/email_tab.dart';
 import '../../notes/widgets/notes_list_tab.dart';
 import '../../terminal/models/terminal_models.dart';
 import '../../terminal/providers/terminal_providers.dart';
@@ -33,7 +34,7 @@ const double _kSidebarNativeLeadingVerticalOffset = 3;
 const double _kSidebarWindowedLeadingInset = 62;
 const double _kSidebarNativeBottomBarContentHeight = 50;
 
-enum _SidebarTabId { chats, terminal, notes, channels }
+enum _SidebarTabId { chats, email, terminal, notes, channels }
 
 class _SidebarTabDefinition {
   const _SidebarTabDefinition({
@@ -109,6 +110,8 @@ IconData _materialTabIcon(_SidebarTabId id, {bool selected = false}) {
   switch (id) {
     case _SidebarTabId.chats:
       return selected ? Icons.chat_bubble : Icons.chat_bubble_outline;
+    case _SidebarTabId.email:
+      return selected ? Icons.mail : Icons.mail_outline;
     case _SidebarTabId.notes:
       return selected ? Icons.note : Icons.note_outlined;
     case _SidebarTabId.terminal:
@@ -122,6 +125,8 @@ String _sfSymbolTabIcon(_SidebarTabId id, {bool selected = false}) {
   switch (id) {
     case _SidebarTabId.chats:
       return selected ? 'bubble.left.fill' : 'bubble.left';
+    case _SidebarTabId.email:
+      return selected ? 'envelope.fill' : 'envelope';
     case _SidebarTabId.notes:
       return selected ? 'doc.text.fill' : 'doc.text';
     case _SidebarTabId.terminal:
@@ -439,6 +444,7 @@ class _SidebarPageState extends ConsumerState<SidebarPage> {
     final showTerminalTab = ref.watch(terminalTabVisibleProvider);
     final visibleTabIds = <_SidebarTabId>[
       _SidebarTabId.chats,
+      _SidebarTabId.email,
       if (notesEnabled) _SidebarTabId.notes,
       if (showTerminalTab) _SidebarTabId.terminal,
       if (channelsEnabled) _SidebarTabId.channels,
@@ -455,6 +461,11 @@ class _SidebarPageState extends ConsumerState<SidebarPage> {
         id: _SidebarTabId.chats,
         label: localizations.sidebarChatsTab,
         body: const ChatsDrawer(),
+      ),
+      _SidebarTabDefinition(
+        id: _SidebarTabId.email,
+        label: 'Email',
+        body: const EmailTab(),
       ),
       if (notesEnabled)
         _SidebarTabDefinition(
