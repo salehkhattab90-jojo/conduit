@@ -47,7 +47,7 @@ class _EmailTabState extends ConsumerState<EmailTab> {
     // JWTs contain no quotes/backslashes, but escape defensively anyway.
     final safe = token.replaceAll(r'\', r'\\').replaceAll("'", r"\'");
     await controller.evaluateJavascript(
-      source: "window.postMessage({type:'fadi-token', token:'$safe'}, '*');",
+      source: "window.postMessage({type:'email-token', token:'$safe'}, '*');",
     );
   }
 
@@ -56,14 +56,14 @@ class _EmailTabState extends ConsumerState<EmailTab> {
     if (controller == null) return;
     _injectedMode = mode;
     await controller.evaluateJavascript(
-      source: "window.postMessage({type:'fadi-theme', mode:'$mode'}, '*');",
+      source: "window.postMessage({type:'email-theme', mode:'$mode'}, '*');",
     );
   }
 
   void _onHostMessage(dynamic raw) {
     if (raw is! Map) return;
     switch (raw['type']) {
-      case 'fadi-open-url':
+      case 'email-open-url':
         final url = raw['url'];
         if (url is String && url.isNotEmpty) {
           unawaited(
@@ -71,7 +71,7 @@ class _EmailTabState extends ConsumerState<EmailTab> {
           );
         }
         break;
-      case 'fadi-discuss':
+      case 'email-discuss':
         // TODO(email): open a seeded OWUI chat for raw['email_id'] once the
         // discuss/seed-chat endpoint exists (Phase 4 follow-up).
         break;
@@ -98,7 +98,7 @@ class _EmailTabState extends ConsumerState<EmailTab> {
       onWebViewCreated: (controller) {
         _controller = controller;
         controller.addJavaScriptHandler(
-          handlerName: 'fadiHost',
+          handlerName: 'emailHost',
           callback: (args) {
             _onHostMessage(args.isNotEmpty ? args.first : null);
             return null;
