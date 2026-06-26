@@ -9,10 +9,12 @@ import '../../../core/constants/locked_server.dart';
 import '../../../core/providers/app_providers.dart';
 import '../../auth/providers/unified_auth_providers.dart';
 
-/// Email section — hosts the FADI inbox webapp (served by email-api at /app) in
-/// a WebView. The OWUI bearer is injected into the page so it authenticates as
-/// the signed-in user, and host actions the page emits (open the Gmail OAuth
-/// URL, "discuss in chat") are bridged back to native via a JS handler.
+/// Email section — hosts the email inbox webapp (served by email-api at /app)
+/// in a WebView. The OWUI bearer is injected into the page — both as a
+/// localStorage 'token' (so the in-app "Discuss in chat" overlay, an iframe to
+/// OWUI's chat at the same origin, authenticates) and via postMessage (for the
+/// webapp itself) — so it acts as the signed-in user. The only host action the
+/// page emits, opening the Gmail OAuth URL externally, is bridged via a JS handler.
 class EmailTab extends ConsumerStatefulWidget {
   const EmailTab({super.key});
 
@@ -46,8 +48,14 @@ class _EmailTabState extends ConsumerState<EmailTab> {
     if (token == null || token.isEmpty) return;
     // JWTs contain no quotes/backslashes, but escape defensively anyway.
     final safe = token.replaceAll(r'\', r'\\').replaceAll("'", r"\'");
+    // Seed localStorage 'token' (the OWUI session key) so the embedded "Discuss
+    // in chat" overlay — an iframe to OWUI chat at the same origin — authenticates;
+    // OWUI's own iframe relies on this, and postMessage alone leaves the chat
+    // logged-out. The webapp's own bearer resolution reads localStorage 'token' too.
     await controller.evaluateJavascript(
-      source: "window.postMessage({type:'email-token', token:'$safe'}, '*');",
+      source:
+          "try{localStorage.setItem('token','$safe');}catch(e){}"
+          "window.postMessage({type:'email-token', token:'$safe'}, '*');",
     );
   }
 
@@ -62,19 +70,17 @@ class _EmailTabState extends ConsumerState<EmailTab> {
 
   void _onHostMessage(dynamic raw) {
     if (raw is! Map) return;
-    switch (raw['type']) {
-      case 'email-open-url':
-        final url = raw['url'];
-        if (url is String && url.isNotEmpty) {
-          unawaited(
-            launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication),
-          );
-        }
-        break;
-      case 'email-discuss':
-        // TODO(email): open a seeded OWUI chat for raw['email_id'] once the
-        // discuss/seed-chat endpoint exists (Phase 4 follow-up).
-        break;
+    // The only host action the webapp emits: open the Gmail OAuth URL in the
+    // system browser (the OAuth flow can't complete inside the embedded webview).
+    // "Discuss in chat" is handled in-app by the webapp (an overlay iframe), not
+    // bridged to native.
+    if (raw['type'] == 'email-open-url') {
+      final url = raw['url'];
+      if (url is String && url.isNotEmpty) {
+        unawaited(
+          launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication),
+        );
+      }
     }
   }
 
