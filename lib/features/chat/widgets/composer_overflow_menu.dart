@@ -11,6 +11,7 @@ import '../../../shared/widgets/conduit_components.dart';
 import '../../../shared/widgets/modal_safe_area.dart';
 import '../../../shared/widgets/model_avatar.dart';
 import '../../../core/models/toggle_filter.dart';
+import '../../../core/models/thinking_mode.dart';
 import '../../../core/providers/app_providers.dart';
 import '../../tools/providers/tools_providers.dart';
 import '../../terminal/providers/terminal_providers.dart';
@@ -214,6 +215,9 @@ class _ComposerOverflowSheetState extends ConsumerState<ComposerOverflowSheet> {
             },
           );
         }).toList();
+
+    final thinkingTile = _buildThinkingTile(l10n);
+    if (thinkingTile != null) featureTiles.add(thinkingTile);
 
     final selectedToolIds = ref.watch(selectedToolIdsProvider);
     final selectedTerminalId = ref.watch(selectedTerminalIdProvider);
@@ -664,6 +668,107 @@ class _ComposerOverflowSheetState extends ConsumerState<ComposerOverflowSheet> {
       subtitle: item.subtitle,
       value: item.selected,
       onChanged: onChanged,
+    );
+  }
+
+  /// 3-state thinking control (On / Auto / Off), shown only for models that
+  /// expose the `thinking` capability. Tapping cycles the mode; the trailing
+  /// chip shows the current state. Mirrors the OpenWebUI web pill.
+  Widget? _buildThinkingTile(AppLocalizations l10n) {
+    final selectedModel = ref.watch(selectedModelProvider);
+    final thinkingCapable = selectedModel?.capabilities?['thinking'] == true;
+    if (!thinkingCapable) return null;
+
+    final theme = context.conduitTheme;
+    final mode = ref.watch(thinkingModeProvider);
+    final modeLabel = switch (mode) {
+      ThinkingMode.on => l10n.thinkingOn,
+      ThinkingMode.auto => l10n.thinkingAuto,
+      ThinkingMode.off => l10n.thinkingOff,
+    };
+    final active = mode != ThinkingMode.off;
+
+    return Semantics(
+      button: true,
+      label: '${l10n.thinkingTitle}: $modeLabel',
+      child: ConduitCard(
+        padding: const EdgeInsets.all(Spacing.md),
+        onTap: () {
+          ConduitHaptics.selectionClick();
+          final next = switch (mode) {
+            ThinkingMode.on => ThinkingMode.auto,
+            ThinkingMode.auto => ThinkingMode.off,
+            ThinkingMode.off => ThinkingMode.on,
+          };
+          ref.read(thinkingModeProvider.notifier).set(next);
+        },
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            _buildIconGlyph(
+              icon: Platform.isIOS
+                  ? CupertinoIcons.lightbulb
+                  : Icons.lightbulb_outline,
+              selected: active,
+              theme: theme,
+            ),
+            const SizedBox(width: Spacing.md),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    l10n.thinkingTitle,
+                    style: AppTypography.bodyMediumStyle.copyWith(
+                      color: theme.sidebarForeground,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: Spacing.xs),
+                  Text(
+                    l10n.thinkingSubtitle,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTypography.bodySmallStyle.copyWith(
+                      color: theme.sidebarForeground.withValues(alpha: 0.75),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: Spacing.sm),
+            Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: Spacing.sm,
+                vertical: Spacing.xs,
+              ),
+              decoration: BoxDecoration(
+                color: active
+                    ? theme.buttonPrimary.withValues(alpha: 0.12)
+                    : theme.surfaceContainer.withValues(alpha: 0.6),
+                borderRadius: BorderRadius.circular(AppBorderRadius.small),
+                border: Border.all(
+                  color: active
+                      ? theme.buttonPrimary.withValues(alpha: 0.3)
+                      : theme.dividerColor,
+                  width: BorderWidth.thin,
+                ),
+              ),
+              child: Text(
+                modeLabel,
+                style: AppTypography.labelMediumStyle.copyWith(
+                  color: active
+                      ? theme.buttonPrimary
+                      : theme.sidebarForeground.withValues(alpha: 0.75),
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 

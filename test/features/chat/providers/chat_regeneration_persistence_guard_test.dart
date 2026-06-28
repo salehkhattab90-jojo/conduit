@@ -2,6 +2,7 @@ import 'package:checks/checks.dart';
 import 'package:conduit/core/models/chat_message.dart';
 import 'package:conduit/core/models/conversation.dart';
 import 'package:conduit/core/models/model.dart';
+import 'package:conduit/core/models/thinking_mode.dart';
 import 'package:conduit/core/models/server_config.dart';
 import 'package:conduit/core/providers/app_providers.dart';
 import 'package:conduit/core/services/api_service.dart';
@@ -119,6 +120,7 @@ class _RecordingCompletionApi extends ApiService {
     bool enableImageGeneration = false,
     bool enableCodeInterpreter = false,
     bool isVoiceMode = false,
+    ThinkingMode thinkingMode = ThinkingMode.auto,
     Map<String, dynamic>? modelItem,
     String? sessionIdOverride,
     List<Map<String, dynamic>>? toolServers,

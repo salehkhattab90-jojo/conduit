@@ -12,6 +12,7 @@ import 'package:yaml/yaml.dart' as yaml;
 import '../../../core/auth/auth_state_manager.dart';
 import '../../../core/models/chat_message.dart';
 import '../../../core/models/model.dart';
+import '../../../core/models/thinking_mode.dart';
 import '../../../core/models/conversation.dart';
 import '../../../core/models/file_info.dart';
 import '../../../core/database/app_database.dart';
@@ -3138,6 +3139,7 @@ Future<void> restoreDefaultModel(dynamic ref) async {
 typedef _ChatFeatureDefaults = ({
   bool webSearchEnabled,
   bool imageGenerationEnabled,
+  ThinkingMode thinkingMode,
 });
 
 Map<String, dynamic>? _asStringDynamicMap(dynamic value) {
@@ -3233,11 +3235,12 @@ _ChatFeatureDefaults _resolveChatFeatureDefaults({
     webSearchEnabled: appSettings.chatWebSearchEnabled ?? webSearchDefault,
     imageGenerationEnabled:
         appSettings.chatImageGenerationEnabled ?? imageGenerationDefault,
+    thinkingMode: thinkingModeFromName(appSettings.chatThinkingMode),
   );
 }
 
 @visibleForTesting
-({bool webSearchEnabled, bool imageGenerationEnabled})
+({bool webSearchEnabled, bool imageGenerationEnabled, ThinkingMode thinkingMode})
 resolveChatFeatureDefaultsForTest({
   required AppSettings appSettings,
   Map<String, dynamic>? userSettings,
@@ -3628,6 +3631,7 @@ Future<void> regenerateMessage(
     final imageGenerationEnabled =
         ref.read(imageGenerationEnabledProvider) &&
         ref.read(imageGenerationAvailableProvider);
+    final thinkingMode = ref.read(thinkingModeProvider);
 
     final modelItem = _buildLocalModelItem(selectedModel);
 
@@ -3729,6 +3733,7 @@ Future<void> regenerateMessage(
         filterIds: selectedFilterIds.isNotEmpty ? selectedFilterIds : null,
         enableWebSearch: webSearchEnabled,
         enableImageGeneration: imageGenerationEnabled,
+        thinkingMode: thinkingMode,
         modelItem: modelItem,
         sessionIdOverride: socketSessionId,
         toolServers: toolServers,
@@ -3806,6 +3811,7 @@ Future<void> runQueuedCompletion(
   String? terminalId,
   bool enableWebSearch = false,
   bool enableImageGeneration = false,
+  ThinkingMode thinkingMode = ThinkingMode.auto,
   String? sessionIdOverride,
 }) async {
   final api = ref.read(apiServiceProvider);
@@ -3925,6 +3931,7 @@ Future<void> runQueuedCompletion(
       filterIds: selectedFilterIds.isNotEmpty ? selectedFilterIds : null,
       enableWebSearch: enableWebSearch,
       enableImageGeneration: enableImageGeneration,
+      thinkingMode: thinkingMode,
       modelItem: modelItem,
       sessionIdOverride: socketSessionId,
       toolServers: toolServers,
@@ -4005,6 +4012,7 @@ Future<void> runHeadlessCompletion(
   String? terminalId,
   bool enableWebSearch = false,
   bool enableImageGeneration = false,
+  ThinkingMode thinkingMode = ThinkingMode.auto,
   String? sessionIdOverride,
 }) async {
   final api = ref.read(apiServiceProvider);
@@ -4094,6 +4102,7 @@ Future<void> runHeadlessCompletion(
     filterIds: filterIds.isNotEmpty ? filterIds : null,
     enableWebSearch: enableWebSearch,
     enableImageGeneration: enableImageGeneration,
+    thinkingMode: thinkingMode,
     modelItem: modelItem,
     sessionIdOverride: socketSessionId,
     toolServers: toolServers,
@@ -4318,6 +4327,7 @@ Future<void> durableSend(
   final imageGenerationEnabled =
       ref.read(imageGenerationEnabledProvider) &&
       ref.read(imageGenerationAvailableProvider);
+  final thinkingMode = ref.read(thinkingModeProvider);
 
   final existingMessages = ref.read(chatMessagesProvider);
   final parentId = _resolveOpenWebUiParentIdForNewUserMessage(existingMessages);
@@ -4377,6 +4387,7 @@ Future<void> durableSend(
     terminalId: terminalIdForCompletion,
     enableWebSearch: webSearchEnabled,
     enableImageGeneration: imageGenerationEnabled,
+    thinkingMode: thinkingMode,
   );
 
   var activeConversation = activeAtSendStart;
@@ -5099,6 +5110,7 @@ Future<void> _sendMessageInternal(
   final imageGenerationEnabled =
       ref.read(imageGenerationEnabledProvider) &&
       ref.read(imageGenerationAvailableProvider);
+  final thinkingMode = ref.read(thinkingModeProvider);
 
   // Get selected toggle filter IDs
   final selectedFilterIds = ref.read(selectedFilterIdsProvider);
@@ -5217,6 +5229,7 @@ Future<void> _sendMessageInternal(
         filterIds: filterIdsForApi,
         enableWebSearch: webSearchEnabled,
         enableImageGeneration: imageGenerationEnabled,
+        thinkingMode: thinkingMode,
         isVoiceMode: isVoiceMode,
         modelItem: modelItem,
         sessionIdOverride: socketSessionId,

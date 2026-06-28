@@ -58,6 +58,7 @@ class SettingsService {
       .quickPills; // StringList of identifiers e.g. ['web','image','tools']
   static const String _chatWebSearchEnabledKey =
       PreferenceKeys.chatWebSearchEnabled;
+  static const String _chatThinkingModeKey = PreferenceKeys.chatThinkingMode;
   static const String _chatImageGenerationEnabledKey =
       PreferenceKeys.chatImageGenerationEnabled;
   // Chat input behavior
@@ -194,6 +195,7 @@ class SettingsService {
     await PreferencesStore.putAll(updates);
 
     await _putOrRemove(_chatWebSearchEnabledKey, settings.chatWebSearchEnabled);
+    await _putOrRemove(_chatThinkingModeKey, settings.chatThinkingMode);
     await _putOrRemove(
       _chatImageGenerationEnabledKey,
       settings.chatImageGenerationEnabled,
@@ -385,6 +387,14 @@ class SettingsService {
     return _putOrRemove(_chatWebSearchEnabledKey, value);
   }
 
+  static Future<String?> getChatThinkingMode() {
+    return Future.value(PreferencesStore.get<String>(_chatThinkingModeKey));
+  }
+
+  static Future<void> setChatThinkingMode(String? value) {
+    return _putOrRemove(_chatThinkingModeKey, value);
+  }
+
   static Future<bool?> getChatImageGenerationEnabled() {
     return Future.value(
       PreferencesStore.getBool(_chatImageGenerationEnabledKey),
@@ -502,6 +512,7 @@ class SettingsService {
           PreferencesStore.get<String>(_socketTransportModeKey) ?? 'ws',
       quickPills: PreferencesStore.getStringList(_quickPillsKey) ?? const [],
       chatWebSearchEnabled: PreferencesStore.get<bool>(_chatWebSearchEnabledKey),
+      chatThinkingMode: PreferencesStore.get<String>(_chatThinkingModeKey),
       chatImageGenerationEnabled: PreferencesStore.get<bool>(
         _chatImageGenerationEnabledKey,
       ),
@@ -567,6 +578,7 @@ class AppSettings {
   final List<String> quickPills; // e.g., ['web','image']
   final bool? chatWebSearchEnabled;
   final bool? chatImageGenerationEnabled;
+  final String? chatThinkingMode; // 'on' | 'auto' | 'off'
   final bool sendOnEnter;
   final SttPreference sttPreference;
   final String? sttLanguageCode;
@@ -596,6 +608,7 @@ class AppSettings {
     this.quickPills = const [],
     this.chatWebSearchEnabled,
     this.chatImageGenerationEnabled,
+    this.chatThinkingMode,
     this.sendOnEnter = false,
     this.sttPreference = SttPreference.serverOnly,
     this.sttLanguageCode,
@@ -627,6 +640,7 @@ class AppSettings {
     List<String>? quickPills,
     bool? chatWebSearchEnabled,
     bool? chatImageGenerationEnabled,
+    String? chatThinkingMode,
     bool? sendOnEnter,
     SttPreference? sttPreference,
     Object? sttLanguageCode = const _DefaultValue(),
@@ -663,6 +677,7 @@ class AppSettings {
       chatWebSearchEnabled: chatWebSearchEnabled ?? this.chatWebSearchEnabled,
       chatImageGenerationEnabled:
           chatImageGenerationEnabled ?? this.chatImageGenerationEnabled,
+      chatThinkingMode: chatThinkingMode ?? this.chatThinkingMode,
       sendOnEnter: sendOnEnter ?? this.sendOnEnter,
       sttPreference: sttPreference ?? this.sttPreference,
       sttLanguageCode: sttLanguageCode is _DefaultValue
@@ -703,6 +718,7 @@ class AppSettings {
         other.voiceHoldToTalk == voiceHoldToTalk &&
         other.voiceAutoSendFinal == voiceAutoSendFinal &&
         other.chatWebSearchEnabled == chatWebSearchEnabled &&
+        other.chatThinkingMode == chatThinkingMode &&
         other.chatImageGenerationEnabled == chatImageGenerationEnabled &&
         other.sttPreference == sttPreference &&
         other.sttLanguageCode == sttLanguageCode &&
@@ -737,6 +753,7 @@ class AppSettings {
       voiceAutoSendFinal,
       chatWebSearchEnabled,
       chatImageGenerationEnabled,
+      chatThinkingMode,
       sttPreference,
       sttLanguageCode,
       sendOnEnter,
@@ -872,6 +889,11 @@ class AppSettingsNotifier extends _$AppSettingsNotifier {
   Future<void> setChatWebSearchEnabled(bool value) async {
     state = state.copyWith(chatWebSearchEnabled: value);
     await SettingsService.setChatWebSearchEnabled(value);
+  }
+
+  Future<void> setChatThinkingMode(String value) async {
+    state = state.copyWith(chatThinkingMode: value);
+    await SettingsService.setChatThinkingMode(value);
   }
 
   Future<void> setChatImageGenerationEnabled(bool value) async {

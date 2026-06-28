@@ -18,6 +18,12 @@ final imageGenerationEnabledProvider =
       ImageGenerationEnabledNotifier.new,
     );
 
+// Thinking mode (on/auto/off) for models exposing the `thinking` capability
+final thinkingModeProvider =
+    NotifierProvider<ThinkingModeNotifier, ThinkingMode>(
+      ThinkingModeNotifier.new,
+    );
+
 // Vision capable models provider
 final visionCapableModelsProvider =
     NotifierProvider<VisionCapableModelsNotifier, List<String>>(
@@ -60,6 +66,18 @@ class ImageGenerationEnabledNotifier extends Notifier<bool> {
       ref
           .read(appSettingsProvider.notifier)
           .setChatImageGenerationEnabled(value),
+    );
+  }
+}
+
+class ThinkingModeNotifier extends Notifier<ThinkingMode> {
+  @override
+  ThinkingMode build() => ref.watch(_chatFeatureDefaultsProvider).thinkingMode;
+
+  void set(ThinkingMode value) {
+    state = value;
+    unawaited(
+      ref.read(appSettingsProvider.notifier).setChatThinkingMode(value.name),
     );
   }
 }
