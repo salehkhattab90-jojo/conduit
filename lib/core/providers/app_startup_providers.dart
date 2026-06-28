@@ -1150,6 +1150,13 @@ class _ForegroundRefreshObserver extends WidgetsBindingObserver {
           refreshConversationsCache(_ref);
           _resetConversationWarmup(_ref);
           unawaited(_refreshActiveConversationOnResume(_ref));
+          // Re-fetch server config that is otherwise only loaded at cold start
+          // (model capabilities + tools), so OWUI-admin changes — a capability
+          // flag, a newly added tool — show on reopen without a full restart.
+          // Both keep their current value until fresh data arrives, and
+          // Models.refresh() also reconciles the selected model.
+          unawaited(_ref.read(modelsProvider.notifier).refresh());
+          unawaited(_ref.read(toolsListProvider.notifier).refresh());
         } catch (_) {}
         // Resume already kicked off a forced conversations refresh above; only
         // finish the warmup work that should run alongside it.
