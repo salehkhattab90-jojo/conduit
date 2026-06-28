@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:dio/dio.dart';
 
 import '../database/app_database.dart';
@@ -20,22 +18,6 @@ enum ReconcileReason {
 
 /// ≤ once / 24h (§7.5) for the background reason.
 const int kReconcileMinIntervalSeconds = 86400;
-
-/// Safety valve (§7.5): if more than this fraction of the local server-keyed
-/// chats come back as reconcile candidates, abort the whole run rather than
-/// risk a mass purge from a server returning 401 for everything (e.g. a
-/// token-expiry storm slipping past the auth gate). A genuine bulk
-/// server-delete still reconciles on a later run once the set is smaller.
-const double kReconcileMaxPurgeFraction = 0.5;
-
-/// Absolute floor below which the fraction valve NEVER trips: a high candidate
-/// fraction is only implausible when the candidate COUNT is also meaningful.
-/// Without this, a user with one server chat that is genuinely deleted hits
-/// `1 > 0.5` and the valve aborts forever — the phantom row would never purge.
-/// Small candidate sets are safe to process: the per-candidate confirmed-gone
-/// probe + the session-liveness guard are the real token-expiry protection; the
-/// fraction valve is only a coarse backstop against an implausibly-large set.
-const int kReconcileMinCandidatesForValve = 5;
 
 /// Outcome of one reconcile run (diagnostics + tests).
 class ReconcileResult {
@@ -60,7 +42,8 @@ class ReconcileResult {
   /// (transient) — left untouched this run.
   final int skipped;
 
-  /// Safety valve or session-liveness guard tripped. Depending on when the
+  /// Session-liveness guard tripped (the pre-purge preflight failed, or a
+  /// per-candidate probe hit an auth/terminal error). Depending on when the
   /// guard tripped, some earlier confirmed-gone candidates may have purged.
   final bool aborted;
 }
@@ -93,7 +76,7 @@ class DeletionReconcile {
   final SyncClock _clock;
 
   /// Runs the reconcile subject to the throttle. On a completed run (not
-  /// throttle-skipped, not aborted by the safety valve) the
+  /// throttle-skipped, not aborted by the session-liveness guard) the
   /// `last_full_reconcile_at` gate is advanced.
   Future<ReconcileResult> run(ReconcileReason reason) async {
     final now = _clock.nowEpochSeconds();
@@ -140,31 +123,7 @@ class DeletionReconcile {
       return const ReconcileResult(ran: true);
     }
 
-    // 3. Safety valve against a token-expiry mass-delete: if an implausibly
-    //    LARGE candidate set appears (both above an absolute floor AND a large
-    //    fraction), abort without purging. The floor keeps a legitimate
-    //    small-library deletion (e.g. a user's only chat) from being mistaken
-    //    for a mass-delete and blocked forever.
-    if (candidates.length >
-        math.max(
-          kReconcileMinCandidatesForValve,
-          localServerIds.length * kReconcileMaxPurgeFraction,
-        )) {
-      DebugLogger.warning(
-        'reconcile-aborted-safety-valve',
-        scope: 'sync/reconcile',
-        data: {'candidates': candidates.length, 'local': localServerIds.length},
-      );
-      // Do NOT advance the throttle: this is an abnormal condition that should
-      // be retried, not suppressed for 24h.
-      return ReconcileResult(
-        ran: true,
-        candidates: candidates.length,
-        aborted: true,
-      );
-    }
-
-    // 4. Verify the session once before the purge phase, then probe + purge
+    // 3. Verify the session once before the purge phase, then probe + purge
     //    each candidate under its chat lock. If a probe observes an auth /
     //    terminal failure after the preflight check, stop trusting absence for
     //    the rest of the run and leave the throttle untouched.

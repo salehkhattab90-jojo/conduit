@@ -496,27 +496,28 @@ void main() {
     });
   });
 
-  group('safety valve against a token-expiry mass-delete', () {
-    test('aborts (purges nothing) when candidates exceed the floor AND half '
-        'the local set', () async {
-      // 8 local server chats, NONE on the server list -> all 8 candidates,
-      // above both the absolute floor (5) and 50% -> abort.
+  group('bulk server-delete (delete-all) propagates', () {
+    test('a delete-all (every local chat gone) with a live session purges '
+        'every chat', () async {
+      // 8 local server chats, NONE on the server list -> all 8 candidates. The
+      // pre-purge liveness check passes and each probe confirms the chat gone ->
+      // all 8 purge. A real token-expiry storm instead 401s the list endpoint
+      // and aborts at enumeration/preflight (see the session-death tests above),
+      // so this path cannot mass-purge live chats.
       final ids = List.generate(8, (i) => 'c$i');
       for (final id in ids) {
         await seedServerChat(db, id: id);
-        client.probe401GoneIds.add(id); // would be "gone" if probed
+        client.probe401GoneIds.add(id);
       }
 
       final result = await reconcile.run(ReconcileReason.manualRefresh);
-      check(result.aborted).isTrue();
-      check(result.purged).equals(0);
-      // Nothing probed (aborted before the probe loop).
-      check(client.probeChatExistsCalls).equals(0);
+      check(result.aborted).isFalse();
+      check(result.candidates).equals(8);
+      check(result.purged).equals(8);
+      check(client.probeChatExistsCalls).equals(8);
       for (final id in ids) {
-        check(await db.chatsDao.getChat(id)).isNotNull();
+        check(await db.chatsDao.getChat(id)).isNull();
       }
-      // Abort does NOT advance the throttle (retried, not suppressed).
-      check(await db.syncMetaDao.getLastFullReconcileAt()).equals(0);
     });
 
     test(
