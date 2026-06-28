@@ -1,10 +1,17 @@
+import 'package:conduit/core/models/model.dart';
+import 'package:conduit/core/models/user.dart';
 import 'package:conduit/core/providers/app_providers.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Builds a [ProviderContainer] with [userPermissionsProvider] overridden
-/// to emit the given [AsyncValue].
-ProviderContainer _container(AsyncValue<Map<String, dynamic>> permissions) {
+/// to emit the given [AsyncValue], plus optional current-user and
+/// selected-model overrides (parity with the web-search availability test).
+ProviderContainer _container(
+  AsyncValue<Map<String, dynamic>> permissions, {
+  User? currentUser,
+  Model? selectedModel,
+}) {
   return ProviderContainer(
     overrides: [
       userPermissionsProvider.overrideWith(
@@ -14,6 +21,9 @@ ProviderContainer _container(AsyncValue<Map<String, dynamic>> permissions) {
           error: (e, s) => throw e,
         ),
       ),
+      if (currentUser != null)
+        currentUserProvider.overrideWith((ref) async => currentUser),
+      selectedModelProvider.overrideWithValue(selectedModel),
     ],
   );
 }
@@ -166,6 +176,49 @@ void main() {
       // Before the future resolves, the provider is in loading state,
       // which should fall back to visible.
       expect(container.read(imageGenerationAvailableProvider), isTrue);
+    });
+
+    // ── Admin + per-model capability (parity with web search) ──────
+
+    test('admin bypasses explicit false permission', () async {
+      final container = _container(
+        const AsyncData<Map<String, dynamic>>({
+          'features': {'image_generation': false},
+        }),
+        currentUser: const User(
+          id: 'admin',
+          username: 'Admin',
+          email: 'admin@example.com',
+          role: 'admin',
+        ),
+      );
+      addTearDown(container.dispose);
+
+      await container.read(currentUserProvider.future);
+
+      expect(container.read(imageGenerationAvailableProvider), isTrue);
+    });
+
+    test('model image generation capability false -> hidden', () {
+      final container = _container(
+        const AsyncData<Map<String, dynamic>>({
+          'features': {'image_generation': true},
+        }),
+        selectedModel: const Model(
+          id: 'no-image-gen',
+          name: 'No Image Gen',
+          metadata: {
+            'info': {
+              'meta': {
+                'capabilities': {'image_generation': false},
+              },
+            },
+          },
+        ),
+      );
+      addTearDown(container.dispose);
+
+      expect(container.read(imageGenerationAvailableProvider), isFalse);
     });
   });
 }
