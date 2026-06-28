@@ -203,6 +203,9 @@ sealed class Model with _$Model {
     final infoMetaCapabilities =
         infoMeta?['capabilities'] as Map<String, dynamic>?;
     final supportsUsage = infoMetaCapabilities?['usage'] == true;
+    // Whether the model exposes a per-chat thinking/reasoning toggle
+    // (OpenWebUI info.meta.capabilities.thinking).
+    final supportsThinking = infoMetaCapabilities?['thinking'] == true;
 
     // Fallback to top-level toolIds (for cached models serialized via toJson)
     if (toolIds == null || toolIds.isEmpty) {
@@ -248,6 +251,7 @@ sealed class Model with _$Model {
         'context_length': json['context_length'],
         'supported_parameters': supportedParamsList ?? supportedParams,
         'usage': supportsUsage,
+        'thinking': supportsThinking,
       },
       metadata: mergedMetadata,
       toolIds: toolIds,

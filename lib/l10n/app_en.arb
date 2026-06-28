@@ -940,6 +940,26 @@
   "@webSearchDescription": {
     "description": "Explains that responses can include citations from the web."
   },
+  "thinkingTitle": "Thinking",
+  "@thinkingTitle": {
+    "description": "Title for the per-chat thinking/reasoning mode control."
+  },
+  "thinkingSubtitle": "How much the model reasons before answering.",
+  "@thinkingSubtitle": {
+    "description": "Subtitle for the thinking mode control."
+  },
+  "thinkingOn": "On",
+  "@thinkingOn": {
+    "description": "Thinking mode: always reason before answering."
+  },
+  "thinkingAuto": "Auto",
+  "@thinkingAuto": {
+    "description": "Thinking mode: decide per message whether to reason."
+  },
+  "thinkingOff": "Off",
+  "@thinkingOff": {
+    "description": "Thinking mode: answer directly without reasoning."
+  },
   "imageGeneration": "Image Generation",
   "@imageGeneration": {
     "description": "Feature toggle/section for image generation."

@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:drift/drift.dart';
 
+import '../../models/thinking_mode.dart';
 import '../../utils/debug_logger.dart';
 import '../../sync/id_remapper.dart' show createChatContentHash;
 import '../app_database.dart';
@@ -65,6 +66,7 @@ class RequestCompletionPayload {
     this.terminalId,
     this.enableWebSearch = false,
     this.enableImageGeneration = false,
+    this.thinkingMode = ThinkingMode.auto,
     this.sessionIdOverride,
   });
 
@@ -80,6 +82,7 @@ class RequestCompletionPayload {
   final String? terminalId;
   final bool enableWebSearch;
   final bool enableImageGeneration;
+  final ThinkingMode thinkingMode;
   final String? sessionIdOverride;
 
   Map<String, dynamic> toJson() => <String, dynamic>{
@@ -90,6 +93,7 @@ class RequestCompletionPayload {
     if (terminalId != null) 'terminalId': terminalId,
     'enableWebSearch': enableWebSearch,
     'enableImageGeneration': enableImageGeneration,
+    'thinkingMode': thinkingMode.name,
     if (sessionIdOverride != null) 'sessionIdOverride': sessionIdOverride,
   };
 
@@ -104,6 +108,7 @@ class RequestCompletionPayload {
           : null,
       enableWebSearch: json['enableWebSearch'] == true,
       enableImageGeneration: json['enableImageGeneration'] == true,
+      thinkingMode: thinkingModeFromName(json['thinkingMode'] as String?),
       sessionIdOverride: json['sessionIdOverride'] is String
           ? json['sessionIdOverride'] as String
           : null,

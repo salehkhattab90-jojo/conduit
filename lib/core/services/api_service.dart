@@ -11,6 +11,7 @@ import '../models/backend_config.dart';
 import '../models/chat_message.dart';
 import '../models/conversation.dart';
 import '../models/file_info.dart';
+import '../models/thinking_mode.dart';
 import '../models/knowledge_base.dart';
 import '../models/knowledge_base_file.dart';
 import '../models/model.dart';
@@ -4704,6 +4705,7 @@ class ApiService {
     bool enableImageGeneration = false,
     bool enableCodeInterpreter = false,
     bool isVoiceMode = false,
+    ThinkingMode thinkingMode = ThinkingMode.auto,
     Map<String, dynamic>? modelItem,
     List<Map<String, dynamic>>? toolServers,
     Map<String, dynamic>? backgroundTasks,
@@ -4823,6 +4825,12 @@ class ApiService {
       data['stream_options'] = {'include_usage': true};
     }
 
+    // Whether this model exposes the per-chat thinking toggle.
+    final supportsThinking =
+        modelItem?['capabilities']?['thinking'] == true ||
+        (modelItem?['info'] as Map?)?['meta']?['capabilities']?['thinking'] ==
+            true;
+
     // Forward user model params (temperature, top_p, top_k, seed, etc.)
     // Mirrors OpenWebUI's: { ...$settings?.params, ...params, stop: getStopTokens() }
     final params = <String, dynamic>{};
@@ -4850,6 +4858,18 @@ class ApiService {
     }
     data['params'] = params;
 
+    // Thinking mode: On/Off set chat_template_kwargs.enable_thinking on the
+    // request; Auto sends no enable_thinking and instead signals
+    // features.thinking_mode='auto' (below) for a server-side inlet filter to
+    // decide per message. Gated to models that expose the thinking capability.
+    if (supportsThinking && thinkingMode != ThinkingMode.auto) {
+      final ctk = Map<String, dynamic>.from(
+        params['chat_template_kwargs'] as Map? ?? const <String, dynamic>{},
+      );
+      ctk['enable_thinking'] = thinkingMode == ThinkingMode.on;
+      params['chat_template_kwargs'] = ctk;
+    }
+
     // Include model_item with real server routing data (pipe, actions,
     // filters, etc.). This is critical for pipe models which need
     // model_item.pipe to be routed to the pipe function on the backend.
@@ -4870,6 +4890,7 @@ class ApiService {
       'code_interpreter': enableCodeInterpreter,
     };
     if (memoryEnabled) features['memory'] = true;
+    if (supportsThinking) features['thinking_mode'] = thinkingMode.name;
     data['features'] = features;
     if (enableWebSearch) {
       _traceApi('Web search enabled in streaming request');
@@ -5004,6 +5025,7 @@ class ApiService {
     bool enableImageGeneration = false,
     bool enableCodeInterpreter = false,
     bool isVoiceMode = false,
+    ThinkingMode thinkingMode = ThinkingMode.auto,
     Map<String, dynamic>? modelItem,
     String? sessionIdOverride,
     List<Map<String, dynamic>>? toolServers,
@@ -5078,6 +5100,7 @@ class ApiService {
         enableImageGeneration: enableImageGeneration,
         enableCodeInterpreter: enableCodeInterpreter,
         isVoiceMode: isVoiceMode,
+        thinkingMode: thinkingMode,
         modelItem: modelItem,
         toolServers: toolServers,
         backgroundTasks: backgroundTasks,
@@ -5491,6 +5514,7 @@ class ApiService {
     bool enableImageGeneration = false,
     bool enableCodeInterpreter = false,
     bool isVoiceMode = false,
+    ThinkingMode thinkingMode = ThinkingMode.auto,
     Map<String, dynamic>? modelItem,
     List<Map<String, dynamic>>? toolServers,
     Map<String, dynamic>? backgroundTasks,
