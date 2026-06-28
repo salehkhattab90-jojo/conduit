@@ -1376,6 +1376,35 @@ final foregroundRefreshProvider = Provider<void>((ref) {
   ref.onDispose(() => WidgetsBinding.instance.removeObserver(observer));
 });
 
+/// Re-fetches server config that is otherwise only loaded at cold start
+/// (model capabilities and tools), so an admin change on the server — a
+/// capability flag, a newly added tool — shows on reopen without a restart.
+/// Both keep their current value until fresh data arrives, and
+/// `Models.refresh()` also reconciles the selected model. Each refresh fails
+/// on its own: a missing session or an offline server only skips it.
+Future<void> _refreshServerCatalogOnResume(Ref ref) async {
+  try {
+    await ref.read(modelsProvider.notifier).refresh();
+  } catch (error, stackTrace) {
+    DebugLogger.error(
+      'resume-models-refresh-failed',
+      scope: 'startup/resume',
+      error: error,
+      stackTrace: stackTrace,
+    );
+  }
+  try {
+    await ref.read(toolsListProvider.notifier).refresh();
+  } catch (error, stackTrace) {
+    DebugLogger.error(
+      'resume-tools-refresh-failed',
+      scope: 'startup/resume',
+      error: error,
+      stackTrace: stackTrace,
+    );
+  }
+}
+
 class _ForegroundRefreshObserver extends WidgetsBindingObserver {
   final Ref _ref;
   _ForegroundRefreshObserver(this._ref);
@@ -1391,6 +1420,7 @@ class _ForegroundRefreshObserver extends WidgetsBindingObserver {
           _ref.invalidate(threadMessagesProvider);
           _resetConversationWarmup(_ref);
           unawaited(_refreshActiveConversationOnResume(_ref));
+          unawaited(_refreshServerCatalogOnResume(_ref));
         } catch (_) {}
         // Resume already kicked off a forced conversations refresh above; only
         // finish the warmup work that should run alongside it.
