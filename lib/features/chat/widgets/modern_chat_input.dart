@@ -2247,8 +2247,8 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
             children: [
               _buildOverflowButton(
                 tooltip: l10n.more,
-                webSearchActive: webSearchEnabled,
-                imageGenerationActive: imageGenEnabled,
+                webSearchActive: webSearchEnabled && webSearchAvailable,
+                imageGenerationActive: imageGenEnabled && imageGenAvailable,
                 toolsActive: selectedToolIds.isNotEmpty,
                 terminalActive: terminalActive,
                 filtersActive: selectedFilterIds.isNotEmpty,
@@ -2407,8 +2407,8 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
               children: [
                 _buildOverflowButton(
                   tooltip: l10n.more,
-                  webSearchActive: webSearchEnabled,
-                  imageGenerationActive: imageGenEnabled,
+                  webSearchActive: webSearchEnabled && webSearchAvailable,
+                  imageGenerationActive: imageGenEnabled && imageGenAvailable,
                   toolsActive: selectedToolIds.isNotEmpty,
                   terminalActive: terminalActive,
                   filtersActive: selectedFilterIds.isNotEmpty,
