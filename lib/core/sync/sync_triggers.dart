@@ -16,6 +16,10 @@ part 'sync_triggers.g.dart';
 /// Periodic foreground pull interval (RFC §7.6).
 const Duration kPeriodicPullInterval = Duration(minutes: 5);
 
+/// Minimum spacing between app-resume deletion reconciles, so rapid
+/// app-switching doesn't re-enumerate the full server chat set each resume.
+const Duration kResumeReconcileMinInterval = Duration(minutes: 5);
+
 /// Pull triggers ONLY (CDT-RFC-001 §7.6). Installed by being `ref.watch`ed
 /// from the startup listener block in `app_startup_providers.dart`.
 ///
@@ -33,6 +37,7 @@ class SyncTriggers extends _$SyncTriggers {
   bool _startCheckQueued = false;
   Object? _startDatabase;
   Object? _startClient;
+  DateTime? _lastResumeReconcileAt;
 
   @override
   void build() {
@@ -76,6 +81,7 @@ class SyncTriggers extends _$SyncTriggers {
       onResumed: () {
         _isForeground = true;
         _request('foreground');
+        _maybeReconcileOnResume();
         _restartPeriodicTimer();
       },
       onSuspended: _leaveForeground,
@@ -92,6 +98,11 @@ class SyncTriggers extends _$SyncTriggers {
     // 'foreground' pull on top of the 'start' pull from _maybeFireStart().
     if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
       _isForeground = true;
+      // onResumed does NOT fire on cold start (the observer registers after the
+      // app is already resumed), so reconcile here too — otherwise a chat
+      // deleted on another client would ghost until pull-to-refresh. Self-
+      // debounced, so it won't double-run if onResumed fires shortly after.
+      _maybeReconcileOnResume();
       _restartPeriodicTimer();
     }
 
@@ -181,6 +192,21 @@ class SyncTriggers extends _$SyncTriggers {
     unawaited(
       ref.read(syncEngineProvider.notifier).requestPull(reason: reason),
     );
+  }
+
+  /// On app resume, also reconcile server-side deletions (e.g. a chat deleted
+  /// on another client). The watermark-delta pull can't see deletes; this runs
+  /// the full-id reconcile, spaced to at most once per
+  /// [kResumeReconcileMinInterval] so frequent app-switching doesn't
+  /// re-enumerate the chat set each time.
+  void _maybeReconcileOnResume() {
+    final now = DateTime.now();
+    final last = _lastResumeReconcileAt;
+    if (last != null && now.difference(last) < kResumeReconcileMinInterval) {
+      return;
+    }
+    _lastResumeReconcileAt = now;
+    unawaited(ref.read(syncEngineProvider.notifier).reconcileNow());
   }
 }
 

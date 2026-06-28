@@ -1212,9 +1212,13 @@ void refreshConversationsCache(dynamic ref, {bool includeFolders = false}) {
   );
   unawaited(
     Future<void>(() async {
-      await ref
-          .read(syncEngineProvider.notifier)
-          .requestPull(reason: 'cache-refresh');
+      final engine = ref.read(syncEngineProvider.notifier);
+      await engine.requestPull(reason: 'cache-refresh');
+      // A watermark-delta pull can't see a chat deleted on another client (it's
+      // an absence, not a change). reconcileNow() runs the full-id deletion
+      // reconcile, bypassing the 24h background throttle, so pull-to-refresh
+      // actually purges server-side deletions.
+      await engine.reconcileNow();
       folderConversationRefresh.bumpIfMounted();
     }).catchError((Object error, StackTrace stackTrace) {
       DebugLogger.error(
