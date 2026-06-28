@@ -192,11 +192,14 @@ void main() {
   });
 
   test(
-    'safety valve aborts when candidates exceed the floor AND half the set',
+    'a bulk delete-all (every local note gone) with a live session purges '
+    'every note',
     () async {
       final client = FakeSyncApiClient(server);
-      // 8 local notes, all absent from the server → above the absolute floor (5)
-      // and 50% → abort without purging.
+      // 8 local notes, all absent from the server → all 8 are candidates. The
+      // list fetch (liveness) succeeds and each probe returns null (gone) → all
+      // 8 purge. A real token-expiry storm instead throws on the list/probe and
+      // aborts (see the dead-session tests below), so this cannot mass-purge.
       final ids = List.generate(8, (i) => 'n$i');
       for (final id in ids) {
         await seedLocalOnly(id);
@@ -206,9 +209,11 @@ void main() {
       final result = await reconcileWith(
         client,
       ).run(ReconcileReason.manualRefresh);
-      check(result.aborted).isTrue();
-      check(result.purged).equals(0);
-      check(await db.notesDao.getNote('n0')).isNotNull();
+      check(result.aborted).isFalse();
+      check(result.purged).equals(8);
+      for (final id in ids) {
+        check(await db.notesDao.getNote(id)).isNull();
+      }
     },
   );
 
