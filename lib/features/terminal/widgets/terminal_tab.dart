@@ -26,6 +26,7 @@ import '../../../shared/widgets/adaptive_toolbar_components.dart';
 import '../../../shared/widgets/conduit_components.dart';
 import '../../../shared/widgets/responsive_drawer_layout.dart';
 import '../../../shared/widgets/themed_dialogs.dart';
+import '../../../shared/widgets/web_content_embed.dart';
 import '../../navigation/providers/sidebar_providers.dart';
 import '../../tools/providers/tools_providers.dart';
 import '../models/terminal_models.dart';
@@ -725,6 +726,14 @@ class _TerminalTabState extends ConsumerState<TerminalTab>
     required TerminalFileReadResult preview,
   }) {
     final theme = context.conduitTheme;
+
+    // HTML/SVG files render live in the sandboxed WebContentEmbed viewer (the
+    // same renderer used for chat html/svg previews) instead of raw source.
+    final webSource = _terminalWebArtifactSource(preview);
+    if (webSource != null) {
+      return _TerminalFilePreview(source: webSource, l10n: l10n);
+    }
+
     if (preview.isText) {
       return SizedBox(
         width: 520,
@@ -1721,6 +1730,213 @@ class _TerminalTabState extends ConsumerState<TerminalTab>
         style: AppTypography.bodyMediumStyle.copyWith(
           color: theme.textSecondary,
         ),
+      ),
+    );
+  }
+}
+
+/// Returns the HTML/SVG markup of [preview] when it is a web-renderable
+/// artifact (so it can be shown live instead of as raw source), or null.
+///
+/// Detection is by filename extension and a content sniff — the terminal read
+/// endpoint reports text files as `text/plain` regardless of type, so MIME
+/// alone can't distinguish an .html artifact from a .txt note. SVG can arrive
+/// as bytes (`image/svg+xml`), so it is decoded from bytes when needed.
+String? _terminalWebArtifactSource(TerminalFileReadResult preview) {
+  final name = preview.fileName.toLowerCase();
+  final isHtml = name.endsWith('.html') || name.endsWith('.htm');
+  final isSvg = name.endsWith('.svg');
+
+  var source = preview.text;
+  if (source == null && isSvg && preview.bytes != null) {
+    try {
+      source = utf8.decode(preview.bytes!);
+    } catch (_) {
+      return null;
+    }
+  }
+  if (source == null) {
+    return null;
+  }
+  final head = source.trimLeft().toLowerCase();
+  if (head.isEmpty) {
+    return null;
+  }
+
+  // Never hand a bare URL to the viewer: WebContentEmbed treats a source that
+  // starts with http(s):// or // as a remote page and loads it UNSANDBOXED.
+  // Real HTML/SVG always starts with '<', so route only actual markup.
+  if (head.startsWith('http://') ||
+      head.startsWith('https://') ||
+      head.startsWith('//')) {
+    return null;
+  }
+
+  if (isHtml || isSvg) {
+    return source;
+  }
+
+  // Extensionless / mislabeled file: sniff for a document or SVG root.
+  if (head.startsWith('<!doctype html') ||
+      head.startsWith('<html') ||
+      head.startsWith('<svg')) {
+    return source;
+  }
+  return null;
+}
+
+/// A terminal file preview that renders an HTML/SVG artifact live in the
+/// sandboxed [WebContentEmbed], with a toggle to inspect the raw source.
+class _TerminalFilePreview extends StatefulWidget {
+  const _TerminalFilePreview({required this.source, required this.l10n});
+
+  final String source;
+  final AppLocalizations l10n;
+
+  @override
+  State<_TerminalFilePreview> createState() => _TerminalFilePreviewState();
+}
+
+class _TerminalFilePreviewState extends State<_TerminalFilePreview> {
+  bool _showSource = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = context.conduitTheme;
+    final media = MediaQuery.sizeOf(context);
+    final width = (media.width - 48).clamp(280.0, 560.0).toDouble();
+    final height = (media.height * 0.6).clamp(320.0, 560.0).toDouble();
+
+    return SizedBox(
+      width: width,
+      height: height,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Align(
+            alignment: Alignment.centerLeft,
+            child: _PreviewSourceToggle(
+              showSource: _showSource,
+              previewLabel: widget.l10n.preview,
+              sourceLabel: widget.l10n.code,
+              onChanged: (value) => setState(() => _showSource = value),
+            ),
+          ),
+          const SizedBox(height: Spacing.sm),
+          Expanded(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(AppBorderRadius.standard),
+              child: _showSource
+                  ? DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: theme.codeBackground,
+                        border: Border.all(color: theme.codeBorder),
+                      ),
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.all(Spacing.md),
+                        child: SelectableText(
+                          sanitizeUtf16(widget.source),
+                          style: AppTypography.codeStyle.copyWith(
+                            color: theme.codeText,
+                          ),
+                        ),
+                      ),
+                    )
+                  : WebContentEmbed(
+                      source: widget.source,
+                      deferUntilExpanded: false,
+                      initiallyExpanded: true,
+                      showChrome: false,
+                      fillAvailableHeight: true,
+                    ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A compact Preview/Source segmented toggle for [_TerminalFilePreview].
+class _PreviewSourceToggle extends StatelessWidget {
+  const _PreviewSourceToggle({
+    required this.showSource,
+    required this.previewLabel,
+    required this.sourceLabel,
+    required this.onChanged,
+  });
+
+  final bool showSource;
+  final String previewLabel;
+  final String sourceLabel;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = context.conduitTheme;
+
+    Widget segment(
+      String label,
+      IconData icon,
+      bool selected,
+      VoidCallback onTap,
+    ) {
+      return GestureDetector(
+        onTap: onTap,
+        behavior: HitTestBehavior.opaque,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 150),
+          padding: const EdgeInsets.symmetric(
+            horizontal: Spacing.md,
+            vertical: Spacing.xs,
+          ),
+          decoration: BoxDecoration(
+            color: selected ? theme.buttonPrimary : Colors.transparent,
+            borderRadius: BorderRadius.circular(AppBorderRadius.standard),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                icon,
+                size: 16,
+                color: selected ? theme.buttonPrimaryText : theme.textSecondary,
+              ),
+              const SizedBox(width: Spacing.xs),
+              Text(
+                label,
+                style: AppTypography.bodyMediumStyle.copyWith(
+                  color: selected
+                      ? theme.buttonPrimaryText
+                      : theme.textSecondary,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(Spacing.xs),
+      decoration: BoxDecoration(
+        color: theme.codeBackground,
+        borderRadius: BorderRadius.circular(AppBorderRadius.standard),
+        border: Border.all(color: theme.codeBorder),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          segment(
+            previewLabel,
+            Icons.visibility_outlined,
+            !showSource,
+            () => onChanged(false),
+          ),
+          const SizedBox(width: Spacing.xxs),
+          segment(sourceLabel, Icons.code, showSource, () => onChanged(true)),
+        ],
       ),
     );
   }
