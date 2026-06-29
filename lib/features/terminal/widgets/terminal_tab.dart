@@ -22,6 +22,7 @@ import '../../../shared/utils/platform_page_route.dart';
 import '../../../shared/utils/platform_scroll_physics.dart';
 import '../../../shared/utils/ui_utils.dart';
 import '../../../shared/utils/utf16_sanitizer.dart';
+import '../../../shared/widgets/adaptive_route_shell.dart';
 import '../../../shared/widgets/adaptive_toolbar_components.dart';
 import '../../../shared/widgets/conduit_components.dart';
 import '../../../shared/widgets/responsive_drawer_layout.dart';
@@ -695,6 +696,22 @@ class _TerminalTabState extends ConsumerState<TerminalTab>
         return;
       }
 
+      // HTML/SVG artifacts open full-screen in the sandboxed live viewer.
+      final webSource = _terminalWebArtifactSource(preview);
+      if (webSource != null) {
+        await Navigator.of(context, rootNavigator: true).push(
+          buildPlatformPageRoute<void>(
+            fullscreenDialog: true,
+            builder: (_) => _TerminalArtifactPage(
+              title: entry.displayName,
+              source: webSource,
+              onDownload: () => _downloadEntry(entry),
+            ),
+          ),
+        );
+        return;
+      }
+
       await ThemedDialogs.show<void>(
         context,
         title: sanitizeUtf16(entry.displayName),
@@ -726,14 +743,6 @@ class _TerminalTabState extends ConsumerState<TerminalTab>
     required TerminalFileReadResult preview,
   }) {
     final theme = context.conduitTheme;
-
-    // HTML/SVG files render live in the sandboxed WebContentEmbed viewer (the
-    // same renderer used for chat html/svg previews) instead of raw source.
-    final webSource = _terminalWebArtifactSource(preview);
-    if (webSource != null) {
-      return _TerminalFilePreview(source: webSource, l10n: l10n);
-    }
-
     if (preview.isText) {
       return SizedBox(
         width: 520,
@@ -1785,71 +1794,88 @@ String? _terminalWebArtifactSource(TerminalFileReadResult preview) {
   return null;
 }
 
-/// A terminal file preview that renders an HTML/SVG artifact live in the
-/// sandboxed [WebContentEmbed], with a toggle to inspect the raw source.
-class _TerminalFilePreview extends StatefulWidget {
-  const _TerminalFilePreview({required this.source, required this.l10n});
+/// A full-screen viewer that renders an HTML/SVG workspace artifact live in
+/// the sandboxed [WebContentEmbed], with a Preview/Source toggle and a Download
+/// action. Pushed from the terminal file browser for renderable files.
+class _TerminalArtifactPage extends StatefulWidget {
+  const _TerminalArtifactPage({
+    required this.title,
+    required this.source,
+    required this.onDownload,
+  });
 
+  final String title;
   final String source;
-  final AppLocalizations l10n;
+  final Future<void> Function() onDownload;
 
   @override
-  State<_TerminalFilePreview> createState() => _TerminalFilePreviewState();
+  State<_TerminalArtifactPage> createState() => _TerminalArtifactPageState();
 }
 
-class _TerminalFilePreviewState extends State<_TerminalFilePreview> {
+class _TerminalArtifactPageState extends State<_TerminalArtifactPage> {
   bool _showSource = false;
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
     final theme = context.conduitTheme;
-    final media = MediaQuery.sizeOf(context);
-    final width = (media.width - 48).clamp(280.0, 560.0).toDouble();
-    final height = (media.height * 0.6).clamp(320.0, 560.0).toDouble();
 
-    return SizedBox(
-      width: width,
-      height: height,
-      child: Column(
+    return AdaptiveRouteShell(
+      backgroundColor: theme.surfaceBackground,
+      bodySafeArea: true,
+      appBar: AdaptiveAppBar(
+        title: sanitizeUtf16(widget.title),
+        actions: [
+          AdaptiveAppBarAction(
+            iosSymbol: 'square.and.arrow.down',
+            icon: Platform.isIOS
+                ? CupertinoIcons.cloud_download
+                : Icons.file_download_outlined,
+            onPressed: () => unawaited(widget.onDownload()),
+          ),
+        ],
+      ),
+      body: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Align(
-            alignment: Alignment.centerLeft,
-            child: _PreviewSourceToggle(
-              showSource: _showSource,
-              previewLabel: widget.l10n.preview,
-              sourceLabel: widget.l10n.code,
-              onChanged: (value) => setState(() => _showSource = value),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              Spacing.md,
+              Spacing.sm,
+              Spacing.md,
+              Spacing.sm,
+            ),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: _PreviewSourceToggle(
+                showSource: _showSource,
+                previewLabel: l10n.preview,
+                sourceLabel: l10n.code,
+                onChanged: (value) => setState(() => _showSource = value),
+              ),
             ),
           ),
-          const SizedBox(height: Spacing.sm),
           Expanded(
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(AppBorderRadius.standard),
-              child: _showSource
-                  ? DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: theme.codeBackground,
-                        border: Border.all(color: theme.codeBorder),
-                      ),
-                      child: SingleChildScrollView(
-                        padding: const EdgeInsets.all(Spacing.md),
-                        child: SelectableText(
-                          sanitizeUtf16(widget.source),
-                          style: AppTypography.codeStyle.copyWith(
-                            color: theme.codeText,
-                          ),
+            child: _showSource
+                ? DecoratedBox(
+                    decoration: BoxDecoration(color: theme.codeBackground),
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.all(Spacing.md),
+                      child: SelectableText(
+                        sanitizeUtf16(widget.source),
+                        style: AppTypography.codeStyle.copyWith(
+                          color: theme.codeText,
                         ),
                       ),
-                    )
-                  : WebContentEmbed(
-                      source: widget.source,
-                      deferUntilExpanded: false,
-                      initiallyExpanded: true,
-                      showChrome: false,
-                      fillAvailableHeight: true,
                     ),
-            ),
+                  )
+                : WebContentEmbed(
+                    source: widget.source,
+                    deferUntilExpanded: false,
+                    initiallyExpanded: true,
+                    showChrome: false,
+                    fillAvailableHeight: true,
+                  ),
           ),
         ],
       ),
@@ -1857,7 +1883,7 @@ class _TerminalFilePreviewState extends State<_TerminalFilePreview> {
   }
 }
 
-/// A compact Preview/Source segmented toggle for [_TerminalFilePreview].
+/// A compact Preview/Source segmented toggle for [_TerminalArtifactPage].
 class _PreviewSourceToggle extends StatelessWidget {
   const _PreviewSourceToggle({
     required this.showSource,
