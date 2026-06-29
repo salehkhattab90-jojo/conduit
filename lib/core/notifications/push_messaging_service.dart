@@ -10,8 +10,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../features/auth/providers/unified_auth_providers.dart';
-import '../../features/navigation/providers/sidebar_providers.dart';
 import '../constants/locked_server.dart';
+import 'email_open_request.dart';
 import '../persistence/persistence_keys.dart';
 import '../persistence/preferences_store.dart';
 import '../providers/app_providers.dart';
@@ -23,9 +23,6 @@ import '../utils/debug_logger.dart';
 /// mcps/email_pipeline/email_notify.py). A backgrounded Android notification
 /// renders on this channel, so the app MUST create it with this exact id.
 const String kEmailNotificationChannelId = 'email_significant';
-
-/// Visible sidebar index of the Email tab (`_SidebarTabId.email` is index 1).
-const int _kEmailSidebarTabIndex = 1;
 
 /// FCM background handler. MUST be a top-level/static function with the
 /// vm:entry-point pragma — it runs in its own isolate. The server sends a
@@ -236,14 +233,13 @@ class PushMessagingService {
 
   void _deepLink(Map<String, dynamic> data) {
     if (data['type'] != 'email') return;
-    // Mount the chat shell (which hosts the sidebar), then switch to Email.
-    // Per-message deep-link is deferred — the email webapp has no
-    // "open message" handler yet (see NOTIFICATIONS.md), so we open the section.
+    // Open the chat shell (which hosts the sidebar), then ask the shell to
+    // switch to the Email tab AND open the drawer — just setting the tab leaves
+    // it behind a closed drawer on mobile. Per-message deep-link is deferred:
+    // the email webapp has no "open message" handler yet (see NOTIFICATIONS.md).
     unawaited(NavigationService.navigateToChat());
     try {
-      _ref
-          .read(sidebarActiveTabProvider.notifier)
-          .set(_kEmailSidebarTabIndex);
-    } catch (_) {/* sidebar not ready */}
+      _ref.read(emailOpenRequestProvider.notifier).request();
+    } catch (_) {/* providers not ready */}
   }
 }
