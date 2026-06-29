@@ -78,3 +78,10 @@ dependencies {
 flutter {
     source = "../.."
 }
+
+// Firebase (FCM push): apply the google-services plugin only when its config is
+// present. google-services.json is gitignored / injected per build, so the app
+// still builds without it — notifications are simply inert in that case.
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
+}
