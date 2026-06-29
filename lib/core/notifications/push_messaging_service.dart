@@ -233,12 +233,15 @@ class PushMessagingService {
 
   void _deepLink(Map<String, dynamic> data) {
     if (data['type'] != 'email') return;
-    // Open the chat shell (which hosts the sidebar), then ask the shell to
-    // switch to the Email tab AND open the drawer — just setting the tab leaves
-    // it behind a closed drawer on mobile. Per-message deep-link is deferred:
-    // the email webapp has no "open message" handler yet (see NOTIFICATIONS.md).
+    // Open the chat shell (hosts the sidebar), ask the shell to open the Email
+    // section (switch tab + open drawer), and stash the message id so the
+    // EmailTab webview opens that specific email once it's loaded.
+    final id = data['email_message_id'];
     unawaited(NavigationService.navigateToChat());
     try {
+      if (id is String && id.isNotEmpty) {
+        _ref.read(pendingEmailMessageProvider.notifier).set(id);
+      }
       _ref.read(emailOpenRequestProvider.notifier).request();
     } catch (_) {/* providers not ready */}
   }

@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/constants/locked_server.dart';
+import '../../../core/notifications/email_open_request.dart';
 import '../../../core/providers/app_providers.dart';
 import '../../auth/providers/unified_auth_providers.dart';
 
@@ -68,6 +69,17 @@ class _EmailTabState extends ConsumerState<EmailTab> {
     );
   }
 
+  // Deep-link from a tapped push notification: ask the webapp to open that
+  // specific message (its `id` is the same email_message id the webapp uses).
+  Future<void> _injectOpenMessage(String id) async {
+    final controller = _controller;
+    if (controller == null) return;
+    final safe = id.replaceAll(r'\', r'\\').replaceAll("'", r"\'");
+    await controller.evaluateJavascript(
+      source: "window.postMessage({type:'email-open', id:'$safe'}, '*');",
+    );
+  }
+
   void _onHostMessage(dynamic raw) {
     if (raw is! Map) return;
     // The only host action the webapp emits: open the Gmail OAuth URL in the
@@ -86,6 +98,13 @@ class _EmailTabState extends ConsumerState<EmailTab> {
 
   @override
   Widget build(BuildContext context) {
+    // A notification tapped while this tab is already loaded: open the message.
+    ref.listen<String?>(pendingEmailMessageProvider, (prev, next) {
+      if (next != null && next.isNotEmpty && _controller != null) {
+        unawaited(_injectOpenMessage(next));
+        ref.read(pendingEmailMessageProvider.notifier).clear();
+      }
+    });
     final mode =
         Theme.of(context).brightness == Brightness.dark ? 'dark' : 'light';
     // Re-sync theme when the app brightness changes after the page has loaded.
@@ -114,6 +133,12 @@ class _EmailTabState extends ConsumerState<EmailTab> {
       onLoadStop: (controller, _) async {
         await _injectToken();
         await _injectTheme(mode);
+        // A push deep-link may have stashed a message to open on first load.
+        final pending = ref.read(pendingEmailMessageProvider);
+        if (pending != null && pending.isNotEmpty) {
+          await _injectOpenMessage(pending);
+          ref.read(pendingEmailMessageProvider.notifier).clear();
+        }
       },
     );
   }

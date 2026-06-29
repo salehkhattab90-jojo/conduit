@@ -20,3 +20,18 @@ class EmailOpenRequest extends Notifier<bool> {
 final emailOpenRequestProvider = NotifierProvider<EmailOpenRequest, bool>(
   EmailOpenRequest.new,
 );
+
+/// The `email_message` id a tapped notification wants opened, held until the
+/// EmailTab webview opens it. Separate from [emailOpenRequestProvider] (which
+/// just opens the section) so the drawer-shell and EmailTab consumers don't
+/// race. Non-autoDispose, so the id survives until EmailTab mounts + loads.
+class PendingEmailMessage extends Notifier<String?> {
+  @override
+  String? build() => null;
+
+  void set(String? id) => state = (id != null && id.isNotEmpty) ? id : null;
+  void clear() => state = null;
+}
+
+final pendingEmailMessageProvider =
+    NotifierProvider<PendingEmailMessage, String?>(PendingEmailMessage.new);
