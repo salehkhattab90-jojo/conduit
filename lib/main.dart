@@ -34,6 +34,9 @@ import 'core/models/tool.dart';
 import 'package:conduit/l10n/app_localizations.dart';
 import 'core/services/quick_actions_service.dart';
 import 'core/providers/app_startup_providers.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'core/notifications/push_messaging_service.dart';
 
 const bool _enableFlutterDriverExtension = bool.fromEnvironment(
   'ENABLE_FLUTTER_DRIVER_EXTENSION',
@@ -169,6 +172,23 @@ void main() {
       // build. MUST complete before the ProviderContainer is created.
       await PreferencesStore.ensureInitialized();
       _startupTimeline?.instant('prefs_ready');
+
+      // Firebase (FCM push for email notifications). Guarded: if the Firebase
+      // config files aren't present (gitignored / not injected per build), init
+      // throws and we swallow it — the whole push feature is then a clean no-op.
+      try {
+        await Firebase.initializeApp();
+        FirebaseMessaging.onBackgroundMessage(
+          firebaseMessagingBackgroundHandler,
+        );
+      } catch (error, stackTrace) {
+        DebugLogger.error(
+          'firebase-init',
+          scope: 'app/startup',
+          error: error,
+          stackTrace: stackTrace,
+        );
+      }
 
       // Run migration checks (fast-pathed after first run).
       final migrator = PersistenceMigrator(hiveBoxes: hiveBoxes);
