@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/models/chat_message.dart';
 import '../../core/models/conversation.dart';
+import 'terminal_artifact_store.dart';
 import '../../core/providers/app_providers.dart' show isTemporaryChat;
 import '../../core/services/socket_service.dart';
 import '../../core/utils/tool_calls_parser.dart';
@@ -2974,9 +2975,10 @@ ActiveChatStream attachUnifiedChunkedStreaming({
         } catch (_) {}
       } else if (type == 'terminal:display_file' && payload != null) {
         // Open Terminal `display_file` tool: a workspace artifact is ready.
-        // Record its path on the message so the UI shows a tappable "artifact"
-        // card. We don't auto-open on mobile (there's no side panel like the
-        // web) — the user taps the card to open it in the terminal viewer.
+        // Record its path in a durable client-side store keyed by message id —
+        // NOT the message metadata, which a server re-sync (on scroll/reload)
+        // would wipe, making the card disappear — so the artifact card survives.
+        // The user taps the card to open it in the terminal viewer.
         try {
           final path =
               (payload is Map ? payload['path'] : null)?.toString() ?? '';
@@ -2988,22 +2990,7 @@ ActiveChatStream attachUnifiedChunkedStreaming({
               allowBindingForeignMessage: true,
             );
             if (targetId != null) {
-              updateMessageById(targetId, (current) {
-                final existing =
-                    (current.metadata?['terminalArtifacts'] as List?)
-                        ?.map((e) => e.toString())
-                        .toList() ??
-                    <String>[];
-                if (existing.contains(path)) {
-                  return current;
-                }
-                return current.copyWith(
-                  metadata: {
-                    ...?current.metadata,
-                    'terminalArtifacts': [...existing, path],
-                  },
-                );
-              });
+              terminalArtifactStore.add(targetId, path);
             }
           }
         } catch (_) {}
