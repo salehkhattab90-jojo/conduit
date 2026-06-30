@@ -2972,6 +2972,41 @@ ActiveChatStream attachUnifiedChunkedStreaming({
             }
           }
         } catch (_) {}
+      } else if (type == 'terminal:display_file' && payload != null) {
+        // Open Terminal `display_file` tool: a workspace artifact is ready.
+        // Record its path on the message so the UI shows a tappable "artifact"
+        // card. We don't auto-open on mobile (there's no side panel like the
+        // web) — the user taps the card to open it in the terminal viewer.
+        try {
+          final path =
+              (payload is Map ? payload['path'] : null)?.toString() ?? '';
+          if (path.isNotEmpty) {
+            final targetId = resolveTargetMessageIdForStream(
+              messageId,
+              eventType: 'terminal:display_file',
+              incomingSessionId: incomingSessionId,
+              allowBindingForeignMessage: true,
+            );
+            if (targetId != null) {
+              updateMessageById(targetId, (current) {
+                final existing =
+                    (current.metadata?['terminalArtifacts'] as List?)
+                        ?.map((e) => e.toString())
+                        .toList() ??
+                    <String>[];
+                if (existing.contains(path)) {
+                  return current;
+                }
+                return current.copyWith(
+                  metadata: {
+                    ...?current.metadata,
+                    'terminalArtifacts': [...existing, path],
+                  },
+                );
+              });
+            }
+          }
+        } catch (_) {}
       } else if (type == 'chat:message:favorite' && payload != null) {
         // Favorite/unfavorite toggle from the server.
         try {
