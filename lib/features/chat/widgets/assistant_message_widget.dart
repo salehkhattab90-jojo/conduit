@@ -7,6 +7,8 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../shared/theme/theme_extensions.dart';
 import '../../terminal/widgets/terminal_tab.dart';
+import '../../../shared/utils/platform_page_route.dart';
+import 'document_preview_page.dart';
 import '../../../shared/widgets/markdown/streaming_markdown_widget.dart';
 import '../../../shared/widgets/markdown/renderer/markdown_style.dart';
 import '../../../core/models/chat_message.dart';
@@ -101,6 +103,22 @@ final _markdownBlockLatexPattern = RegExp(
 final _markdownInlineLatexPattern = RegExp(r'\$[^$\n]+\$');
 // Handle both URL formats: /api/v1/files/{id} and /api/v1/files/{id}/content
 final _fileIdPattern = RegExp(r'/api/v1/files/([^/]+)(?:/content)?$');
+
+/// A generated document fused from its real file (in the OWUI file store) and
+/// its docgen HTML side-preview, rendered as a single card.
+class _DocPreview {
+  const _DocPreview({
+    required this.fileUrl,
+    required this.fileName,
+    required this.previewHtml,
+    this.fileId,
+  });
+
+  final String fileUrl;
+  final String fileName;
+  final String previewHtml;
+  final String? fileId;
+}
 
 class AssistantMessageWidget extends ConsumerStatefulWidget {
   final dynamic message;
@@ -1089,6 +1107,17 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
         ? widget.message.versions[_activeVersionIndex].files
         : widget.message.files;
     final activeEmbeds = _resolveActiveEmbeds();
+    final docPreview = _pairDocPreview(activeFiles, activeEmbeds);
+    final filesToRender = docPreview == null
+        ? activeFiles
+        : activeFiles
+              ?.where((f) => getFileUrl(f) != docPreview.fileUrl)
+              .toList();
+    final embedsToRender = docPreview == null
+        ? activeEmbeds
+        : activeEmbeds
+              ?.where((e) => extractEmbedSource(e) != docPreview.previewHtml)
+              .toList();
     final activeSources = _resolveActiveSources();
     final footer = _buildFooterBar(activeSources: activeSources);
     final queuedCompletionAsync = ref.watch(
@@ -1127,18 +1156,26 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Display attachments - prioritize files array over attachmentIds to avoid duplication
-                if (activeFiles != null && activeFiles.isNotEmpty) ...[
-                  _buildFilesFromArray(),
+                // A generated document (docgen file + its HTML side-preview):
+                // fuse into one card that opens the preview full-screen.
+                if (docPreview != null) ...[
+                  _buildDocPreviewCard(docPreview),
                   const SizedBox(height: Spacing.md),
-                ] else if (widget.message.attachmentIds != null &&
+                ],
+
+                // Display attachments - prioritize files array over attachmentIds to avoid duplication
+                if (filesToRender != null && filesToRender.isNotEmpty) ...[
+                  _buildFilesFromArray(filesToRender),
+                  const SizedBox(height: Spacing.md),
+                ] else if (docPreview == null &&
+                    widget.message.attachmentIds != null &&
                     widget.message.attachmentIds!.isNotEmpty) ...[
                   _buildAttachmentItems(),
                   const SizedBox(height: Spacing.md),
                 ],
 
-                if (activeEmbeds != null && activeEmbeds.isNotEmpty) ...[
-                  _buildEmbedsFromArray(activeEmbeds),
+                if (embedsToRender != null && embedsToRender.isNotEmpty) ...[
+                  _buildEmbedsFromArray(embedsToRender),
                   const SizedBox(height: Spacing.md),
                 ],
 
@@ -1792,10 +1829,12 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
     );
   }
 
-  Widget _buildFilesFromArray() {
-    final filesArray = _activeVersionIndex >= 0
-        ? widget.message.versions[_activeVersionIndex].files
-        : widget.message.files;
+  Widget _buildFilesFromArray([List<dynamic>? overrideFiles]) {
+    final filesArray =
+        overrideFiles ??
+        (_activeVersionIndex >= 0
+            ? widget.message.versions[_activeVersionIndex].files
+            : widget.message.files);
     if (filesArray == null || filesArray.isEmpty) {
       return const SizedBox.shrink();
     }
@@ -1940,6 +1979,105 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
           disableAnimation: _uiTreatsAsStreaming,
         );
       }).toList(),
+    );
+  }
+
+  /// Detects a generated document: a message carrying exactly one non-image file
+  /// (the real docx/pdf/xlsx/… in the OWUI file store) and exactly one HTML
+  /// preview (docgen's side-preview). Only the unambiguous single-doc case is
+  /// fused into one card; otherwise files + embeds render as usual.
+  _DocPreview? _pairDocPreview(List<dynamic>? files, List<dynamic>? embeds) {
+    if (files == null || embeds == null) return null;
+    final nonImage = files.where((f) => !isImageFile(f)).toList();
+    if (nonImage.length != 1) return null;
+    final file = nonImage.first;
+    final fileUrl = getFileUrl(file);
+    if (fileUrl == null) return null;
+    final htmlSources = <String>[];
+    for (final e in embeds) {
+      final src = extractEmbedSource(e);
+      if (src != null && src.trimLeft().startsWith('<')) {
+        htmlSources.add(src);
+      }
+    }
+    if (htmlSources.length != 1) return null;
+    final rawName = file is Map ? (file['name'] ?? file['filename']) : null;
+    final name = rawName?.toString();
+    final fileName = (name != null && name.trim().isNotEmpty) ? name : 'Document';
+    return _DocPreview(
+      fileUrl: fileUrl,
+      fileName: fileName,
+      fileId: _fileIdPattern.firstMatch(fileUrl)?.group(1),
+      previewHtml: htmlSources.first,
+    );
+  }
+
+  Widget _buildDocPreviewCard(_DocPreview doc) {
+    final theme = context.conduitTheme;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(AppBorderRadius.md),
+        onTap: () => unawaited(
+          Navigator.of(context, rootNavigator: true).push(
+            buildPlatformPageRoute<void>(
+              fullscreenDialog: true,
+              builder: (_) => DocumentPreviewPage(
+                previewHtml: doc.previewHtml,
+                fileName: doc.fileName,
+                fileId: doc.fileId,
+              ),
+            ),
+          ),
+        ),
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 320),
+          padding: const EdgeInsets.all(Spacing.md),
+          decoration: BoxDecoration(
+            color: theme.cardBackground,
+            borderRadius: BorderRadius.circular(AppBorderRadius.md),
+            border: Border.all(
+              color: theme.textPrimary.withValues(alpha: 0.12),
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.description_outlined,
+                size: 22,
+                color: theme.buttonPrimary,
+              ),
+              const SizedBox(width: Spacing.sm),
+              Flexible(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      doc.fileName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTypography.labelStyle.copyWith(
+                        color: theme.textPrimary,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    Text(
+                      'Document · tap to preview',
+                      style: AppTypography.labelMediumStyle.copyWith(
+                        color: theme.textSecondary.withValues(alpha: 0.7),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: Spacing.sm),
+              Icon(Icons.chevron_right, size: 18, color: theme.textSecondary),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
