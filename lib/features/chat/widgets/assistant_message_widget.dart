@@ -8,7 +8,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../shared/theme/theme_extensions.dart';
 import '../../../shared/widgets/markdown/streaming_markdown_widget.dart';
 import '../../../shared/widgets/markdown/renderer/markdown_style.dart';
-import '../../../shared/widgets/markdown/markdown_config.dart';
 import '../../../core/models/chat_message.dart';
 import '../../../shared/widgets/markdown/markdown_preprocessor.dart';
 import '../providers/text_to_speech_provider.dart';
@@ -175,9 +174,6 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
   bool _hasTriggeredContentHaptic = false;
   ProviderSubscription<String?>? _streamingContentSub;
 
-  /// Guards artifact auto-open so it fires at most once per streaming session.
-  bool _didAutoOpenArtifact = false;
-
   bool get _shouldAnimateOnMount =>
       widget.animateOnMount && !_disableAnimations;
 
@@ -210,44 +206,6 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
       );
       debugPrintStack(stackTrace: stack);
     }
-  }
-
-  /// Auto-open the artifact preview once when a freshly-streamed assistant
-  /// message finishes and carries an HTML artifact — Open WebUI surfaces the
-  /// artifact panel automatically, and this brings the phone to parity. SVG
-  /// already renders an inline preview, so only non-inline (HTML) artifacts open.
-  void _maybeAutoOpenArtifact() {
-    if (_didAutoOpenArtifact) return;
-    if (!_isRouteVisible || !_isAppForeground) return;
-    final artifact = _lastPreviewableHtmlArtifact(widget.message.content ?? '');
-    if (artifact == null) return;
-    _didAutoOpenArtifact = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !context.mounted) return;
-      if (!_isRouteVisible || !_isAppForeground) return;
-      ConduitMarkdown.showCodePreviewSheet(
-        context,
-        code: artifact.value,
-        language: artifact.key,
-      );
-    });
-  }
-
-  /// The (language → code) of the last fenced block that previews as an artifact
-  /// but isn't already shown inline (i.e. HTML, not SVG). Null when none.
-  MapEntry<String, String>? _lastPreviewableHtmlArtifact(String content) {
-    if (content.isEmpty) return null;
-    final fence = RegExp(r'```([^\n`]*)\r?\n([\s\S]*?)```');
-    MapEntry<String, String>? found;
-    for (final m in fence.allMatches(content)) {
-      final lang = (m.group(1) ?? '').trim();
-      final code = m.group(2) ?? '';
-      if (ConduitMarkdown.isPreviewableCodeBlock(lang, code) &&
-          !ConduitMarkdown.shouldInlinePreviewCodeBlock(lang, code)) {
-        found = MapEntry(lang, code);
-      }
-    }
-    return found;
   }
 
   @override
@@ -311,7 +269,6 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
       _resetTtsPlainTextState();
       _hasAnimated = !_shouldAnimateOnMount;
       _hasTriggeredContentHaptic = false;
-      _didAutoOpenArtifact = false;
       _fadeController.value = _shouldAnimateOnMount ? 0.0 : 1.0;
       _slideController.value = _shouldAnimateOnMount ? 0.0 : 1.0;
     }
@@ -331,12 +288,6 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
       // Genuine streaming end: allow the action row to replace the indicator.
       _hasStreamedThisMessage = true;
       _actionRowSettled = true;
-      _maybeAutoOpenArtifact();
-    }
-
-    // A new stream may emit a fresh artifact — re-arm the one-shot auto-open.
-    if (!oldWidget.isStreaming && widget.isStreaming) {
-      _didAutoOpenArtifact = false;
     }
 
     // Refresh rendered content when the active message changes.
