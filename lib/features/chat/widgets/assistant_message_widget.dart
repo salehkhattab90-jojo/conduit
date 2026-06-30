@@ -7,6 +7,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../shared/theme/theme_extensions.dart';
 import '../../terminal/widgets/terminal_tab.dart';
+import '../../../core/services/terminal_artifact_store.dart';
 import '../../../shared/utils/platform_page_route.dart';
 import 'document_preview_page.dart';
 import '../../../shared/widgets/markdown/streaming_markdown_widget.dart';
@@ -227,18 +228,24 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
     }
   }
 
-  /// Absolute paths of Open Terminal artifacts surfaced for this message via a
-  /// `display_file` tool call (recorded on the message metadata by the stream
-  /// handler). Each renders as a tappable card that opens the workspace file.
-  List<String> _terminalArtifactPaths() {
-    final raw = widget.message.metadata?['terminalArtifacts'];
-    if (raw is List) {
-      return raw
-          .map((e) => e.toString())
-          .where((s) => s.isNotEmpty)
-          .toList(growable: false);
-    }
-    return const <String>[];
+  /// Open Terminal `display_file` artifacts for this message, read reactively
+  /// from the durable [terminalArtifactStore] (NOT the message metadata, which a
+  /// server re-sync wipes — that made the card vanish on scroll). Renders
+  /// tappable cards that open the workspace file.
+  Widget _buildTerminalArtifactSection() {
+    return ListenableBuilder(
+      listenable: terminalArtifactStore,
+      builder: (context, _) {
+        final paths = terminalArtifactStore.pathsFor(widget.message.id);
+        if (paths.isEmpty) {
+          return const SizedBox.shrink();
+        }
+        return Padding(
+          padding: const EdgeInsets.only(bottom: Spacing.md),
+          child: _buildTerminalArtifactCards(paths),
+        );
+      },
+    );
   }
 
   String _artifactBasename(String path) {
@@ -1179,10 +1186,7 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
                   const SizedBox(height: Spacing.md),
                 ],
 
-                if (_terminalArtifactPaths().isNotEmpty) ...[
-                  _buildTerminalArtifactCards(_terminalArtifactPaths()),
-                  const SizedBox(height: Spacing.md),
-                ],
+                _buildTerminalArtifactSection(),
 
                 if (hasStatusTimeline) ...[
                   StreamingStatusWidget(
