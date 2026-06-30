@@ -1114,7 +1114,22 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
         ? widget.message.versions[_activeVersionIndex].files
         : widget.message.files;
     final activeEmbeds = _resolveActiveEmbeds();
-    final docPreview = _pairDocPreview(activeFiles, activeEmbeds);
+    // Generated docs (docgen) arrive nested in the responses-output trace: a
+    // `function_call_output` item carries the file + its HTML preview in its own
+    // files/embeds, NOT in top-level message.files/embeds — so gather those too.
+    final outputDocFiles = <dynamic>[];
+    final outputDocEmbeds = <dynamic>[];
+    for (final item
+        in (widget.message.output ?? const <Map<String, dynamic>>[])) {
+      final f = item['files'];
+      if (f is List) outputDocFiles.addAll(f);
+      final e = item['embeds'];
+      if (e is List) outputDocEmbeds.addAll(e);
+    }
+    final docPreview = _pairDocPreview(
+      [...?activeFiles, ...outputDocFiles],
+      [...?activeEmbeds, ...outputDocEmbeds],
+    );
     final filesToRender = docPreview == null
         ? activeFiles
         : activeFiles
