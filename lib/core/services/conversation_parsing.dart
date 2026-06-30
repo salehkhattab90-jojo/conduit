@@ -563,6 +563,18 @@ Map<String, dynamic> _parseOpenWebUIMessageToJson(
   final rawUsage = _coerceJsonMap(historyMsg?['usage'] ?? msgData['usage']);
   final Map<String, dynamic>? usage = rawUsage.isEmpty ? null : rawUsage;
 
+  // Responses-format structured output trace. Generated docs (docgen) carry the
+  // file + HTML preview inside a function_call_output item here, not in
+  // top-level files/embeds — preserve it so the doc-preview card renders on a
+  // reloaded chat, not only during live streaming.
+  final outputRaw = historyMsg?['output'] ?? msgData['output'];
+  final List<Map<String, dynamic>>? output = outputRaw is List
+      ? outputRaw
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList()
+      : null;
+
   return <String, dynamic>{
     'id': (msgData['id'] ?? _uuid.v4()).toString(),
     'role': role,
@@ -572,6 +584,7 @@ Map<String, dynamic> _parseOpenWebUIMessageToJson(
     'isStreaming': _safeBool(msgData['isStreaming']) ?? false,
     'attachmentIds': ?attachmentIds,
     'files': ?files,
+    'output': ?output,
     if (embeds.isNotEmpty) 'embeds': embeds,
     'metadata': metadata ?? const <String, dynamic>{},
     'statusHistory': _parseStatusHistoryField(statusHistoryRaw),
