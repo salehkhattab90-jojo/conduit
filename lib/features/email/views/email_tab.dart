@@ -1,13 +1,18 @@
 import 'dart:async';
+import 'dart:io';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/constants/locked_server.dart';
 import '../../../core/notifications/email_open_request.dart';
 import '../../../core/providers/app_providers.dart';
+import '../../../core/utils/debug_logger.dart';
 import '../../auth/providers/unified_auth_providers.dart';
 
 /// Email section — hosts the email inbox webapp (served by email-api at /app)
@@ -93,6 +98,78 @@ class _EmailTabState extends ConsumerState<EmailTab> {
           launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication),
         );
       }
+      return;
+    }
+    // Attachment download: a blob URL + `<a download>` can't save a file inside a
+    // WebView, so the webapp hands the request to us. We fetch the bytes with the
+    // same bearer the page uses and open the system share/save sheet.
+    if (raw['type'] == 'email-download') {
+      final url = raw['url'];
+      if (url is String && url.isNotEmpty) {
+        final filename = raw['filename'];
+        final contentType = raw['contentType'];
+        unawaited(
+          _downloadAttachment(
+            url,
+            filename is String && filename.isNotEmpty ? filename : 'attachment',
+            contentType is String && contentType.isNotEmpty
+                ? contentType
+                : null,
+          ),
+        );
+      }
+      return;
+    }
+  }
+
+  // Fetch an inbound-attachment URL with the active bearer and hand the real file
+  // to the OS share/save sheet — the WebView can't persist a download itself.
+  Future<void> _downloadAttachment(
+    String url,
+    String filename,
+    String? contentType,
+  ) async {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    try {
+      final token = ref.read(authTokenProvider3);
+      final resp = await Dio().get<List<int>>(
+        url,
+        options: Options(
+          responseType: ResponseType.bytes,
+          receiveTimeout: const Duration(minutes: 2),
+          headers: <String, String>{
+            if (token != null && token.isNotEmpty)
+              'Authorization': 'Bearer $token',
+          },
+        ),
+      );
+      final bytes = resp.data;
+      if (bytes == null || bytes.isEmpty) {
+        throw StateError('empty attachment body');
+      }
+      final dir = await getTemporaryDirectory();
+      final safe = filename.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').trim();
+      final file = File('${dir.path}/${safe.isEmpty ? 'attachment' : safe}');
+      await file.writeAsBytes(bytes, flush: true);
+      await SharePlus.instance.share(
+        ShareParams(
+          files: <XFile>[
+            XFile(
+              file.path,
+              name: filename,
+              mimeType: contentType,
+            ),
+          ],
+        ),
+      );
+    } catch (e) {
+      DebugLogger.log(
+        'Email attachment download failed: $e',
+        scope: 'email/download',
+      );
+      messenger?.showSnackBar(
+        const SnackBar(content: Text('Download failed. Please try again.')),
+      );
     }
   }
 
