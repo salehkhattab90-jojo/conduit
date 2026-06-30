@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../database/local_conversation_loader.dart';
+import '../notifications/push_providers.dart';
 import '../providers/app_providers.dart';
 import '../sync/sync_triggers.dart';
 import '../../features/auth/providers/unified_auth_providers.dart';
@@ -948,6 +949,9 @@ class AppStartupFlow extends _$AppStartupFlow {
 
     _ensureSocketAttached();
     _applyCurrentAuthTokenToApi(api);
+    // Start FCM push + register this device for email notifications (a no-op if
+    // Firebase isn't configured). Fire-and-forget; never blocks startup.
+    unawaited(_startPushMessaging());
     _warmApiConnection(api);
     // Activate the active-chats sync (global chat:active handler + initial bulk
     // fetch) so the sidebar generating spinner is correct app-wide, including
@@ -967,6 +971,29 @@ class AppStartupFlow extends _$AppStartupFlow {
   /// the SAME Dio the completion uses; `checkHealth()` swallows its own errors.
   void _warmApiConnection(ApiService api) {
     unawaited(api.checkHealth());
+  }
+
+  /// Start FCM + register this device for email-pipeline push (no-op unless
+  /// Firebase is configured). Idempotent; safe to call on every auth pass.
+  Future<void> _startPushMessaging() async {
+    try {
+      final svc = ref.read(pushMessagingServiceProvider);
+      await svc.initializeAndStart();
+      await svc.registerToken();
+    } catch (error) {
+      DebugLogger.warning(
+        'push start failed',
+        scope: 'push',
+        data: {'error': error.toString()},
+      );
+    }
+  }
+
+  /// Drop this device's push registration on logout (best-effort).
+  Future<void> _unregisterPushMessaging() async {
+    try {
+      await ref.read(pushMessagingServiceProvider).unregisterToken();
+    } catch (_) {/* best-effort */}
   }
 
   void _requestPostAuthenticationStartup({
@@ -1004,6 +1031,7 @@ class AppStartupFlow extends _$AppStartupFlow {
       } else {
         _clearQueuedAuthenticatedStartupWork();
         _resetConversationWarmup(ref);
+        unawaited(_unregisterPushMessaging());
       }
     });
 

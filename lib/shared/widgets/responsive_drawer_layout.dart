@@ -10,6 +10,11 @@ import 'drawer_slot.dart';
 
 const double _kSidebarNativeBottomBarContentHeight = 50.0;
 
+/// Global handle to the single root drawer layout (the chat-shell sidebar), so
+/// non-widget code — e.g. a notification deep-link — can open it.
+final GlobalKey<ResponsiveDrawerLayoutState> rootDrawerLayoutKey =
+    GlobalKey<ResponsiveDrawerLayoutState>();
+
 enum _DrawerSettleEndpoint { open, closed }
 
 class _HorizontalScrollableHit {

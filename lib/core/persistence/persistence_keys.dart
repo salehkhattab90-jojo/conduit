@@ -22,6 +22,7 @@ final class PreferenceKeys {
       'chat_image_generation_enabled';
   static const String sendOnEnterKey = 'send_on_enter';
   static const String activeServerId = 'active_server_id';
+  static const String pushDeviceId = 'email_push_device_id';
   static const String themeMode = 'theme_mode';
   static const String themePalette = 'theme_palette_v1';
   static const String localeCode = 'locale_code_v1';
