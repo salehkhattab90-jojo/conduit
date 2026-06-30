@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io' show Platform;
 
 import 'package:adaptive_platform_ui/adaptive_platform_ui.dart';
@@ -236,7 +237,13 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
     return ListenableBuilder(
       listenable: terminalArtifactStore,
       builder: (context, _) {
-        final paths = terminalArtifactStore.pathsFor(widget.message.id);
+        // Union the live store (immediate, in-session) with paths persisted in
+        // this message's display_file tool calls (so the card survives app
+        // restart / chat reload, where the in-memory store is empty).
+        final paths = <String>{
+          ...terminalArtifactStore.pathsFor(widget.message.id),
+          ..._artifactPathsFromOutput(),
+        }.toList(growable: false);
         if (paths.isEmpty) {
           return const SizedBox.shrink();
         }
@@ -246,6 +253,55 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
         );
       },
     );
+  }
+
+  /// Artifact paths from the persisted responses-output trace: each Open
+  /// Terminal `display_file` tool call records its `path` in a `function_call`
+  /// item, and the matching `function_call_output` reports whether the file
+  /// existed. Unlike the in-memory store, this survives app restart / reload.
+  List<String> _artifactPathsFromOutput() {
+    final output = widget.message.output;
+    if (output == null || output.isEmpty) {
+      return const <String>[];
+    }
+    // call_id -> whether display_file reported the file exists.
+    final existsByCall = <String, bool>{};
+    for (final item in output) {
+      if (item['type'] != 'function_call_output') continue;
+      final callId = item['call_id']?.toString();
+      if (callId == null) continue;
+      final result = item['output'];
+      if (result is! List) continue;
+      for (final part in result) {
+        if (part is Map && part['text'] is String) {
+          try {
+            final decoded = jsonDecode(part['text'] as String);
+            if (decoded is Map && decoded['exists'] is bool) {
+              existsByCall[callId] = decoded['exists'] as bool;
+            }
+          } catch (_) {}
+        }
+      }
+    }
+    final paths = <String>[];
+    for (final item in output) {
+      if (item['type'] != 'function_call' || item['name'] != 'display_file') {
+        continue;
+      }
+      final args = item['arguments'];
+      if (args is! String) continue;
+      try {
+        final decoded = jsonDecode(args);
+        final path = decoded is Map ? decoded['path'] : null;
+        if (path is! String || path.isEmpty) continue;
+        // Show only when the file existed (matches the backend, which emits the
+        // event only then); if there's no result yet (mid-stream) allow it.
+        final callId = item['call_id']?.toString();
+        if (callId != null && existsByCall[callId] == false) continue;
+        paths.add(path);
+      } catch (_) {}
+    }
+    return paths;
   }
 
   String _artifactBasename(String path) {
