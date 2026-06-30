@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../shared/theme/theme_extensions.dart';
+import '../../terminal/widgets/terminal_tab.dart';
 import '../../../shared/widgets/markdown/streaming_markdown_widget.dart';
 import '../../../shared/widgets/markdown/renderer/markdown_style.dart';
 import '../../../core/models/chat_message.dart';
@@ -206,6 +207,98 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
       );
       debugPrintStack(stackTrace: stack);
     }
+  }
+
+  /// Absolute paths of Open Terminal artifacts surfaced for this message via a
+  /// `display_file` tool call (recorded on the message metadata by the stream
+  /// handler). Each renders as a tappable card that opens the workspace file.
+  List<String> _terminalArtifactPaths() {
+    final raw = widget.message.metadata?['terminalArtifacts'];
+    if (raw is List) {
+      return raw
+          .map((e) => e.toString())
+          .where((s) => s.isNotEmpty)
+          .toList(growable: false);
+    }
+    return const <String>[];
+  }
+
+  String _artifactBasename(String path) {
+    final parts = path.split('/').where((s) => s.isNotEmpty).toList();
+    return parts.isEmpty ? path : parts.last;
+  }
+
+  Widget _buildTerminalArtifactCards(List<String> paths) {
+    final theme = context.conduitTheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (final path in paths)
+          Padding(
+            padding: const EdgeInsets.only(bottom: Spacing.xs),
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(AppBorderRadius.md),
+                onTap: () => unawaited(
+                  openTerminalArtifactByPath(context, ref, path: path),
+                ),
+                child: Container(
+                  padding: const EdgeInsets.all(Spacing.md),
+                  decoration: BoxDecoration(
+                    color: theme.cardBackground,
+                    borderRadius: BorderRadius.circular(AppBorderRadius.md),
+                    border: Border.all(
+                      color: theme.textPrimary.withValues(alpha: 0.12),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.auto_awesome_outlined,
+                        size: 20,
+                        color: theme.buttonPrimary,
+                      ),
+                      const SizedBox(width: Spacing.sm),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              _artifactBasename(path),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: AppTypography.labelStyle.copyWith(
+                                color: theme.textPrimary,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            Text(
+                              'Artifact · tap to open',
+                              style: AppTypography.labelMediumStyle.copyWith(
+                                color: theme.textSecondary.withValues(
+                                  alpha: 0.7,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Icon(
+                        Icons.chevron_right,
+                        size: 18,
+                        color: theme.textSecondary,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
   }
 
   @override
@@ -1046,6 +1139,11 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
 
                 if (activeEmbeds != null && activeEmbeds.isNotEmpty) ...[
                   _buildEmbedsFromArray(activeEmbeds),
+                  const SizedBox(height: Spacing.md),
+                ],
+
+                if (_terminalArtifactPaths().isNotEmpty) ...[
+                  _buildTerminalArtifactCards(_terminalArtifactPaths()),
                   const SizedBox(height: Spacing.md),
                 ],
 

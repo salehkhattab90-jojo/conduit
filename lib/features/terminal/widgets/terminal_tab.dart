@@ -741,49 +741,7 @@ class _TerminalTabState extends ConsumerState<TerminalTab>
   Widget _buildPreviewContent({
     required AppLocalizations l10n,
     required TerminalFileReadResult preview,
-  }) {
-    final theme = context.conduitTheme;
-    if (preview.isText) {
-      return SizedBox(
-        width: 520,
-        height: 360,
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: theme.codeBackground,
-            borderRadius: BorderRadius.circular(AppBorderRadius.standard),
-            border: Border.all(color: theme.codeBorder),
-          ),
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(Spacing.md),
-            child: SelectableText(
-              sanitizeUtf16(preview.text ?? ''),
-              style: AppTypography.codeStyle.copyWith(color: theme.codeText),
-            ),
-          ),
-        ),
-      );
-    }
-
-    if (preview.isImage && preview.bytes != null) {
-      return SizedBox(
-        width: 520,
-        height: 360,
-        child: InteractiveViewer(
-          child: Image.memory(preview.bytes!, fit: BoxFit.contain),
-        ),
-      );
-    }
-
-    return SizedBox(
-      width: 420,
-      child: Text(
-        l10n.terminalPreviewUnavailable,
-        style: AppTypography.bodyMediumStyle.copyWith(
-          color: theme.textSecondary,
-        ),
-      ),
-    );
-  }
+  }) => _terminalArtifactPreviewContent(context, l10n, preview);
 
   Future<void> _downloadEntry(TerminalFileEntry entry) async {
     final service = ref.read(terminalServiceProvider);
@@ -1792,6 +1750,159 @@ String? _terminalWebArtifactSource(TerminalFileReadResult preview) {
     return source;
   }
   return null;
+}
+
+/// Preview content for non-web terminal files (text / image / unknown). Shared
+/// by the file-browser dialog and [openTerminalArtifactByPath].
+Widget _terminalArtifactPreviewContent(
+  BuildContext context,
+  AppLocalizations l10n,
+  TerminalFileReadResult preview,
+) {
+  final theme = context.conduitTheme;
+  if (preview.isText) {
+    return SizedBox(
+      width: 520,
+      height: 360,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: theme.codeBackground,
+          borderRadius: BorderRadius.circular(AppBorderRadius.standard),
+          border: Border.all(color: theme.codeBorder),
+        ),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(Spacing.md),
+          child: SelectableText(
+            sanitizeUtf16(preview.text ?? ''),
+            style: AppTypography.codeStyle.copyWith(color: theme.codeText),
+          ),
+        ),
+      ),
+    );
+  }
+
+  if (preview.isImage && preview.bytes != null) {
+    return SizedBox(
+      width: 520,
+      height: 360,
+      child: InteractiveViewer(
+        child: Image.memory(preview.bytes!, fit: BoxFit.contain),
+      ),
+    );
+  }
+
+  return SizedBox(
+    width: 420,
+    child: Text(
+      l10n.terminalPreviewUnavailable,
+      style: AppTypography.bodyMediumStyle.copyWith(color: theme.textSecondary),
+    ),
+  );
+}
+
+/// Opens a workspace file (by absolute [path]) in the artifact viewer — used by
+/// the in-chat "artifact ready" card emitted from an Open Terminal `display_file`
+/// tool call. Reuses the file browser's fetch + render path: HTML/SVG render
+/// live in [_TerminalArtifactPage], images/text in a preview dialog. Resolves
+/// the currently-selected terminal server and the active chat's session; the
+/// file is fetched live from the terminal workspace on demand.
+Future<void> openTerminalArtifactByPath(
+  BuildContext context,
+  WidgetRef ref, {
+  required String path,
+  String? title,
+}) async {
+  final l10n = AppLocalizations.of(context)!;
+  final messenger = ScaffoldMessenger.maybeOf(context);
+  final service = ref.read(terminalServiceProvider);
+  final server = ref.read(terminalSelectedServerProvider).asData?.value;
+  if (service == null || server == null) {
+    messenger?.showSnackBar(
+      SnackBar(content: Text(l10n.terminalFailedToLoadFiles)),
+    );
+    return;
+  }
+  final sessionScopeId = ref.read(terminalSessionScopeIdProvider);
+  final displayTitle = (title != null && title.trim().isNotEmpty)
+      ? title
+      : p.basename(path);
+
+  Future<void> download() async {
+    try {
+      final downloaded = await service.downloadFile(
+        server,
+        path,
+        sessionScopeId: sessionScopeId,
+      );
+      final dir = await getTemporaryDirectory();
+      final safeName = downloaded.fileName
+          .replaceAll(RegExp(r'[\\/:*?"<>|]'), '_')
+          .trim();
+      final file = File(
+        '${dir.path}/${safeName.isEmpty ? 'artifact' : safeName}',
+      );
+      await file.writeAsBytes(downloaded.bytes, flush: true);
+      await SharePlus.instance.share(
+        ShareParams(
+          files: <XFile>[XFile(file.path, name: downloaded.fileName)],
+        ),
+      );
+    } catch (_) {
+      messenger?.showSnackBar(
+        SnackBar(content: Text(l10n.terminalDownloadFailed)),
+      );
+    }
+  }
+
+  try {
+    final preview = await service.readFile(
+      server,
+      path,
+      sessionScopeId: sessionScopeId,
+    );
+    if (!context.mounted) {
+      return;
+    }
+    final webSource = _terminalWebArtifactSource(preview);
+    if (webSource != null) {
+      await Navigator.of(context, rootNavigator: true).push(
+        buildPlatformPageRoute<void>(
+          fullscreenDialog: true,
+          builder: (_) => _TerminalArtifactPage(
+            title: displayTitle,
+            source: webSource,
+            onDownload: download,
+          ),
+        ),
+      );
+      return;
+    }
+    await ThemedDialogs.show<void>(
+      context,
+      title: sanitizeUtf16(displayTitle),
+      content: _terminalArtifactPreviewContent(context, l10n, preview),
+      actions: [
+        ConduitTextButton(
+          text: l10n.close,
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        ConduitTextButton(
+          text: l10n.download,
+          onPressed: () async {
+            Navigator.of(context).pop();
+            await download();
+          },
+          isPrimary: true,
+        ),
+      ],
+    );
+  } catch (_) {
+    if (context.mounted) {
+      messenger?.showSnackBar(
+        SnackBar(content: Text(l10n.terminalFailedToLoadFiles)),
+      );
+    }
+  }
 }
 
 /// A full-screen viewer that renders an HTML/SVG workspace artifact live in
