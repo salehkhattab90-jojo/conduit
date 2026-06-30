@@ -6,6 +6,7 @@ import '../../../shared/theme/theme_extensions.dart';
 import '../../../shared/widgets/skeleton_loader.dart';
 import '../../../core/providers/app_providers.dart';
 import '../../../core/services/api_service.dart';
+import '../../../core/utils/debug_logger.dart';
 import 'enhanced_image_attachment.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:path_provider/path_provider.dart';
@@ -108,42 +109,67 @@ class _EnhancedAttachmentState extends ConsumerState<EnhancedAttachment> {
       final content = await api.getFileContent(widget.attachmentId);
       final filename = (_fileInfo?['filename'] ?? _fileInfo?['name'] ?? 'file')
           .toString();
+      // Sanitize for use as a path segment — a filename containing '/' (or other
+      // reserved chars) would make File() target a non-existent directory and
+      // throw, silently aborting the download.
+      final cleaned = filename.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').trim();
+      final safeName = cleaned.isEmpty ? 'file' : cleaned;
       final dir = await getTemporaryDirectory();
-      final filePath = '${dir.path}/$filename';
+      final filePath = '${dir.path}/$safeName';
 
+      // getFileContent base64-encodes all non-image bytes, so the content here
+      // is always base64 — decode it. (The previous length>128 heuristic wrote
+      // small files out as their raw base64 text, corrupting the download.)
       final worker = ref.read(workerManagerProvider);
       try {
-        if (_looksLikeBase64(content)) {
-          final bytes = await worker.schedule<String, Uint8List>(
-            _decodeAttachmentBase64,
-            content,
-            debugLabel: 'attachment_decode_bytes',
-          );
-          await File(filePath).writeAsBytes(bytes, flush: true);
-        } else {
-          await File(filePath).writeAsString(content, flush: true);
-        }
+        final bytes = await worker.schedule<String, Uint8List>(
+          _decodeAttachmentBase64,
+          content,
+          debugLabel: 'attachment_decode_bytes',
+        );
+        await File(filePath).writeAsBytes(bytes, flush: true);
       } catch (_) {
+        // Not valid base64 (e.g. a plain-text file returned verbatim) — write as-is.
         await File(filePath).writeAsString(content, flush: true);
       }
 
       _localFilePath = filePath;
       return _localFilePath;
     } catch (e) {
-      setState(() {
-        _error = 'Failed to prepare file';
-      });
+      // Transient download failure — keep the card usable (don't replace it with
+      // a permanent error box); surface it via a SnackBar from the caller.
+      DebugLogger.log(
+        'Failed to prepare attachment for download: $e',
+        scope: 'chat/attachment',
+      );
       return null;
     }
   }
 
   Future<void> _shareFile() async {
     final path = await _ensureLocalFile();
-    if (path == null) return;
+    if (path == null) {
+      _showDownloadError();
+      return;
+    }
     final filename = (_fileInfo?['filename'] ?? _fileInfo?['name'] ?? 'file')
         .toString();
-    await SharePlus.instance.share(
-      ShareParams(files: [XFile(path, name: filename)]),
+    try {
+      await SharePlus.instance.share(
+        ShareParams(files: [XFile(path, name: filename)]),
+      );
+    } catch (e) {
+      DebugLogger.log('Failed to share attachment: $e', scope: 'chat/attachment');
+      _showDownloadError();
+    }
+  }
+
+  void _showDownloadError() {
+    if (!mounted) return;
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      const SnackBar(
+        content: Text('Couldn’t download this file. Please try again.'),
+      ),
     );
   }
 
@@ -334,12 +360,6 @@ class _EnhancedAttachmentState extends ConsumerState<EnhancedAttachment> {
     }
     return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
   }
-}
-
-bool _looksLikeBase64(String content) {
-  if (content.length <= 128) return false;
-  final sanitized = content.replaceAll('\n', '');
-  return RegExp(r'^[A-Za-z0-9+/=]+$').hasMatch(sanitized);
 }
 
 Uint8List _decodeAttachmentBase64(String raw) {
