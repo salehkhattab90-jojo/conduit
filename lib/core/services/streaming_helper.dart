@@ -15,6 +15,7 @@ import '../../core/utils/tool_calls_parser.dart';
 import 'background_streaming_handler.dart';
 import 'chat_completion_transport.dart';
 import 'navigation_service.dart';
+import 'confirmation_coordinator.dart';
 
 import '../../shared/widgets/themed_dialogs.dart';
 import '../../shared/theme/theme_extensions.dart';
@@ -1858,6 +1859,11 @@ ActiveChatStream attachUnifiedChunkedStreaming({
   String? lastProcessedImageSignature;
   int imageCollectionRequestId = 0;
 
+  // OWUI 'confirmation' events on this stream still awaiting a human answer. On
+  // teardown each is cancelled (fail-closed ack + dismiss) so the backend never
+  // blocks to its 300s timeout. See confirmation_coordinator.dart.
+  final pendingConfirmations = <ConfirmationRequest>[];
+
   void disposeSocketSubscriptions() {
     terminalCompletionRecoveryTimer?.cancel();
     terminalCompletionRecoveryTimer = null;
@@ -1875,6 +1881,15 @@ ActiveChatStream attachUnifiedChunkedStreaming({
       } catch (_) {}
     }
     socketSubscriptions.clear();
+
+    // Fail-close any confirmation still awaiting the user (the hang fix): each
+    // cancel resolves its ack to false and dismisses the dialog if on screen.
+    for (final req in pendingConfirmations) {
+      try {
+        req.cancel();
+      } catch (_) {}
+    }
+    pendingConfirmations.clear();
 
     imageCollectionDebounce?.cancel();
     imageCollectionDebounce = null;
@@ -2804,15 +2819,20 @@ ActiveChatStream attachUnifiedChunkedStreaming({
         }
         if (ack != null) {
           final map = _asStringMap(payload);
-          if (map != null) {
-            () async {
-              final confirmed = await _showConfirmationDialog(map);
+          if (map == null) {
+            ack(false);
+          } else {
+            // Serialize through the app-global coordinator (one dialog on
+            // screen ever) and ack exactly once: on the human's answer, or
+            // false if this stream is torn down first (pendingConfirmations).
+            final req = ConfirmationCoordinator.instance.request(map);
+            pendingConfirmations.add(req);
+            req.future.then((confirmed) {
+              pendingConfirmations.remove(req);
               try {
                 ack(confirmed);
               } catch (_) {}
-            }();
-          } else {
-            ack(false);
+            });
           }
         }
       } else if (type == 'execute' && payload != null) {
@@ -3762,24 +3782,6 @@ void _showSocketNotification(String type, String content) {
     message: content,
     type: snackBarType,
     duration: const Duration(seconds: 4),
-  );
-}
-
-Future<bool> _showConfirmationDialog(Map<String, dynamic> data) async {
-  final ctx = NavigationService.context;
-  if (ctx == null) return false;
-  final title = data['title']?.toString() ?? 'Confirm';
-  final message = data['message']?.toString() ?? '';
-  final confirmText = data['confirm_text']?.toString() ?? 'Confirm';
-  final cancelText = data['cancel_text']?.toString() ?? 'Cancel';
-
-  return ThemedDialogs.confirm(
-    ctx,
-    title: title,
-    message: message,
-    confirmText: confirmText,
-    cancelText: cancelText,
-    barrierDismissible: false,
   );
 }
 
