@@ -3074,6 +3074,58 @@ void main() {
       ]);
     });
 
+    test('chat:message:embeds preserves structured preview objects', () async {
+      final log = _CallbackLog(
+        initialMessages: [
+          ChatMessage(
+            id: 'msg-1',
+            role: 'assistant',
+            content: '',
+            timestamp: DateTime.now(),
+            isStreaming: true,
+          ),
+        ],
+      );
+      final registrar = FakeSocketInjector();
+
+      _attach(
+        session: ChatCompletionSession.taskSocket(
+          messageId: 'msg-1',
+          sessionId: 'sess-1',
+          taskId: 'task-1',
+        ),
+        log: log,
+        socketService: _MockSocketService(registrar),
+      );
+
+      await pumpMicrotasks();
+
+      registrar.emitChatEvent('chat:message:embeds', {
+        'embeds': [
+          {
+            'type': 'preview',
+            'url': '/api/v1/files/abc/content',
+            'name': 'Report.pdf',
+            'content_type': 'application/pdf',
+          },
+        ],
+      }, messageId: 'msg-1');
+
+      await pumpMicrotasks();
+
+      final lastMsg = log.messages.last;
+      check(lastMsg.embeds).isNotNull();
+      check(lastMsg.embeds!).deepEquals([
+        {
+          'type': 'preview',
+          'url': '/api/v1/files/abc/content',
+          'name': 'Report.pdf',
+          'content_type': 'application/pdf',
+          'src': '/api/v1/files/abc/content',
+        },
+      ]);
+    });
+
     // -----------------------------------------------------------------------
     // 12. Status event before files — both land on same assistant message
     // -----------------------------------------------------------------------

@@ -15,25 +15,37 @@ import '../../../core/utils/debug_logger.dart';
 import '../../../shared/theme/theme_extensions.dart';
 import '../../../shared/utils/utf16_sanitizer.dart';
 import '../../../shared/widgets/adaptive_route_shell.dart';
+import '../../../shared/widgets/markdown/renderer/pdf_inline_view.dart';
 import '../../../shared/widgets/web_content_embed.dart';
 
-/// Full-screen preview of a generated document.
+/// Full-screen preview of a generated delivery.
 ///
-/// Shows the docgen HTML side-preview — which renders ANY document type
-/// (docx/xlsx/pptx/pdf/md/html), since neither the web client nor a phone can
-/// render Office formats natively; both just display this HTML preview — in a
-/// sandboxed, zoomable web view. The Download action fetches the REAL file (the
-/// user opens it in whatever app they prefer).
+/// Two modes, matching the two embed shapes the middleware produces:
+///
+/// - [previewUrl]: the post-0.4.0 docgen contract — a preview FILE (a PDF
+///   rendered FROM the real file's bytes) fetched with authentication and
+///   displayed via the in-repo PDF viewer.
+/// - [previewHtml]: legacy docgen HTML side-previews and `show`-delivered
+///   artifacts — a self-contained HTML string rendered in a sandboxed,
+///   zoomable web view (for artifacts the HTML IS the deliverable, live).
+///
+/// The Download action fetches the REAL file (the user opens it in whatever
+/// app they prefer); artifacts carry no file id, so download is disabled.
 class DocumentPreviewPage extends ConsumerStatefulWidget {
   const DocumentPreviewPage({
     super.key,
-    required this.previewHtml,
+    this.previewHtml,
+    this.previewUrl,
     required this.fileName,
     this.fileId,
-  });
+  }) : assert(previewHtml != null || previewUrl != null);
 
-  /// The HTML side-preview emitted alongside the file.
-  final String previewHtml;
+  /// Legacy/artifact mode: HTML source to render. Null in structured mode.
+  final String? previewHtml;
+
+  /// Structured mode: URL of the rendered preview file (typically PDF),
+  /// relative or absolute — resolved and authenticated by the PDF viewer.
+  final String? previewUrl;
 
   /// Display name of the real file (also used for the downloaded file).
   final String fileName;
@@ -109,13 +121,23 @@ class _DocumentPreviewPageState extends ConsumerState<DocumentPreviewPage> {
         ],
       ),
       body: SizedBox.expand(
-        child: WebContentEmbed(
-          source: widget.previewHtml,
-          deferUntilExpanded: false,
-          initiallyExpanded: true,
-          showChrome: false,
-          fillAvailableHeight: true,
-        ),
+        child: widget.previewUrl != null
+            ? SingleChildScrollView(
+                padding: const EdgeInsets.all(Spacing.md),
+                child: Center(
+                  child: PdfInlineView(
+                    url: widget.previewUrl!,
+                    label: widget.fileName,
+                  ),
+                ),
+              )
+            : WebContentEmbed(
+                source: widget.previewHtml!,
+                deferUntilExpanded: false,
+                initiallyExpanded: true,
+                showChrome: false,
+                fillAvailableHeight: true,
+              ),
       ),
     );
   }

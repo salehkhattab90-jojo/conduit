@@ -110,16 +110,24 @@ final _fileIdPattern = RegExp(r'/api/v1/files/([^/]+)(?:/content)?$');
 /// its docgen HTML side-preview, rendered as a single card.
 class _DocPreview {
   const _DocPreview({
-    required this.fileUrl,
     required this.fileName,
-    required this.previewHtml,
+    this.fileUrl,
     this.fileId,
-  });
+    this.previewHtml,
+    this.previewUrl,
+  }) : assert(previewHtml != null || previewUrl != null);
 
-  final String fileUrl;
+  /// Real downloadable file (null for artifacts — the HTML IS the artifact).
+  final String? fileUrl;
   final String fileName;
-  final String previewHtml;
   final String? fileId;
+
+  /// Legacy/artifact mode: a self-contained HTML string to render.
+  final String? previewHtml;
+
+  /// Structured mode: URL of a rendered preview file (typically a PDF derived
+  /// from the real file's bytes — the post-0.4.0 docgen contract).
+  final String? previewUrl;
 }
 
 class AssistantMessageWidget extends ConsumerStatefulWidget {
@@ -1189,13 +1197,22 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
     final filesToRender = docPreview == null
         ? activeFiles
         : activeFiles
-              ?.where((f) => getFileUrl(f) != docPreview.fileUrl)
+              ?.where((f) => !_sameFileRef(getFileUrl(f), docPreview.fileUrl))
               .toList();
     final embedsToRender = docPreview == null
         ? activeEmbeds
-        : activeEmbeds
-              ?.where((e) => extractEmbedSource(e) != docPreview.previewHtml)
-              .toList();
+        : activeEmbeds?.where((e) {
+            final src = extractEmbedSource(e);
+            if (docPreview.previewHtml != null &&
+                src == docPreview.previewHtml) {
+              return false;
+            }
+            if (docPreview.previewUrl != null &&
+                _sameFileRef(src, docPreview.previewUrl)) {
+              return false;
+            }
+            return true;
+          }).toList();
     final activeSources = _resolveActiveSources();
     final footer = _buildFooterBar(activeSources: activeSources);
     final queuedCompletionAsync = ref.watch(
@@ -1877,6 +1894,11 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
         .map((entry) {
           final index = entry.$1;
           final embed = entry.$2;
+          // Structured preview embeds only ever render through the delivery
+          // card; their bare URL is meaningless (and unauthenticated) here.
+          if (isPreviewEmbed(embed)) {
+            return null;
+          }
           final source = extractEmbedSource(embed);
           if (source == null || source.isEmpty) {
             return null;
@@ -2057,17 +2079,79 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
     );
   }
 
-  /// Detects a generated document: a message carrying exactly one non-image file
-  /// (the real docx/pdf/xlsx/… in the OWUI file store) and exactly one HTML
-  /// preview (docgen's side-preview). Only the unambiguous single-doc case is
-  /// fused into one card; otherwise files + embeds render as usual.
+  /// True when two file references point at the same OWUI file — compares by
+  /// file id when both carry one (/api/v1/files/{id}, …/{id}/content and
+  /// absolute variants all occur), else by exact string.
+  bool _sameFileRef(String? a, String? b) {
+    if (a == null || b == null) return false;
+    if (a == b) return true;
+    final ia = _fileIdPattern.firstMatch(a)?.group(1);
+    final ib = _fileIdPattern.firstMatch(b)?.group(1);
+    return ia != null && ib != null && ia == ib;
+  }
+
+  /// Artifact name fallback: string embeds carry no metadata, but the `show`
+  /// call that delivered the artifact carries its workspace path in its own
+  /// arguments on this same message.
+  String? _showCallArtifactName() {
+    for (final item
+        in (widget.message.output ?? const <Map<String, dynamic>>[])) {
+      if (item['type'] != 'function_call') continue;
+      if (item['status'] != null && item['status'] != 'completed') continue;
+      final name = item['name']?.toString() ?? '';
+      if (!name.endsWith('show')) continue;
+      try {
+        final rawArgs = item['arguments'];
+        final args = rawArgs is Map
+            ? rawArgs
+            : jsonDecode(rawArgs?.toString() ?? '{}');
+        final path = args is Map ? args['path']?.toString().trim() : null;
+        if (path != null && path.isNotEmpty) {
+          return path.split('/').last;
+        }
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  /// Detects a generated delivery and fuses it into ONE card. Three shapes:
+  ///
+  /// 1. Structured preview (post-0.4.0 docgen): one `{type:'preview', url,…}`
+  ///    embed + exactly one non-image sibling file — the card previews the
+  ///    rendered file at `url` and downloads the real file.
+  /// 2. Legacy HTML preview: exactly one non-image file + exactly one HTML
+  ///    string embed (pre-0.4.0 messages) — unchanged behavior.
+  /// 3. Artifact: exactly one HTML string embed and NO non-image file (a
+  ///    `show`-delivered artifact — the HTML IS the deliverable).
+  ///
+  /// Only the unambiguous single-delivery case is fused; otherwise files +
+  /// embeds render as usual.
   _DocPreview? _pairDocPreview(List<dynamic>? files, List<dynamic>? embeds) {
-    if (files == null || embeds == null) return null;
-    final nonImage = files.where((f) => !isImageFile(f)).toList();
-    if (nonImage.length != 1) return null;
-    final file = nonImage.first;
-    final fileUrl = getFileUrl(file);
-    if (fileUrl == null) return null;
+    if (embeds == null) return null;
+    final nonImage =
+        (files ?? const <dynamic>[]).where((f) => !isImageFile(f)).toList();
+
+    // Mode 1: structured preview object.
+    final previewObjs = embeds.where(isPreviewEmbed).toList();
+    if (previewObjs.length == 1 && nonImage.length == 1) {
+      final preview = previewObjs.first as Map;
+      final file = nonImage.first;
+      final fileUrl = getFileUrl(file);
+      if (fileUrl != null) {
+        final rawName = file is Map ? (file['name'] ?? file['filename']) : null;
+        final name = rawName?.toString();
+        return _DocPreview(
+          fileUrl: fileUrl,
+          fileName: (name != null && name.trim().isNotEmpty)
+              ? name
+              : (preview['name']?.toString() ?? 'Document'),
+          fileId: _fileIdPattern.firstMatch(fileUrl)?.group(1),
+          previewUrl: preview['url'].toString(),
+        );
+      }
+    }
+    if (previewObjs.isNotEmpty) return null; // ambiguous — render as usual
+
     final htmlSources = <String>[];
     for (final e in embeds) {
       final src = extractEmbedSource(e);
@@ -2076,6 +2160,20 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
       }
     }
     if (htmlSources.length != 1) return null;
+
+    // Mode 3: artifact — HTML embed with no real file.
+    if (nonImage.isEmpty) {
+      return _DocPreview(
+        fileName: _showCallArtifactName() ?? 'Artifact',
+        previewHtml: htmlSources.first,
+      );
+    }
+
+    // Mode 2: legacy HTML doc preview.
+    if (nonImage.length != 1) return null;
+    final file = nonImage.first;
+    final fileUrl = getFileUrl(file);
+    if (fileUrl == null) return null;
     final rawName = file is Map ? (file['name'] ?? file['filename']) : null;
     final name = rawName?.toString();
     final fileName = (name != null && name.trim().isNotEmpty) ? name : 'Document';
@@ -2087,8 +2185,34 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
     );
   }
 
+  /// Identity color for a delivery card by file extension. The format list is
+  /// OPEN-ENDED by design: unknown extensions get the neutral tone and still
+  /// show their real extension badge — never assume a closed set of formats.
+  static const Map<String, Color> _extIdentity = {
+    'doc': Color(0xFF3B82F6),
+    'docx': Color(0xFF3B82F6),
+    'xls': Color(0xFF10B981),
+    'xlsx': Color(0xFF10B981),
+    'csv': Color(0xFF10B981),
+    'ppt': Color(0xFFF97316),
+    'pptx': Color(0xFFF97316),
+    'pdf': Color(0xFFEF4444),
+    'html': Color(0xFF8B5CF6),
+    'svg': Color(0xFF8B5CF6),
+  };
+
+  String? _extForName(String name) {
+    final i = name.lastIndexOf('.');
+    if (i <= 0 || i >= name.length - 1) return null;
+    final ext = name.substring(i + 1).toLowerCase();
+    return ext.length > 5 ? ext.substring(0, 5) : ext;
+  }
+
   Widget _buildDocPreviewCard(_DocPreview doc) {
     final theme = context.conduitTheme;
+    final ext = _extForName(doc.fileName);
+    final identity = _extIdentity[ext ?? ''] ?? theme.textSecondary;
+    final isArtifact = doc.fileUrl == null;
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -2099,6 +2223,7 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
               fullscreenDialog: true,
               builder: (_) => DocumentPreviewPage(
                 previewHtml: doc.previewHtml,
+                previewUrl: doc.previewUrl,
                 fileName: doc.fileName,
                 fileId: doc.fileId,
               ),
@@ -2118,10 +2243,51 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(
-                Icons.description_outlined,
-                size: 22,
-                color: theme.buttonPrimary,
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Container(
+                    width: 38,
+                    height: 38,
+                    decoration: BoxDecoration(
+                      color: identity.withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(AppBorderRadius.sm),
+                    ),
+                    child: Icon(
+                      isArtifact ? Icons.widgets_outlined : Icons.description_outlined,
+                      size: 20,
+                      color: identity,
+                    ),
+                  ),
+                  if (ext != null)
+                    Positioned(
+                      bottom: -5,
+                      left: 0,
+                      right: 0,
+                      child: Center(
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 4,
+                            vertical: 1,
+                          ),
+                          decoration: BoxDecoration(
+                            color: theme.textPrimary,
+                            borderRadius: BorderRadius.circular(3),
+                          ),
+                          child: Text(
+                            ext.toUpperCase(),
+                            style: TextStyle(
+                              fontSize: 7,
+                              height: 1.0,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0.4,
+                              color: theme.cardBackground,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
               ),
               const SizedBox(width: Spacing.sm),
               Flexible(
@@ -2139,7 +2305,9 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
                       ),
                     ),
                     Text(
-                      'Document · tap to preview',
+                      isArtifact
+                          ? 'Artifact · tap to view'
+                          : 'Document · tap to preview',
                       style: AppTypography.labelMediumStyle.copyWith(
                         color: theme.textSecondary.withValues(alpha: 0.7),
                       ),
