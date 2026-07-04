@@ -1015,7 +1015,11 @@ CompiledMarkdownToolCallData _compileToolCallData(
       ? ''
       : _stringifyDetailValue(parsedResult);
 
+  // Structured preview embeds ({type:'preview', url,…}) belong to the
+  // message-level delivery card, never to inline tool-detail rendering —
+  // flattening them here would render their URL as garbage text.
   final embeds = normalizeEmbedList(rawEmbeds)
+      .where((e) => !isPreviewEmbed(e))
       .map(extractEmbedSource)
       .whereType<String>()
       .where((value) => value.isNotEmpty)

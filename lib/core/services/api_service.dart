@@ -1610,7 +1610,7 @@ class ApiService {
     return sanitized.isNotEmpty ? sanitized : null;
   }
 
-  List<String>? _sanitizeEmbedsForWebUI(List<Map<String, dynamic>>? embeds) {
+  List<dynamic>? _sanitizeEmbedsForWebUI(List<Map<String, dynamic>>? embeds) {
     return sanitizeEmbedsForWebUi(embeds);
   }
 

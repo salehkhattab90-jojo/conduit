@@ -339,6 +339,41 @@ void main() {
           {'html': '<section>card</section>', 'src': '<section>card</section>'},
         ]);
       });
+
+      test('preserves structured preview embeds (post-0.4.0 docgen contract)', () {
+        final result = parseFullConversation({
+          'id': 'conv-1',
+          'chat': {
+            'messages': [
+              {
+                'id': 'msg-1',
+                'role': 'assistant',
+                'content': '',
+                'timestamp': 1700000000,
+                'embeds': [
+                  {
+                    'type': 'preview',
+                    'url': '/api/v1/files/abc-123/content',
+                    'name': 'Annual Report.pdf',
+                    'content_type': 'application/pdf',
+                  },
+                ],
+              },
+            ],
+          },
+        });
+
+        final messages = result['messages'] as List<Map<String, dynamic>>;
+        check(messages.first['embeds'] as List<Object?>).deepEquals([
+          {
+            'type': 'preview',
+            'url': '/api/v1/files/abc-123/content',
+            'name': 'Annual Report.pdf',
+            'content_type': 'application/pdf',
+            'src': '/api/v1/files/abc-123/content',
+          },
+        ]);
+      });
     });
 
     group('extracts role, model, timestamp', () {

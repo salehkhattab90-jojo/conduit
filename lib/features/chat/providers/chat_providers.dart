@@ -2385,6 +2385,16 @@ class ChatMessagesNotifier extends Notifier<List<ChatMessage>> {
         if (message.model != null) 'model': message.model,
         if (message.metadata != null && message.metadata!.isNotEmpty)
           'metadata': message.metadata,
+        // Deliveries must survive the local echo: the outbox sync rebuilds the
+        // full chat blob from these rows and writes it back to the server —
+        // dropping files/embeds/output here would strip generated documents
+        // and artifacts both locally and server-side.
+        if (message.files != null && message.files!.isNotEmpty)
+          'files': message.files,
+        if (message.embeds != null && message.embeds!.isNotEmpty)
+          'embeds': message.embeds,
+        if (message.output != null && message.output!.isNotEmpty)
+          'output': message.output,
       },
     );
   }
