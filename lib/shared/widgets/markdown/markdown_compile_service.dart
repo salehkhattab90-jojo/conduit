@@ -568,6 +568,75 @@ List<CompiledMarkdownDocument> _documentsFromBatchMaps(
   return maps.map(CompiledMarkdownDocument.fromMap).toList(growable: false);
 }
 
+/// Matches any `<details …>` open tag or `</details>` close tag. Used to
+/// depth-balance masked regions so a *nested* `<details>` inside a details body
+/// does not close the outer region early (which would re-expose the outer tail
+/// to LaTeX extraction). The `[^>]*` guard is safe because attribute values
+/// escape `>` (Conduit's `_escapeHtmlAttr` and OWUI's `html.escape`), the same
+/// assumption `DetailsBlockSyntax` already relies on.
+final _detailsTagPattern = RegExp(r'</?details\b[^>]*>', caseSensitive: false);
+final _detailsOpenPattern = RegExp(r'<details\b', caseSensitive: false);
+
+/// Runs LaTeX extraction on the content *outside* `<details>` regions only.
+///
+/// `LatexPreprocessor.extract` rewrites `$$…$$`/`$…$` spans into
+/// `\n\n<placeholder>\n\n`. A tool call serializes its whole payload into a
+/// single-line `<details …>` tag; when that payload carries `$$` math (any
+/// technical document), the inserted newlines split the opening tag across
+/// lines and `DetailsBlockSyntax` can no longer parse it, leaking raw HTML.
+/// Masking the details regions (and any unclosed trailing block while streaming)
+/// keeps them intact. Math *inside* a details body is unaffected — the body is
+/// compiled by its own pass with a fresh preprocessor.
+@visibleForTesting
+String extractLatexOutsideDetails(LatexPreprocessor pre, String content) {
+  if (!content.contains('<details')) {
+    return pre.extract(content);
+  }
+  final buffer = StringBuffer();
+  var emitted = 0; // index up to which output has been written
+  var depth = 0; // open-details nesting depth
+  var regionStart = -1; // start of the current outermost masked region
+  for (final match in _detailsTagPattern.allMatches(content)) {
+    final isClose = content.codeUnitAt(match.start + 1) == 0x2F; // '/'
+    if (!isClose) {
+      if (depth == 0) {
+        // Entering an outermost region: LaTeX-extract the text before it.
+        buffer.write(pre.extract(content.substring(emitted, match.start)));
+        emitted = match.start;
+        regionStart = match.start;
+      }
+      depth += 1;
+    } else if (depth > 0) {
+      depth -= 1;
+      if (depth == 0) {
+        // Closing the outermost region: emit it (open tag → close) verbatim.
+        buffer.write(content.substring(regionStart, match.end));
+        emitted = match.end;
+      }
+    }
+    // A stray `</details>` at depth 0 is left in the outside run (treated as
+    // text and LaTeX-extracted with the rest — harmless).
+  }
+  if (depth > 0) {
+    // An unclosed region whose *opening tag was complete* (streaming: body still
+    // arriving) — pass it through verbatim so it is never shredded mid-stream.
+    buffer.write(content.substring(regionStart));
+    return buffer.toString();
+  }
+  // depth == 0: any remaining `<details` must be a still-incomplete opening tag
+  // (a complete one would have incremented depth above). Pass from it verbatim;
+  // LaTeX-extract only the prose before it.
+  final rest = content.substring(emitted);
+  final partialOpen = _detailsOpenPattern.firstMatch(rest);
+  if (partialOpen != null) {
+    buffer.write(pre.extract(rest.substring(0, partialOpen.start)));
+    buffer.write(rest.substring(partialOpen.start));
+  } else {
+    buffer.write(pre.extract(rest));
+  }
+  return buffer.toString();
+}
+
 CompiledMarkdownDocument _compilePreparedMarkdownDocument(
   String preparedContent,
 ) {
@@ -576,7 +645,10 @@ CompiledMarkdownDocument _compilePreparedMarkdownDocument(
   }
 
   final latexPreprocessor = LatexPreprocessor();
-  final preprocessed = latexPreprocessor.extract(preparedContent);
+  final preprocessed = extractLatexOutsideDetails(
+    latexPreprocessor,
+    preparedContent,
+  );
 
   final document = md.Document(
     extensionSet: md.ExtensionSet.gitHubWeb,
