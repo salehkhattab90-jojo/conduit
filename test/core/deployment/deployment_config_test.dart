@@ -41,15 +41,31 @@ List<String> _ids(Iterable<NativeSheetSectionConfig> sections) => [
 ];
 
 void main() {
-  group('the base build', () {
-    test('ships the stock deployment', () {
-      check(kDeployment.policy).identicalTo(DeploymentPolicy.unlocked);
-      check(kDeployment.policy.isLocked).isFalse();
+  group('the FADI build', () {
+    test('is locked to fadi.furqaan.ai, Open WebUI only', () {
+      final policy = kDeployment.policy;
+      check(policy.isLocked).isTrue();
+      check(policy.lockedServer!.id).equals('locked-server');
+      check(policy.lockedServer!.urls).deepEquals(['https://fadi.furqaan.ai']);
+      check(policy.allowAccountManagement).isFalse();
+      check(policy.ssoProviders).isNotNull().deepEquals(['google']);
+      check(policy.allowOnDeviceWebSearch).isFalse();
     });
 
-    test("brands itself exactly as upstream Conduit", () {
+    test('brands itself FADI with no upstream links', () {
+      final brand = kDeployment.brand;
+      check(brand.appName).equals('FADI');
+      check(brand.tagline).equals('FADI (Furqaan AI Data & Intelligence)');
+      check(brand.githubUrl).isNull();
+      check(brand.donationUrls).isNull();
+      check(brand.storeReviewUrls).isNull();
+      check(brand.showReleaseNotes).isFalse();
+    });
+  });
+
+  group('the stock brand', () {
+    test("is exactly upstream Conduit's", () {
       const brand = BrandConfig.stock();
-      check(kDeployment.brand.appName).equals(brand.appName);
       check(brand.appName).equals('Conduit');
       check(brand.licenseAppName).equals('Conduit');
       check(brand.callkitAppName).equals('Conduit');
