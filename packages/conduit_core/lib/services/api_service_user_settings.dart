@@ -106,6 +106,56 @@ mixin _UserSettingsApi on _ApiServiceBase {
     });
   }
 
+  /// Applies [picks] to the user's model-control choices for [modelId] where
+  /// the web client keeps them (`ui.params.model_controls`), so both clients
+  /// share them. A null pick removes that control's choice (back to the
+  /// model's default); picks not named are kept as the server has them. A
+  /// model left with no pick loses its entry.
+  ///
+  /// The server silently drops `ui.params` for a user without the
+  /// `chat.controls` and `chat.params` permissions; the returned settings show
+  /// what was actually stored.
+  Future<ServerUserSettings> updateUserModelControls(
+    String modelId,
+    Map<String, String?> picks,
+  ) {
+    final authSnapshot = captureAuthSnapshot();
+    return serializeUserSettingsMutation(() async {
+      final settings = _deepCloneJsonMap(
+        await getUserSettings(authSnapshot: authSnapshot),
+      );
+      final ui = _coerceJsonMap(settings['ui']) ?? <String, dynamic>{};
+      final params = _coerceJsonMap(ui['params']) ?? <String, dynamic>{};
+      final controls =
+          _coerceJsonMap(params['model_controls']) ?? <String, dynamic>{};
+      final choice = _coerceJsonMap(controls[modelId]) ?? <String, dynamic>{};
+      for (final pick in picks.entries) {
+        if (pick.value == null) {
+          choice.remove(pick.key);
+        } else {
+          choice[pick.key] = pick.value;
+        }
+      }
+      if (choice.isEmpty) {
+        controls.remove(modelId);
+      } else {
+        controls[modelId] = choice;
+      }
+      // `ui` is patched per key, so `params` is sent whole: the other
+      // generation defaults in it stay as they are.
+      params['model_controls'] = controls;
+      ui['params'] = params;
+      settings['ui'] = ui;
+      _traceApi('Updating user model controls');
+      final response = await _postUserSettings(
+        settings,
+        authSnapshot: authSnapshot,
+      );
+      final data = _coerceResponseMap(response.data) ?? settings;
+      return ServerUserSettings.fromJson(data);
+    });
+  }
+
   Future<ServerUserSettings> updateUserMemoryEnabled(bool enabled) {
     final authSnapshot = captureAuthSnapshot();
     return serializeUserSettingsMutation(() async {

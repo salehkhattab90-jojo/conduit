@@ -1,5 +1,6 @@
 import 'package:freezed_annotation/freezed_annotation.dart';
 
+import 'model_controls.dart';
 import 'toggle_filter.dart';
 
 part 'model.freezed.dart';
@@ -390,6 +391,12 @@ sealed class Model with _$Model {
     metadata: metadata,
   );
   bool get isWorkspaceActive => _safeBool(metadata?['is_active']) ?? true;
+
+  /// The controls an admin offers for this model on Open WebUI 0.12+
+  /// (`info.params.model_controls`), in the server's order.
+  Map<String, ModelControl> get modelControls => parseModelControls(
+    _mapValue(_mapValue(metadata?['info'], 'params'), 'model_controls'),
+  );
   bool get hasWorkspaceWriteAccess =>
       _safeBool(metadata?['write_access']) ?? false;
   List<Map<String, dynamic>> get workspaceAccessGrants {

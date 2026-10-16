@@ -1421,6 +1421,117 @@ void main() {
   // Payload builder
   // -----------------------------------------------------------------------
   group('buildChatCompletionPayloadForTest', () {
+    group('model controls', () {
+      Map<String, dynamic> modelItem(String id, Map<String, dynamic> options) =>
+          {
+            'id': id,
+            'name': id,
+            'info': {
+              'id': id,
+              'params': {
+                'model_controls': {
+                  'thinking': {'label': 'Thinking', 'options': options},
+                },
+              },
+            },
+          };
+      const offered = <String, dynamic>{
+        'off': {'label': 'Off'},
+        'on': {'label': 'On'},
+      };
+      Map<String, dynamic> settings(Map<String, dynamic> controls) => {
+        'ui': {
+          'params': {'temperature': 0.3, 'model_controls': controls},
+        },
+      };
+
+      test('sends the stored pick for the model after chat params', () {
+        final api = _buildApiServiceForTest(_FakeAdapter.json({}));
+        final params =
+            api.buildChatCompletionPayloadForTest(
+                  messages: [
+                    {'role': 'user', 'content': 'hello'},
+                  ],
+                  model: 'm1',
+                  messageId: 'msg-1',
+                  sessionId: 'sess-1',
+                  modelItem: modelItem('m1', offered),
+                  userSettings: settings({
+                    'm1': {'thinking': 'on'},
+                    'other': {'thinking': 'off'},
+                  }),
+                )['params']
+                as Map<String, dynamic>;
+
+        check(params).deepEquals({
+          'temperature': 0.3,
+          'model_controls': {
+            'm1': {'thinking': 'on'},
+          },
+        });
+      });
+
+      test('an option the model no longer offers is not sent', () {
+        final api = _buildApiServiceForTest(_FakeAdapter.json({}));
+        final params =
+            api.buildChatCompletionPayloadForTest(
+                  messages: [
+                    {'role': 'user', 'content': 'hello'},
+                  ],
+                  model: 'm1',
+                  messageId: 'msg-1',
+                  sessionId: 'sess-1',
+                  modelItem: modelItem('m1', offered),
+                  userSettings: settings({
+                    'm1': {'thinking': 'max', 'removed': 'x'},
+                  }),
+                )['params']
+                as Map<String, dynamic>;
+
+        check(params).deepEquals({'temperature': 0.3});
+      });
+
+      test('each model of a comparison gets its own picks', () {
+        final api = _buildApiServiceForTest(_FakeAdapter.json({}));
+        final params =
+            api.buildChatCompletionPayloadForTest(
+                  messages: [
+                    {'role': 'user', 'content': 'hello'},
+                  ],
+                  model: 'm1',
+                  messageId: 'msg-1',
+                  sessionId: 'sess-1',
+                  modelItem: modelItem('m1', offered),
+                  messageIds: const [
+                    ChatCompletionTarget(
+                      modelId: 'm1',
+                      messageId: 'msg-1',
+                      modelIdx: 0,
+                    ),
+                    ChatCompletionTarget(
+                      modelId: 'm2',
+                      messageId: 'msg-2',
+                      modelIdx: 1,
+                    ),
+                  ],
+                  targetModelItems: {
+                    'm1': modelItem('m1', offered),
+                    'm2': modelItem('m2', const {
+                      'on': {'label': 'On'},
+                    }),
+                  },
+                  userSettings: settings({
+                    'm1': {'thinking': 'off'},
+                    'm2': {'thinking': 'off'},
+                  }),
+                )['params']
+                as Map<String, dynamic>;
+
+        check(params['model_controls']).isA<Map<String, dynamic>>().deepEquals({
+          'm1': {'thinking': 'off'},
+        });
+      });
+    });
     test('explicit reasoning effort overrides user settings params', () {
       final api = _buildApiServiceForTest(_FakeAdapter.json({}));
 

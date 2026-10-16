@@ -164,6 +164,32 @@ class PersonalizationSettings extends _$PersonalizationSettings {
     return updated;
   }
 
+  /// Applies [picks] to the user's model-control choices for [modelId]
+  /// (`ui.params.model_controls`); see `ApiService.updateUserModelControls`.
+  Future<ServerUserSettings> setModelControls(
+    String modelId,
+    Map<String, String?> picks,
+  ) async {
+    final api = ref.read(apiServiceProvider);
+    if (api == null) {
+      throw StateError('No API service available');
+    }
+
+    final serverId = api.serverConfig.id;
+    final updated = await api.updateUserModelControls(modelId, picks);
+    if (!ref.mounted) return updated;
+    if (!_isCurrentServer(serverId)) {
+      return _currentSettingsForActiveServerOrDefault();
+    }
+
+    _settingsServerId = serverId;
+    _settingsSnapshot = updated;
+    state = AsyncData(updated);
+    ref.invalidate(rawUserSettingsProvider);
+    ref.invalidate(userSettingsProvider);
+    return updated;
+  }
+
   Future<ServerUserSettings> setPinnedModels(List<String> modelIds) async {
     final sanitized = SettingsService.sanitizePinnedModels(modelIds);
     final api = ref.read(apiServiceProvider);

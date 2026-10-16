@@ -38,6 +38,9 @@ import 'package:conduit_core/features/chat/models/model_selector_layout.dart';
 import 'package:conduit_core/features/chat/providers/chat_providers.dart'
     show captureOpenWebUiReasoningPickTarget, selectReasoningEffortForModel;
 import 'package:conduit_core/features/chat/providers/reasoning_effort_provider.dart';
+import 'package:conduit_core/features/chat/providers/model_controls_provider.dart';
+
+import 'model_control_picker.dart';
 
 class ModelSelectorSheet extends ConsumerStatefulWidget {
   const ModelSelectorSheet({
@@ -193,6 +196,14 @@ class ModelSelectorSheetState extends ConsumerState<ModelSelectorSheet> {
         selectedModel != null &&
         isHermesModel(selectedModel) &&
         selectedModel.metadata?['hermesFast'] == true;
+    // The server's model controls, beside reasoning effort.
+    final modelControls =
+        widget.onPick == null &&
+            selectedModel != null &&
+            ref.watch(modelControlsVisibleProvider)
+        ? ref.watch(selectedModelControlsProvider).values.toList()
+        : const [];
+    final modelControlPicks = ref.watch(selectedModelControlChoiceProvider);
 
     return DraggableScrollableSheet(
       expand: false,
@@ -278,6 +289,28 @@ class ModelSelectorSheetState extends ConsumerState<ModelSelectorSheet> {
                                 ref.watch(reasoningEffortProvider),
                               ),
                               onTap: _showEffortSelector,
+                            ),
+                          ],
+                          for (final (index, control)
+                              in modelControls.indexed) ...[
+                            if (index > 0 || effortPolicy.visible)
+                              const SizedBox(height: Spacing.md),
+                            _ActionCard(
+                              icon: Platform.isIOS
+                                  ? CupertinoIcons.slider_horizontal_3
+                                  : Icons.tune_rounded,
+                              title: control.label,
+                              subtitle: modelControlSummary(
+                                l10n,
+                                control,
+                                modelControlPicks[control.key],
+                              ),
+                              onTap: () => showModelControlPicker(
+                                context,
+                                ref,
+                                selectedModel!,
+                                control,
+                              ),
                             ),
                           ],
                           if (widget.onPick == null && supportsHermesFast) ...[

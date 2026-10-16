@@ -1,5 +1,7 @@
 import 'package:meta/meta.dart';
 
+import 'model_controls.dart';
+
 /// Server-backed user settings loaded from OpenWebUI.
 @immutable
 class ServerUserSettings {
@@ -12,6 +14,7 @@ class ServerUserSettings {
     this.notificationEnabled,
     this.notificationSound,
     this.notificationSoundAlways,
+    this.modelControls = const <String, Map<String, String>>{},
   });
 
   final String? systemPrompt;
@@ -27,6 +30,10 @@ class ServerUserSettings {
   final bool? notificationSound;
   final bool? notificationSoundAlways;
 
+  /// The user's model-control picks per model (`ui.params.model_controls`,
+  /// `{modelId: {key: option}}`), shared with the web client.
+  final Map<String, Map<String, String>> modelControls;
+
   /// The user's preferred default model, if one is configured.
   String? get defaultModelId =>
       defaultModelIds.isEmpty ? null : defaultModelIds.first;
@@ -36,6 +43,7 @@ class ServerUserSettings {
     final uiSystem = _normalizeString(ui?['system']);
     final rootSystem = _normalizeString(json['system']);
     final params = _coerceJsonMap(json['params']);
+    final uiParams = _coerceJsonMap(ui?['params']);
 
     return ServerUserSettings(
       systemPrompt: uiSystem ?? rootSystem,
@@ -46,6 +54,7 @@ class ServerUserSettings {
       notificationEnabled: _coerceBool(json['notificationEnabled']),
       notificationSound: _coerceBool(json['notificationSound']),
       notificationSoundAlways: _coerceBool(json['notificationSoundAlways']),
+      modelControls: parseModelControlChoices(uiParams?['model_controls']),
     );
   }
 
@@ -58,6 +67,7 @@ class ServerUserSettings {
     bool? notificationEnabled,
     bool? notificationSound,
     bool? notificationSoundAlways,
+    Map<String, Map<String, String>>? modelControls,
   }) {
     return ServerUserSettings(
       systemPrompt: systemPrompt == _serverUserSettingsUnset
@@ -73,6 +83,7 @@ class ServerUserSettings {
       notificationSound: notificationSound ?? this.notificationSound,
       notificationSoundAlways:
           notificationSoundAlways ?? this.notificationSoundAlways,
+      modelControls: modelControls ?? this.modelControls,
     );
   }
 }

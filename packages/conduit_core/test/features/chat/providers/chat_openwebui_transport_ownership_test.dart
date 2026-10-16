@@ -533,6 +533,7 @@ class _GatedCompletionApi extends ApiService implements _AssistantIdSource {
     Map<String, dynamic>? variables,
     List<Map<String, dynamic>>? files,
     List<ChatCompletionTarget>? messageIds,
+    Map<String, Map<String, dynamic>>? targetModelItems,
   }) async {
     completionCalls += 1;
     assistantMessageId = responseMessageId;
@@ -8094,6 +8095,7 @@ class _FanOutApi extends ApiService implements _AssistantIdSource {
     Map<String, dynamic>? variables,
     List<Map<String, dynamic>>? files,
     List<ChatCompletionTarget>? messageIds,
+    Map<String, Map<String, dynamic>>? targetModelItems,
   }) async {
     requests.add(
       _FanOutRequest(

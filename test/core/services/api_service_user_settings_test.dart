@@ -145,6 +145,53 @@ void main() {
       // `updateUserDefaultModel` had no callers and this branch removed
       // it along with 47 other unreferenced methods.
     });
+
+    test('model-control picks round-trip through ui.params', () async {
+      // Where the web client keeps them, beside the other generation
+      // defaults, which must survive the write.
+      final adapter = _UserSettingsAdapter(<String, dynamic>{
+        'ui': <String, dynamic>{
+          'theme': 'dark',
+          'params': <String, dynamic>{
+            'temperature': 0.3,
+            'model_controls': <String, dynamic>{
+              'm1': <String, dynamic>{'style': 'long'},
+              'm2': <String, dynamic>{'thinking': 'on'},
+            },
+          },
+        },
+      });
+      final api = _buildApi(adapter, authToken: 'account-a');
+      adapter.releaseFirstGet.complete();
+
+      final picked = await api.updateUserModelControls('m1', {
+        'thinking': 'off',
+        'style': null,
+      });
+
+      final ui = adapter.settings['ui'] as Map<String, dynamic>;
+      check(ui['theme']).equals('dark');
+      check(ui['params']).isA<Map<String, dynamic>>().deepEquals({
+        'temperature': 0.3,
+        'model_controls': {
+          'm1': {'thinking': 'off'},
+          'm2': {'thinking': 'on'},
+        },
+      });
+      check(picked.modelControls).deepEquals({
+        'm1': {'thinking': 'off'},
+        'm2': {'thinking': 'on'},
+      });
+
+      final cleared = await api.updateUserModelControls('m1', {
+        'thinking': null,
+      });
+      check(cleared.modelControls).deepEquals({
+        'm2': {'thinking': 'on'},
+      });
+      check((await api.getServerUserSettingsModel()).modelControls)
+          .deepEquals(cleared.modelControls);
+    });
   });
 }
 

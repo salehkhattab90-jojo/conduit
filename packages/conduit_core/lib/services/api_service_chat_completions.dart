@@ -124,6 +124,10 @@ mixin _ChatCompletionsApi on _ApiServiceBase {
     /// Ask the server for several answers in this one request. The first entry
     /// is the primary answer ([responseMessageId] and [model]).
     List<ChatCompletionTarget>? messageIds,
+
+    /// The `model_item` of each further model in [messageIds], by model id,
+    /// so the user's model-control picks can be sent for those models too.
+    Map<String, Map<String, dynamic>>? targetModelItems,
   }) async {
     // Generate unique IDs
     final messageId =
@@ -200,6 +204,7 @@ mixin _ChatCompletionsApi on _ApiServiceBase {
         variables: variables,
         files: files,
         messageIds: messageIds,
+        targetModelItems: targetModelItems,
         metadataFormat: metadataFormat,
       );
 
@@ -439,6 +444,8 @@ mixin _ChatCompletionsApi on _ApiServiceBase {
     Map<String, dynamic>? variables,
     List<Map<String, dynamic>>? files,
     bool useLegacyChatMetadata = false,
+    List<ChatCompletionTarget>? messageIds,
+    Map<String, Map<String, dynamic>>? targetModelItems,
   }) {
     return _buildChatCompletionPayload(
       messages: messages,
@@ -460,6 +467,8 @@ mixin _ChatCompletionsApi on _ApiServiceBase {
       userMessage: userMessage,
       variables: variables,
       files: files,
+      messageIds: messageIds,
+      targetModelItems: targetModelItems,
       metadataFormat: useLegacyChatMetadata
           ? _ChatRequestMetadataFormat.legacyPreV09
           : _ChatRequestMetadataFormat.modernV09,

@@ -936,6 +936,9 @@ Future<void> runComparisonCompletion(
       variables: promptVars,
       files: _extractTopLevelRequestFiles(userMessageMap),
       messageIds: comparisonTargets(group),
+      targetModelItems: {
+        for (final slot in slots) slot.model: modelItemFor(slot.model),
+      },
     );
     final completed = await _markComparisonAcceptedOrAbort(
       ref,

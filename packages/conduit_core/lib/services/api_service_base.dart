@@ -1560,6 +1560,7 @@ abstract class _ApiServiceBase {
     Map<String, dynamic>? variables,
     List<Map<String, dynamic>>? files,
     List<ChatCompletionTarget>? messageIds,
+    Map<String, Map<String, dynamic>>? targetModelItems,
     _ChatRequestMetadataFormat metadataFormat =
         _ChatRequestMetadataFormat.modernV09,
   }) {
@@ -1720,6 +1721,16 @@ abstract class _ApiServiceBase {
     if (isAutomaticEffort || !supportsReasoningEffort) {
       params.remove('reasoning_effort');
     }
+
+    // Model controls go last, as in the web client: the user's stored picks
+    // (`ui.params.model_controls`), never a chat's, limited to what each
+    // model of the request still offers (the server rejects anything else).
+    params.remove(kModelControlsParam);
+    final modelControls = openWebUiModelControlsParam(
+      storedChoices: baselineParams?[kModelControlsParam],
+      modelItems: <String, Object?>{...?targetModelItems, model: modelItem},
+    );
+    if (modelControls != null) params[kModelControlsParam] = modelControls;
     data['params'] = params;
 
     // Include model_item with real server routing data (pipe, actions,
