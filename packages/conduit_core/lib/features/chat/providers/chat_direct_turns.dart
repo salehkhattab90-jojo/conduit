@@ -742,6 +742,9 @@ Future<void> _dispatchDirectRunFromChat(
     final webSearchMode = directWebSearchModeFor(
       binding: route.binding,
       model: route.model,
+      allowOnDevice: (ref.read(
+        deploymentPolicyProvider,
+      ) as DeploymentPolicy).allowOnDeviceWebSearch,
     );
     final toolSelection = normalizeDirectToolSelectionForBinding(
       binding: route.binding,

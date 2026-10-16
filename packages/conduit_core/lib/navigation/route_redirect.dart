@@ -1,4 +1,5 @@
 import 'package:conduit_core/auth/auth_state_manager.dart';
+import 'package:conduit_core/deployment/deployment_policy.dart';
 import 'package:conduit_core/features/auth/providers/unified_auth_providers.dart';
 import 'package:conduit_core/features/direct_connections/providers/direct_connection_providers.dart';
 import 'package:conduit_core/features/hermes/models/hermes_config.dart';
@@ -21,6 +22,7 @@ typedef ProviderRead = T Function<T>(ProviderListenable<T> provider);
 /// The providers [resolveRouteRedirect] depends on. A host re-evaluates its
 /// redirect whenever one of them changes.
 final List<ProviderListenable<Object?>> routeRedirectDependencies = [
+  deploymentPolicyProvider,
   reviewerModeProvider,
   activeServerProvider,
   authNavigationStateProvider,
@@ -95,7 +97,16 @@ String incompleteHermesDestination({
 /// The router's redirect policy, kept here so it is tested without
 /// go_router or Flutter.
 String? resolveRouteRedirect(String location, ProviderRead read) {
-  final reviewerMode = read(reviewerModeProvider);
+  // A locked deployment has no server setup, account management or other
+  // backends: a request for one of those pages is answered as one for chat,
+  // which lands on sign-in or the splash while there is no session.
+  final policy = read(deploymentPolicyProvider);
+  if (policy.closesLocation(location)) {
+    return resolveRouteRedirect(Routes.chat, read) ?? Routes.chat;
+  }
+
+  // Reviewer mode is toggled from server setup, which a locked build lacks.
+  final reviewerMode = !policy.isLocked && read(reviewerModeProvider);
   if (reviewerMode) {
     // Stay on whatever route if already in chat; otherwise go to chat.
     if (location == Routes.chat) return null;
@@ -276,6 +287,12 @@ String? resolveRouteRedirect(String location, ProviderRead read) {
       );
       return location == destination ? null : destination;
     }
+  }
+
+  if (!hasActiveServer && policy.isLocked) {
+    // The locked server is seeded before the first redirect and put back
+    // when it goes missing; there is no setup to send anyone to meanwhile.
+    return location == Routes.splash ? null : Routes.splash;
   }
 
   if (!hasActiveServer) {

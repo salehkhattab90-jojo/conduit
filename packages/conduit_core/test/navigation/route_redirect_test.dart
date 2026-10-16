@@ -8,6 +8,7 @@ import 'package:conduit_core/features/direct_connections/providers/direct_connec
 import 'package:conduit_core/features/hermes/models/hermes_config.dart';
 import 'package:conduit_core/features/hermes/providers/hermes_providers.dart';
 import 'package:conduit_core/models/server_config.dart';
+import 'package:conduit_core/deployment/deployment_policy.dart';
 import 'package:conduit_core/navigation/route_redirect.dart';
 import 'package:conduit_core/navigation/routes.dart';
 import 'package:conduit_core/providers/app_providers.dart';
@@ -43,6 +44,7 @@ ProviderRead _reader({
   bool proxySignInForRouteEditing = false,
 }) {
   final values = <ProviderListenable<Object?>, Object?>{
+    deploymentPolicyProvider: DeploymentPolicy.unlocked,
     accountAdditionOriginProvider: addingAccountFrom,
     settledActiveAccountIdProvider: settledAccount,
     proxySignInForRouteEditingProvider: proxySignInForRouteEditing,

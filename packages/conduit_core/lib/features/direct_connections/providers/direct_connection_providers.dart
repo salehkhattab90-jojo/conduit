@@ -14,6 +14,9 @@ import 'package:conduit_core/persistence/persistence_keys.dart';
 import 'package:conduit_core/persistence/preferences_store.dart';
 
 import 'package:conduit_core/providers/app_providers.dart';
+import 'package:conduit_core/deployment/deployment_policy.dart';
+import 'package:conduit_core/providers/backend_mode_providers.dart'
+    show PreferredBackend;
 
 import 'package:conduit_core/services/secure_credential_storage.dart';
 import 'package:conduit_core/services/socket_service.dart';
@@ -208,12 +211,30 @@ abstract class _QueuedBoolPreferenceController extends Notifier<bool> {
   }
 }
 
+/// Whether the deployment allows Direct backends, the on-device Apple models
+/// among them.
+bool _directBackendAllowed(DeploymentPolicy policy) =>
+    policy.allowsBackend(PreferredBackend.direct);
+
 class ApplePccEnabledController extends _QueuedBoolPreferenceController {
   @override
   String get preferenceKey => PreferenceKeys.applePccEnabled;
 
   @override
   bool get defaultValue => true;
+
+  // On by default, and merged into the model list: a deployment without
+  // Direct backends keeps it off whatever was saved.
+  @override
+  bool build() =>
+      _directBackendAllowed(ref.watch(deploymentPolicyProvider)) &&
+      super.build();
+
+  @override
+  Future<void> setEnabled(bool enabled) =>
+      _directBackendAllowed(ref.read(deploymentPolicyProvider))
+      ? super.setEnabled(enabled)
+      : Future<void>.value();
 }
 
 final applePccEnabledProvider =
@@ -227,6 +248,18 @@ class AppleOnDeviceEnabledController extends _QueuedBoolPreferenceController {
 
   @override
   bool get defaultValue => true;
+
+  // See ApplePccEnabledController.build.
+  @override
+  bool build() =>
+      _directBackendAllowed(ref.watch(deploymentPolicyProvider)) &&
+      super.build();
+
+  @override
+  Future<void> setEnabled(bool enabled) =>
+      _directBackendAllowed(ref.read(deploymentPolicyProvider))
+      ? super.setEnabled(enabled)
+      : Future<void>.value();
 }
 
 final appleOnDeviceEnabledProvider =
@@ -456,6 +489,10 @@ class DirectConnectionProfilesController
   /// session.
   @override
   Future<List<DirectConnectionProfile>> build() {
+    // A deployment without Direct backends has no Direct profiles.
+    if (!_directBackendAllowed(ref.watch(deploymentPolicyProvider))) {
+      return Future.value(const <DirectConnectionProfile>[]);
+    }
     final logoutFenceActive = ref.watch(incompleteLogoutFenceProvider);
     final incompleteClearPersisted =
         PreferencesStore.getBool(PreferenceKeys.incompleteAppDataClear) ??
@@ -1783,6 +1820,10 @@ bool _isOpenWebUiDirectTerminalPayload(Object? value) =>
 /// device-only connections unavailable.
 final effectiveDirectConnectionProfilesProvider =
     Provider<AsyncValue<List<DirectConnectionProfile>>>((ref) {
+      // Nor the Direct connections an Open WebUI account keeps on the server.
+      if (!_directBackendAllowed(ref.watch(deploymentPolicyProvider))) {
+        return const AsyncData(<DirectConnectionProfile>[]);
+      }
       final onDeviceEnabled = ref.watch(appleOnDeviceEnabledProvider);
       final pccEnabled = ref.watch(applePccEnabledProvider);
       final pccSupported = ref.watch(applePccPlatformSupportedProvider);

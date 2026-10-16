@@ -22,7 +22,21 @@ enum DirectWebSearchMode {
 /// Provider-hosted search is trusted only for connections the user added on
 /// this device: an Open WebUI server controls the capabilities of the models
 /// it relays, so it must not be able to claim a provider-side tool.
+///
+/// Without [allowOnDevice] (a deployment that keeps searches off the
+/// device), a model that would search on the device has no web search.
 DirectWebSearchMode directWebSearchModeFor({
+  required DirectModelBinding binding,
+  required Model model,
+  bool allowOnDevice = true,
+}) {
+  final mode = _directWebSearchModeFor(binding: binding, model: model);
+  return mode == DirectWebSearchMode.onDevice && !allowOnDevice
+      ? DirectWebSearchMode.unavailable
+      : mode;
+}
+
+DirectWebSearchMode _directWebSearchModeFor({
   required DirectModelBinding binding,
   required Model model,
 }) {

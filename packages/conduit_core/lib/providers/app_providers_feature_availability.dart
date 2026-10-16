@@ -249,7 +249,11 @@ final selectedDirectWebSearchModeProvider = Provider<DirectWebSearchMode?>((
   }
   final binding = ref.watch(directModelRegistryProvider).resolve(selectedModel);
   if (binding == null) return DirectWebSearchMode.unavailable;
-  return directWebSearchModeFor(binding: binding, model: selectedModel);
+  return directWebSearchModeFor(
+    binding: binding,
+    model: selectedModel,
+    allowOnDevice: ref.watch(deploymentPolicyProvider).allowOnDeviceWebSearch,
+  );
 });
 
 final webSearchAvailableProvider = Provider<bool>((ref) {

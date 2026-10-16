@@ -63,6 +63,8 @@ final class SignOutCoordinator {
   bool? _activeKeepServerDetails;
 
   Future<SignOutRequestResult> signOut({required bool keepServerDetails}) {
+    // A locked deployment's server is not the user's to remove.
+    if (_ref.read(deploymentPolicyProvider).isLocked) keepServerDetails = true;
     final active = _activeSignOut;
     if (active != null) {
       if (_activeKeepServerDetails == keepServerDetails) return active;

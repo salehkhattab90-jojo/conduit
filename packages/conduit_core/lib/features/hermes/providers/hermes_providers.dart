@@ -9,6 +9,7 @@ import 'package:riverpod/riverpod.dart';
 import 'package:uuid/uuid.dart';
 
 import 'package:conduit_core/auth/auth_state_manager.dart';
+import 'package:conduit_core/deployment/deployment_policy.dart';
 
 import 'package:conduit_core/models/model.dart';
 import 'package:conduit_core/models/prompt.dart';
@@ -171,6 +172,15 @@ class HermesConfigController extends Notifier<HermesConfig> {
   @override
   HermesConfig build() {
     final epoch = ++_secretLoadEpoch;
+    // A deployment without Hermes has no connections and never turns it on.
+    if (!ref
+        .watch(deploymentPolicyProvider)
+        .allowsBackend(PreferredBackend.hermes)) {
+      _runAdmissionBlocked = true;
+      _profiles = const [];
+      _secretsHydration = Future<void>.value();
+      return const HermesConfig();
+    }
     _durableLogoutFenceBlocked = ref.watch(incompleteLogoutFenceProvider);
     if (_durableLogoutFenceBlocked) {
       _runAdmissionBlocked = true;
@@ -450,6 +460,12 @@ class HermesConfigController extends Notifier<HermesConfig> {
   }
 
   Future<void> setEnabled(bool value) async {
+    if (value &&
+        !ref
+            .read(deploymentPolicyProvider)
+            .allowsBackend(PreferredBackend.hermes)) {
+      return;
+    }
     await _serializeMutation(() async {
       if (state.enabled && !value) {
         await _withRunAdmissionBlocked(() async {
@@ -1920,8 +1936,11 @@ final class _HermesSessionKeyRequest {
 }
 
 class HermesSecretsLoading extends Notifier<bool> {
+  // Nothing loads where the deployment has no Hermes.
   @override
-  bool build() => true;
+  bool build() => ref
+      .watch(deploymentPolicyProvider)
+      .allowsBackend(PreferredBackend.hermes);
 
   void set(bool value) => state = value;
 }

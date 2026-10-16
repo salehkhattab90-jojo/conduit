@@ -12,6 +12,9 @@ class ReviewerMode extends _$ReviewerMode {
     final storage = ref.watch(optimizedStorageServiceProvider);
     _storage = storage;
     final generation = ++_loadGeneration;
+    // Reviewer mode is turned on from server setup, which a locked
+    // deployment does not have.
+    if (ref.watch(deploymentPolicyProvider).isLocked) return false;
     Future.microtask(() => _load(storage, generation));
     return false;
   }
@@ -25,6 +28,7 @@ class ReviewerMode extends _$ReviewerMode {
   }
 
   Future<void> setEnabled(bool enabled) async {
+    if (enabled && ref.read(deploymentPolicyProvider).isLocked) return;
     _loadGeneration++;
     state = enabled;
     await _storage.setReviewerMode(enabled);

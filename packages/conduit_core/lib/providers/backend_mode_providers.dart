@@ -1,5 +1,6 @@
 import 'package:riverpod/riverpod.dart';
 
+import '../deployment/deployment_policy.dart';
 import '../persistence/persistence_keys.dart';
 import '../persistence/preferences_store.dart';
 
@@ -15,10 +16,15 @@ enum PreferredBackend { unset, owui, direct, hermes }
 /// first `redirect()` is correct without waiting on async providers.
 class PreferredBackendController extends Notifier<PreferredBackend> {
   @override
-  PreferredBackend build() =>
-      _parse(PreferencesStore.getString(PreferenceKeys.preferredBackend));
+  PreferredBackend build() => ref
+      .watch(deploymentPolicyProvider)
+      .effectiveBackend(
+        _parse(PreferencesStore.getString(PreferenceKeys.preferredBackend)),
+      );
 
   Future<void> set(PreferredBackend backend) async {
+    // A backend the deployment does not allow is never chosen.
+    if (!ref.read(deploymentPolicyProvider).allowsBackend(backend)) return;
     state = backend;
     await PreferencesStore.put(PreferenceKeys.preferredBackend, backend.name);
   }
