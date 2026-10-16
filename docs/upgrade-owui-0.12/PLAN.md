@@ -1,6 +1,6 @@
 # Conduit fork → rebuild on upstream Conduit v4.2.0 — plan
 
-**Status:** proposal, awaiting owner approval. No code written.
+**Status:** approved by the owner 2026-10-16 with the recommended answers to R-1…R-12; in progress.
 **Replaces** the earlier in-place patch plan (Track A, `a13f04b7`), which assumed
 the app had to keep working on Open WebUI 0.9.2. The owner confirmed (2026-10-16)
 that nobody uses the app yet, so backward compatibility is not a requirement and
@@ -27,7 +27,9 @@ Open WebUI ≤ 0.12.0); target server **Open WebUI 0.12.2** (`6a18585f`).
 - History: **rebuild + join commit**, the same scheme as the server upgrade
   (decision G-1 there): no force-push, old history kept, and future upstream syncs
   become normal merges.
-- Effort ≈ **13–19 focused days** including device QA.
+- Effort: **one working session** — a few hours of cherry-picks and conflict
+  resolution plus build, test and emulator time (§6). Owner steps (Xcode licence,
+  Firebase iOS config, a push test on a phone) don't block the rebase.
 
 ## 2. Trial cherry-pick (each commit alone onto `upstream/main` v4.2.0)
 
@@ -141,9 +143,11 @@ upstream v4.2.0 ──► main                (fast-forward; main is an ancestor
 7. **Hand-over** — owner's checkout per R-8; remove worktrees; verify local ==
    remote for every branch and tag touched.
 
-Estimate per group: G1 3–4 d · G3+G4 2–3 d · G5 1.5–2 d · G6 1.5–2 d · G7 0.5 d ·
-G8 1–1.5 d · G0+G2+G9 1–1.5 d · prep/toolchain 1–1.5 d · customer layer 1 d ·
-device QA 2–3 d → **≈ 13–19 focused days**.
+Time: the code work is a few hours (G1 is the largest piece; G0, G2 and G9 are
+minutes each). Most of the elapsed time is machine time — SDK download, `pub get`,
+code generation, the test shards after each step, and emulator builds — so the
+whole rebase fits in one working session. (An earlier draft quoted 13–19 days; that
+was a human-engineer estimate and has been withdrawn.)
 
 ## 7. Test plan
 
