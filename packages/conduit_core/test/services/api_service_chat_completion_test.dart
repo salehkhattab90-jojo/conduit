@@ -1901,6 +1901,68 @@ void main() {
       },
     );
 
+    test(
+      'createConversation saves embeds in their stored shapes',
+      () async {
+        final adapter = _FakeAdapter.json({
+          'id': 'conv-1',
+          'title': 'New Chat',
+          'created_at': 1700000000,
+          'updated_at': 1700000001,
+          'chat': {
+            'messages': <Object>[],
+            'history': {'messages': <String, Object>{}},
+          },
+        });
+        final api = _buildApiServiceForTest(adapter);
+
+        await api.createConversation(
+          title: 'New Chat',
+          model: 'gpt-4',
+          messages: [
+            ChatMessage(
+              id: 'asst-1',
+              role: 'assistant',
+              content: 'Here it is',
+              timestamp: DateTime.fromMillisecondsSinceEpoch(1700000001000),
+              model: 'gpt-4',
+              // What conversation parsing makes of a string embed and of a
+              // preview object.
+              embeds: const [
+                {'src': '<div>legacy</div>'},
+                {
+                  'type': 'preview',
+                  'url': '/api/v1/files/prev-1/content',
+                  'name': 'Report.docx.pdf',
+                  'content_type': 'application/pdf',
+                  'src': '/api/v1/files/prev-1/content',
+                },
+              ],
+            ),
+          ],
+        );
+
+        final body = adapter.lastRequest!.data as Map<String, dynamic>;
+        final chat = body['chat'] as Map<String, dynamic>;
+        final stored = <Object>[
+          '<div>legacy</div>',
+          {
+            'type': 'preview',
+            'url': '/api/v1/files/prev-1/content',
+            'name': 'Report.docx.pdf',
+            'content_type': 'application/pdf',
+          },
+        ];
+        final serialized = (chat['messages'] as List).single as Map;
+        final history =
+            (chat['history'] as Map<String, dynamic>)['messages'] as Map;
+        check(serialized['embeds'] as List<Object?>).deepEquals(stored);
+        check(
+          (history['asst-1'] as Map)['embeds'] as List<Object?>,
+        ).deepEquals(stored);
+      },
+    );
+
     test('createConversation keeps done for responseDone streaming assistant messages', () async {
       final adapter = _FakeAdapter.json({
         'id': 'conv-1',

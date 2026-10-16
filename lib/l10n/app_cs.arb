@@ -217,6 +217,9 @@
   "@document": {
     "description": "Generic document label used in UI."
   },
+  "artifact": "Artefakt",
+  "artifactCardHint": "Artefakt · klepnutím otevřete",
+  "documentCardHint": "Dokument · klepnutím zobrazíte náhled",
   "backToServerSetup": "Zpět na nastavení serveru",
   "@backToServerSetup": {
     "description": "Button/back label to return to server configuration flow."

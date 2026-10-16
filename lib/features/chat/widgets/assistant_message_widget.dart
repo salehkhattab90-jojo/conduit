@@ -73,6 +73,9 @@ import 'package:conduit_core/services/worker_manager.dart';
 import 'streaming_status_widget.dart';
 
 import 'package:conduit_core/features/chat/utils/file_utils.dart';
+import 'package:conduit_core/features/chat/utils/document_deliveries.dart';
+
+import 'delivery_cards.dart';
 
 import 'chat_branch_actions.dart';
 import 'chat_comparison_widgets.dart';
@@ -1267,6 +1270,16 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
         ? widget.message.versions[_activeVersionIndex].files
         : widget.message.files;
     final activeEmbeds = _resolveActiveEmbeds();
+    final List<Map<String, dynamic>>? activeOutput = showingVersion
+        ? widget.message.versions[_activeVersionIndex].output
+        : widget.message.output;
+    // One card per generated document, from the message and its tool
+    // results; files and embeds no card shows render as before.
+    final deliveries = collectDocumentDeliveries(
+      files: activeFiles,
+      embeds: activeEmbeds,
+      output: activeOutput,
+    );
     final queuedCompletionAsync = ref.watch(
       queuedCompletionInfoForMessageProvider(_messageId),
     );
@@ -1344,18 +1357,24 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Display attachments - prioritize files array over attachmentIds to avoid duplication
-                if (activeFiles != null && activeFiles.isNotEmpty) ...[
-                  _buildFilesFromArray(),
+                if (deliveries.deliveries.isNotEmpty) ...[
+                  DocumentDeliveryCards(deliveries: deliveries.deliveries),
                   const SizedBox(height: Spacing.md),
-                ] else if (widget.message.attachmentIds != null &&
+                ],
+
+                // Display attachments - prioritize files array over attachmentIds to avoid duplication
+                if (deliveries.files.isNotEmpty) ...[
+                  _buildFilesFromArray(deliveries.files),
+                  const SizedBox(height: Spacing.md),
+                ] else if ((activeFiles == null || activeFiles.isEmpty) &&
+                    widget.message.attachmentIds != null &&
                     widget.message.attachmentIds!.isNotEmpty) ...[
                   _buildAttachmentItems(),
                   const SizedBox(height: Spacing.md),
                 ],
 
-                if (activeEmbeds != null && activeEmbeds.isNotEmpty) ...[
-                  _buildEmbedsFromArray(activeEmbeds),
+                if (deliveries.embeds.isNotEmpty) ...[
+                  _buildEmbedsFromArray(deliveries.embeds),
                   const SizedBox(height: Spacing.md),
                 ],
 
@@ -1900,6 +1919,11 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
         .map((entry) {
           final index = entry.$1;
           final embed = entry.$2;
+          // A preview object renders only through its document card: its
+          // URL is not markup and must never reach WebContentEmbed.
+          if (isPreviewEmbed(embed)) {
+            return null;
+          }
           final source = extractEmbedSource(embed);
           if (source == null || source.isEmpty) {
             return null;
@@ -1927,10 +1951,12 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
     );
   }
 
-  Widget _buildFilesFromArray() {
-    final filesArray = _activeVersionIndex >= 0
-        ? widget.message.versions[_activeVersionIndex].files
-        : widget.message.files;
+  Widget _buildFilesFromArray([List<Map<String, dynamic>>? files]) {
+    final filesArray =
+        files ??
+        (_activeVersionIndex >= 0
+            ? widget.message.versions[_activeVersionIndex].files
+            : widget.message.files);
     if (filesArray == null || filesArray.isEmpty) {
       return const SizedBox.shrink();
     }

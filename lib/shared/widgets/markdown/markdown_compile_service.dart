@@ -1383,7 +1383,10 @@ CompiledMarkdownToolCallData _compileToolCallData(
       ? ''
       : resultPartsText ?? _stringifyDetailValue(parsedResult);
 
+  // Preview objects belong to the message's document card; their URL is not
+  // markup to render inline.
   final embeds = normalizeEmbedList(rawEmbeds)
+      .where((embed) => !isPreviewEmbed(embed))
       .map(extractEmbedSource)
       .whereType<String>()
       .where((value) => value.isNotEmpty)

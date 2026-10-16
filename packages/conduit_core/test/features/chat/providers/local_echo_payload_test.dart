@@ -1,6 +1,7 @@
 import 'package:checks/checks.dart';
 import 'package:conduit_core/models/chat_message.dart';
 import 'package:conduit_core/models/message_voice.dart';
+import 'package:conduit_core/services/conversation_parsing.dart';
 import 'package:conduit_core/services/direct_replay_output.dart';
 import 'package:conduit_core/features/chat/providers/chat_providers.dart';
 import 'package:test/test.dart';
@@ -259,6 +260,52 @@ void main() {
       final payload = localEchoRowForMessage('chat-1', message).payload;
 
       check(payload.containsKey('meta')).isFalse();
+    });
+
+    group('embeds', () {
+      // As Open WebUI stores them: a legacy HTML string and a document's
+      // structured preview object.
+      final stored = <Object>[
+        '<div>legacy preview</div>',
+        <String, dynamic>{
+          'type': 'preview',
+          'url': '/api/v1/files/prev-1/content',
+          'name': 'Report.docx.pdf',
+          'content_type': 'application/pdf',
+        },
+      ];
+
+      // How a stored chat (or a local row rebuilt into one) is loaded.
+      ChatMessage loaded() => parseFullConversationModel({
+        'id': 'chat-1',
+        'title': 'Chat',
+        'chat': {
+          'messages': [
+            {
+              'id': 'assistant-1',
+              'role': 'assistant',
+              'content': 'Here it is',
+              'timestamp': 1700000000,
+              'embeds': stored,
+            },
+          ],
+        },
+      }).messages.single;
+
+      test('a string embed is written back as a string', () {
+        final payload = localEchoRowForMessage('chat-1', loaded()).payload;
+
+        check((payload['embeds'] as List).first).equals(stored.first);
+        check(
+          localEchoRowForMessage('chat-1', message).payload['embeds'] as List,
+        ).deepEquals(['<iframe></iframe>']);
+      });
+
+      test('a preview object survives the round trip', () {
+        final payload = localEchoRowForMessage('chat-1', loaded()).payload;
+
+        check(payload['embeds'] as List<Object?>).deepEquals(stored);
+      });
     });
   });
 }

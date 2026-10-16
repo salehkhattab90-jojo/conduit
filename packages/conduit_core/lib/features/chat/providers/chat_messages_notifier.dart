@@ -5586,8 +5586,9 @@ MessageRowData localEchoRowForMessage(String chatId, ChatMessage message) {
       if (message.output != null && message.output!.isNotEmpty)
         'output': message.output,
       'files': ?sanitizedFiles,
-      if (message.embeds != null && message.embeds!.isNotEmpty)
-        'embeds': message.embeds,
+      // In the stored shape (strings stay strings, preview objects stay
+      // objects): the outbox writes these rows back to the server as is.
+      'embeds': ?sanitizeEmbedsForWebUi(message.embeds),
       if (message.usage != null) 'usage': message.usage,
       // The OWUI web client reads `sources` in citation shape and
       // `code_executions` in snake_case; the local parser accepts both

@@ -393,6 +393,18 @@
   "@document": {
     "description": "Generic document label used in UI."
   },
+  "artifact": "Artifact",
+  "@artifact": {
+    "description": "Fallback title of a generated web artifact (an HTML page or SVG the assistant made) when nothing names it."
+  },
+  "artifactCardHint": "Artifact · tap to open",
+  "@artifactCardHint": {
+    "description": "Second line of a chat card for a generated web artifact or for a file the assistant showed from its terminal workspace."
+  },
+  "documentCardHint": "Document · tap to preview",
+  "@documentCardHint": {
+    "description": "Second line of a chat card for a document the assistant generated; tapping it opens the preview and the download."
+  },
   "backToServerSetup": "Back to Open WebUI setup",
   "@backToServerSetup": {
     "description": "Button/back label to return to server configuration flow."

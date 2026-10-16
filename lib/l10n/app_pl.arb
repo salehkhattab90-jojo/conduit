@@ -393,6 +393,9 @@
   "@document": {
     "description": "Generic document label used in UI."
   },
+  "artifact": "Artefakt",
+  "artifactCardHint": "Artefakt · dotknij, aby otworzyć",
+  "documentCardHint": "Dokument · dotknij, aby wyświetlić podgląd",
   "backToServerSetup": "Wróć do konfiguracji Open WebUI",
   "@backToServerSetup": {
     "description": "Button/back label to return to server configuration flow."

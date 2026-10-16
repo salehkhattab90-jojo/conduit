@@ -217,6 +217,9 @@
   "@document": {
     "description": "Generic document label used in UI."
   },
+  "artifact": "アーティファクト",
+  "artifactCardHint": "アーティファクト · タップして開く",
+  "documentCardHint": "ドキュメント · タップしてプレビュー",
   "backToServerSetup": "サーバー設定に戻る",
   "@backToServerSetup": {
     "description": "Button/back label to return to server configuration flow."
