@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:conduit_core/database/app_database.dart';
 
 import 'package:conduit_core/utils/debug_logger.dart';
@@ -9,20 +7,15 @@ import 'package:conduit_core/sync/chat_locks.dart';
 import 'package:conduit_core/sync/clock.dart';
 
 import 'package:conduit_core/sync/deletion_reconcile.dart'
-    show
-        ReconcileReason,
-        ReconcileResult,
-        kReconcileMinIntervalSeconds,
-        kReconcileMaxPurgeFraction,
-        kReconcileMinCandidatesForValve;
+    show ReconcileReason, ReconcileResult, kReconcileMinIntervalSeconds;
 import 'package:conduit_core/sync/sync_api_client.dart';
 
 /// §7.5 deletion reconcile for NOTES — the flat-document analogue of
 /// [DeletionReconcile]. Absence from the (single, unpaginated) note list is not
 /// a delete signal on its own; a candidate is purged ONLY after [getNoteRaw]
-/// confirms it is gone (null). Shares the chat reconcile's throttle interval,
-/// safety valve, and session-liveness guard, but under its OWN sync_meta gate
-/// key and over the note list/probe endpoints.
+/// confirms it is gone (null). Shares the chat reconcile's throttle interval
+/// and session-liveness guard, but under its OWN sync_meta gate key and over
+/// the note list/probe endpoints.
 ///
 /// Reuses [ReconcileReason]/[ReconcileResult] from the chat reconcile.
 class NoteDeletionReconcile {
@@ -118,28 +111,7 @@ class NoteDeletionReconcile {
       return const ReconcileResult(ran: true);
     }
 
-    // 3. Safety valve: an implausibly-LARGE candidate set (above an absolute
-    //    floor AND a large fraction) aborts without purging. The floor keeps a
-    //    legitimate small-library note deletion from being mistaken for a
-    //    token-expiry mass-delete and blocked forever.
-    if (candidates.length >
-        math.max(
-          kReconcileMinCandidatesForValve,
-          localServerIds.length * kReconcileMaxPurgeFraction,
-        )) {
-      DebugLogger.warning(
-        'note-reconcile-aborted-safety-valve',
-        scope: 'sync/reconcile',
-        data: {'candidates': candidates.length, 'local': localServerIds.length},
-      );
-      return ReconcileResult(
-        ran: true,
-        candidates: candidates.length,
-        aborted: true,
-      );
-    }
-
-    // 4. Probe + purge under each note's lock. getNoteRaw returns null only
+    // 3. Probe + purge under each note's lock. getNoteRaw returns null only
     //    when the note is gone (404). A 403 is the server refusing this account
     //    the note, which neither ends the session nor deletes the note: the
     //    account's cached read evidence is retired and the run carries on. Any

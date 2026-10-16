@@ -292,8 +292,7 @@ void main() {
     test(
       'a 401 NOT_FOUND (vendored normal-user not-ours) also counts as gone',
       () async {
-        // A surviving server chat keeps the candidate fraction under the safety
-        // valve threshold.
+        // Surviving server chats alongside the one deleted chat.
         for (final id in ['s1', 's2', 's3']) {
           server.seedChat(
             id: id,
@@ -314,8 +313,7 @@ void main() {
 
     test('a session that dies mid-run (liveness ping fails) ABORTS without '
         'purging any candidate or advancing the throttle', () async {
-      // Three live server chats keep the candidate fraction under the safety
-      // valve; one ghost would otherwise be purged.
+      // Three live server chats; one ghost would otherwise be purged.
       for (final id in ['s1', 's2', 's3']) {
         server.seedChat(
           id: id,
@@ -539,35 +537,33 @@ void main() {
     });
   });
 
-  group('safety valve against a token-expiry mass-delete', () {
-    test('aborts (purges nothing) when candidates exceed the floor AND half '
-        'the local set', () async {
-      // 8 local server chats, NONE on the server list -> all 8 candidates,
-      // above both the absolute floor (5) and 50% -> abort.
+  group('bulk server-side delete (no candidate-fraction valve)', () {
+    test('a server-side delete-all purges every chat; the liveness preflight '
+        'and per-chat probes are the guard', () async {
+      // 8 local server chats, NONE on the server list -> all 8 candidates.
+      // A fraction valve used to abort this forever, so a "delete all" on the
+      // server never cleared the app. Each candidate is still probed and only
+      // purged once the server confirms it gone.
       final ids = List.generate(8, (i) => 'c$i');
       for (final id in ids) {
         await seedServerChat(db, id: id);
-        client.probe401GoneIds.add(id); // would be "gone" if probed
+        client.probe401GoneIds.add(id);
       }
 
       final result = await reconcile.run(ReconcileReason.manualRefresh);
-      check(result.aborted).isTrue();
-      check(result.purged).equals(0);
-      // Nothing probed (aborted before the probe loop).
-      check(client.probeChatExistsCalls).equals(0);
+      check(result.aborted).isFalse();
+      check(result.candidates).equals(8);
+      check(result.purged).equals(8);
+      check(client.probeChatExistsCalls).equals(8);
       for (final id in ids) {
-        check(await db.chatsDao.getChat(id)).isNotNull();
+        check(await db.chatsDao.getChat(id)).isNull();
       }
-      // Abort does NOT advance the throttle (retried, not suppressed).
-      check(await db.syncMetaDao.getLastFullReconcileAt()).equals(0);
     });
 
     test(
-      'a SMALL library is NOT blocked: a single genuinely-deleted chat is '
-      'purged (regression — the fraction valve must not trip below the floor)',
+      'a SMALL library: a single genuinely-deleted chat is purged',
       () async {
-        // The user has one server chat; it was deleted on the server. Old bug:
-        // 1 > 1*0.5 tripped the valve and the phantom row never purged.
+        // The user has one server chat; it was deleted on the server.
         await seedServerChat(db, id: 'only');
         client.nullChatIds.add('only'); // probe -> gone
 

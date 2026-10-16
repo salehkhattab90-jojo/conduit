@@ -1,7 +1,7 @@
 /// CDT-RFC-001 §7.5 NOTE deletion reconcile: a note absent from the server list
 /// is purged ONLY after a probe confirms it gone; pagination/transient/feature
-/// flaps never false-delete; a token-expiry storm trips the safety valve or the
-/// session-liveness guard. Mirrors the chat reconcile contract over notes.
+/// flaps never false-delete; a token-expiry storm trips the session-liveness
+/// guard. Mirrors the chat reconcile contract over notes.
 library;
 
 import 'dart:async';
@@ -212,10 +212,10 @@ void main() {
     check(await db.notesDao.getNote('flaky')).isNotNull();
   });
 
-  test('safety valve aborts when candidates exceed the floor AND half the set', () async {
+  test('a server-side delete-all purges every note (no fraction valve)', () async {
     final client = FakeSyncApiClient(server);
-    // 8 local notes, all absent from the server → above the absolute floor (5)
-    // and 50% → abort without purging.
+    // 8 local notes, all absent from the server and each confirmed gone by its
+    // probe → all purged. A fraction valve used to abort this forever.
     final ids = List.generate(8, (i) => 'n$i');
     for (final id in ids) {
       await seedLocalOnly(id);
@@ -224,13 +224,14 @@ void main() {
 
     final result = await reconcileWith(client)
         .run(ReconcileReason.manualRefresh);
-    check(result.aborted).isTrue();
-    check(result.purged).equals(0);
-    check(await db.notesDao.getNote('n0')).isNotNull();
+    check(result.aborted).isFalse();
+    check(result.purged).equals(8);
+    for (final id in ids) {
+      check(await db.notesDao.getNote(id)).isNull();
+    }
   });
 
-  test('a SMALL library is NOT blocked: a single deleted note is purged '
-      '(regression — fraction valve must not trip below the floor)', () async {
+  test('a SMALL library: a single deleted note is purged', () async {
     final client = FakeSyncApiClient(server);
     await seedLocalOnly('only');
     client.nullNoteIds.add('only'); // probe -> gone
