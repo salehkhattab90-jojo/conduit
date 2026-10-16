@@ -2,10 +2,9 @@ import 'package:pigeon/pigeon.dart';
 
 @ConfigurePigeon(
   PigeonOptions(
-    dartOut: 'lib/core/platform/conduit_platform_apis.g.dart',
+    dartOut: 'lib/platform/conduit_platform_apis.g.dart',
     dartOptions: DartOptions(),
-    kotlinOut:
-        'android/app/src/main/kotlin/app/cogwheel/conduit/ConduitPlatformApis.g.kt',
+    kotlinOut: 'android/app/src/main/kotlin/app/cogwheel/conduit/ConduitPlatformApis.g.kt',
     kotlinOptions: KotlinOptions(package: 'app.cogwheel.conduit'),
     swiftOut: 'ios/Runner/ConduitPlatformApis.g.swift',
     swiftOptions: SwiftOptions(),
@@ -15,6 +14,19 @@ import 'package:pigeon/pigeon.dart';
 enum PlatformBackgroundStreamKind { chat, voice }
 
 enum PlatformNativePasteKind { text, images, unsupported }
+
+enum PlatformPccAvailability { available, unavailable, unsupported }
+
+enum PlatformAppleModel { onDevice, privateCloudCompute }
+
+enum PlatformPccQuotaStatus {
+  belowLimit,
+  approachingLimit,
+  limitReached,
+  unknown,
+}
+
+enum PlatformPccEventKind { content, usage, fallback, error, done }
 
 enum PlatformNativeSheetItemKind {
   navigation,
@@ -119,34 +131,56 @@ class PlatformBackgroundTaskExtendedEvent {
 }
 
 class PlatformAppIntentImagePayload {
-  PlatformAppIntentImagePayload({required this.filename, required this.bytes});
+  PlatformAppIntentImagePayload({
+    required this.filename,
+    required this.filePath,
+  });
 
   String filename;
-  Uint8List bytes;
+  String filePath;
 }
 
 class PlatformAppIntentResponse {
-  PlatformAppIntentResponse({required this.success, this.value, this.error});
+  PlatformAppIntentResponse({
+    required this.success,
+    this.value,
+    this.error,
+    this.ownedFilePath,
+  });
 
   bool success;
   String? value;
   String? error;
+  String? ownedFilePath;
 }
 
 class PlatformNativePasteImageItem {
-  PlatformNativePasteImageItem({required this.mimeType, required this.data});
+  PlatformNativePasteImageItem({
+    required this.mimeType,
+    required this.filePath,
+  });
 
   String mimeType;
-  Uint8List data;
+  String filePath;
 }
 
 class PlatformNativePastePayload {
-  PlatformNativePastePayload({required this.kind, this.text, this.items});
+  PlatformNativePastePayload({
+    required this.kind,
+    this.text,
+    this.items,
+    this.deliveryId,
+  });
 
   PlatformNativePasteKind kind;
   String? text;
   List<PlatformNativePasteImageItem>? items;
+  String? deliveryId;
 }
+
+/// Whether a keyboard attachment row turns an option on and off, or runs a
+/// command (attaching a file, opening a sheet).
+enum PlatformKeyboardAttachmentActionKind { toggle, command }
 
 class PlatformKeyboardAttachmentActionConfig {
   PlatformKeyboardAttachmentActionConfig({
@@ -155,6 +189,9 @@ class PlatformKeyboardAttachmentActionConfig {
     this.subtitle,
     required this.sfSymbol,
     required this.section,
+    this.sectionTitle,
+    required this.kind,
+    this.stateLabel,
     required this.enabled,
     required this.selected,
     required this.dismissesKeyboard,
@@ -165,6 +202,13 @@ class PlatformKeyboardAttachmentActionConfig {
   String? subtitle;
   String sfSymbol;
   String section;
+
+  /// Localized heading of [section], or null when it shows none.
+  String? sectionTitle;
+  PlatformKeyboardAttachmentActionKind kind;
+
+  /// Localized on/off state a toggle row reads to VoiceOver.
+  String? stateLabel;
   bool enabled;
   bool selected;
   bool dismissesKeyboard;
@@ -220,6 +264,27 @@ class PlatformDropdownOption {
   bool destructive;
 }
 
+class PlatformImageViewerItem {
+  PlatformImageViewerItem({required this.path, this.title});
+
+  String path;
+  String? title;
+}
+
+class PlatformImageViewerRequest {
+  PlatformImageViewerRequest({
+    required this.items,
+    required this.initialIndex,
+    this.sourceRect,
+  });
+
+  List<PlatformImageViewerItem> items;
+  int initialIndex;
+
+  /// Global logical rect of the tapped thumbnail, used for the zoom transition.
+  PlatformRect? sourceRect;
+}
+
 class PlatformDropdownRequest {
   PlatformDropdownRequest({
     this.title,
@@ -260,13 +325,49 @@ class PlatformNativeSheetOption {
   bool hasMoreSiblings;
 }
 
+class PlatformNativeSheetTheme {
+  PlatformNativeSheetTheme({
+    required this.isDark,
+    required this.backgroundArgb,
+    required this.surfaceArgb,
+    required this.elevatedSurfaceArgb,
+    required this.inputArgb,
+    required this.foregroundArgb,
+    required this.secondaryForegroundArgb,
+    required this.iconArgb,
+    required this.borderArgb,
+    required this.accentArgb,
+    required this.onAccentArgb,
+    required this.destructiveArgb,
+  });
+
+  bool isDark;
+  int backgroundArgb;
+  int surfaceArgb;
+  int elevatedSurfaceArgb;
+  int inputArgb;
+  int foregroundArgb;
+  int secondaryForegroundArgb;
+  int iconArgb;
+  int borderArgb;
+  int accentArgb;
+  int onAccentArgb;
+  int destructiveArgb;
+}
+
 class PlatformNativeSheetItem {
   PlatformNativeSheetItem({
     required this.id,
     required this.title,
     this.subtitle,
     required this.sfSymbol,
+    this.iconAsset,
+    this.iconSize,
+    this.showsDisclosure,
     required this.destructive,
+    required this.dismissOnSelect,
+    this.actionId,
+    this.actionValue,
     this.url,
     required this.kind,
     this.value,
@@ -283,13 +384,24 @@ class PlatformNativeSheetItem {
     this.min,
     this.max,
     this.divisions,
+    this.avatarName,
+    this.avatarBytes,
+    this.checked,
+    this.accent,
+    this.usesProfileAvatar,
   });
 
   String id;
   String title;
   String? subtitle;
   String sfSymbol;
+  String? iconAsset;
+  double? iconSize;
+  bool? showsDisclosure;
   bool destructive;
+  bool dismissOnSelect;
+  String? actionId;
+  Object? actionValue;
   String? url;
   PlatformNativeSheetItemKind kind;
   Object? value;
@@ -306,6 +418,21 @@ class PlatformNativeSheetItem {
   double? min;
   double? max;
   int? divisions;
+
+  /// Shown as a round picture -- [avatarBytes], else this name's initials --
+  /// in place of the symbol.
+  String? avatarName;
+  Uint8List? avatarBytes;
+
+  /// Marks the row in use with a check.
+  bool? checked;
+
+  /// Draws the row in the accent color, as an action.
+  bool? accent;
+
+  /// Draws the row as the sheet's profile summary: its large avatar beside
+  /// the row's own title and subtitle.
+  bool? usesProfileAvatar;
 }
 
 class PlatformNativeSheetLink {
@@ -385,6 +512,7 @@ class PlatformNativeProfileSheetUser {
     required this.initials,
     this.avatarUrl,
     this.avatarBytes,
+    required this.avatarIsTemplate,
     required this.avatarHeaders,
     this.bio,
     this.gender,
@@ -397,6 +525,7 @@ class PlatformNativeProfileSheetUser {
   String initials;
   String? avatarUrl;
   Uint8List? avatarBytes;
+  bool avatarIsTemplate;
   Map<String, String> avatarHeaders;
   String? bio;
   String? gender;
@@ -414,6 +543,8 @@ class PlatformNativeSheetDetail {
     this.confirmActionId,
     this.confirmActionLabel,
     this.maxHeightFraction,
+    this.trailingActionId,
+    this.trailingActionSfSymbol,
   });
 
   String id;
@@ -424,6 +555,10 @@ class PlatformNativeSheetDetail {
   String? confirmActionId;
   String? confirmActionLabel;
   double? maxHeightFraction;
+
+  /// A bar button that closes the sheet and then sends this action.
+  String? trailingActionId;
+  String? trailingActionSfSymbol;
 }
 
 class PlatformNativeProfileSheetConfig {
@@ -476,22 +611,44 @@ class PlatformNativeSheetModelOption {
 
 class PlatformNativeSheetModelSelectorRequest {
   PlatformNativeSheetModelSelectorRequest({
+    required this.presentationId,
     required this.title,
     this.selectedModelId,
     required this.models,
     required this.pinnedModelIds,
+    required this.featuredModelIds,
     required this.allowsPinning,
     this.pinTitle,
     this.unpinTitle,
+    required this.moreModelsTitle,
+    required this.searchModelsTitle,
+    required this.reasoningEffortTitle,
+    required this.reasoningEffortValue,
+    required this.reasoningEffortOptions,
+    required this.reasoningEffortLabels,
+    required this.allowsCustomReasoningEffort,
+    required this.customReasoningEffortTitle,
+    required this.customReasoningEffortHint,
   });
 
+  String presentationId;
   String title;
   String? selectedModelId;
   List<PlatformNativeSheetModelOption> models;
   List<String> pinnedModelIds;
+  List<String> featuredModelIds;
   bool allowsPinning;
   String? pinTitle;
   String? unpinTitle;
+  String moreModelsTitle;
+  String searchModelsTitle;
+  String reasoningEffortTitle;
+  String reasoningEffortValue;
+  List<String> reasoningEffortOptions;
+  Map<String, String> reasoningEffortLabels;
+  bool allowsCustomReasoningEffort;
+  String customReasoningEffortTitle;
+  String customReasoningEffortHint;
 }
 
 class PlatformNativeSheetOptionsSelectorRequest {
@@ -562,15 +719,19 @@ class PlatformNativeSheetApplyDetailPatchRequest {
   PlatformNativeSheetApplyDetailPatchRequest({
     required this.detailId,
     required this.items,
+    required this.sections,
     this.title,
     this.subtitle,
+    required this.clearSubtitle,
     this.detailSheets,
   });
 
   String detailId;
   List<PlatformNativeSheetItem> items;
+  List<PlatformNativeSheetSection> sections;
   String? title;
   String? subtitle;
+  bool clearSubtitle;
   List<PlatformNativeSheetDetail>? detailSheets;
 }
 
@@ -591,6 +752,12 @@ class PlatformNativeSheetModelPinToggledEvent {
   PlatformNativeSheetModelPinToggledEvent({required this.modelId});
 
   String modelId;
+}
+
+class PlatformNativeSheetReasoningEffortChangedEvent {
+  PlatformNativeSheetReasoningEffortChangedEvent({required this.value});
+
+  String value;
 }
 
 class PlatformNativeEditProfileCommittedEvent {
@@ -617,6 +784,134 @@ class PlatformNativeSheetActionResult {
 
   String actionId;
   Map<String, Object?> values;
+}
+
+class PlatformPccStatus {
+  PlatformPccStatus({
+    required this.availability,
+    required this.quotaStatus,
+    required this.quotaLimitReached,
+    required this.canIncreaseQuota,
+    this.message,
+    this.quotaResetAtMilliseconds,
+    this.contextSize,
+    this.supportsCurrentLocale,
+  });
+
+  PlatformPccAvailability availability;
+  PlatformPccQuotaStatus quotaStatus;
+  bool quotaLimitReached;
+  bool canIncreaseQuota;
+  String? message;
+  int? quotaResetAtMilliseconds;
+  int? contextSize;
+  bool? supportsCurrentLocale;
+}
+
+class PlatformPccImage {
+  PlatformPccImage({required this.mimeType, required this.bytes});
+
+  String mimeType;
+  Uint8List bytes;
+}
+
+class PlatformPccMessage {
+  PlatformPccMessage({
+    required this.role,
+    required this.content,
+    required this.images,
+  });
+
+  String role;
+  String content;
+  List<PlatformPccImage> images;
+}
+
+class PlatformPccToolDefinition {
+  PlatformPccToolDefinition({
+    required this.name,
+    required this.toolDescription,
+    required this.inputSchemaJson,
+  });
+
+  String name;
+  String toolDescription;
+  String inputSchemaJson;
+}
+
+class PlatformPccToolCall {
+  PlatformPccToolCall({
+    required this.runId,
+    required this.callId,
+    required this.name,
+    required this.argumentsJson,
+  });
+
+  String runId;
+  String callId;
+  String name;
+  String argumentsJson;
+}
+
+class PlatformPccToolResult {
+  PlatformPccToolResult({required this.content, required this.cancelled});
+
+  String content;
+  bool cancelled;
+}
+
+class PlatformPccCompletionRequest {
+  PlatformPccCompletionRequest({
+    required this.runId,
+    required this.model,
+    required this.messages,
+    required this.tools,
+    required this.allowOnDeviceFallback,
+    this.reasoningLevel,
+    this.temperature,
+    this.maximumResponseTokens,
+    this.topP,
+    this.topK,
+    this.seed,
+    this.greedySampling,
+    this.responseSchemaName,
+    this.responseSchemaJson,
+  });
+
+  String runId;
+  PlatformAppleModel model;
+  List<PlatformPccMessage> messages;
+  List<PlatformPccToolDefinition> tools;
+  bool allowOnDeviceFallback;
+  String? reasoningLevel;
+  double? temperature;
+  int? maximumResponseTokens;
+  double? topP;
+  int? topK;
+  int? seed;
+  bool? greedySampling;
+  String? responseSchemaName;
+  String? responseSchemaJson;
+}
+
+class PlatformPccStreamEvent {
+  PlatformPccStreamEvent({
+    required this.runId,
+    required this.kind,
+    this.content,
+    this.inputTokenCount,
+    this.outputTokenCount,
+    this.reasoningTokenCount,
+    this.totalTokenCount,
+  });
+
+  String runId;
+  PlatformPccEventKind kind;
+  String? content;
+  int? inputTokenCount;
+  int? outputTokenCount;
+  int? reasoningTokenCount;
+  int? totalTokenCount;
 }
 
 @HostApi()
@@ -649,29 +944,39 @@ abstract class BackgroundStreamingFlutterApi {
 @FlutterApi()
 abstract class AppIntentFlutterApi {
   @async
-  PlatformAppIntentResponse askChat(String? prompt);
+  PlatformAppIntentResponse askChat(String invocationId, String? prompt);
 
   @async
-  PlatformAppIntentResponse startVoiceCall();
+  PlatformAppIntentResponse startVoiceCall(String invocationId);
 
   @async
-  PlatformAppIntentResponse sendText(String text);
+  PlatformAppIntentResponse sendText(String invocationId, String text);
 
   @async
-  PlatformAppIntentResponse sendUrl(String url);
+  PlatformAppIntentResponse sendUrl(String invocationId, String url);
 
   @async
-  PlatformAppIntentResponse sendImage(PlatformAppIntentImagePayload payload);
+  PlatformAppIntentResponse sendImage(
+    String invocationId,
+    PlatformAppIntentImagePayload payload,
+  );
+}
+
+@HostApi()
+abstract class AppIntentHostApi {
+  void setReady(bool ready);
 }
 
 @HostApi()
 abstract class NativePasteHostApi {
+  @async
   bool requestPaste();
 }
 
 @FlutterApi()
 abstract class NativePasteFlutterApi {
-  void onPaste(PlatformNativePastePayload payload);
+  @async
+  bool onPaste(PlatformNativePastePayload payload);
 }
 
 @HostApi()
@@ -693,15 +998,48 @@ abstract class NativeDropdownHostApi {
   String? show(PlatformDropdownRequest request);
 }
 
+/// iOS only. Presents local image files in Quick Look.
+@HostApi()
+abstract class NativeImageViewerHostApi {
+  /// Completes when the viewer is dismissed. Fails when it cannot be shown.
+  @async
+  void present(PlatformImageViewerRequest request);
+}
+
+/// Android only. Writes images to the shared Pictures collection.
+@HostApi()
+abstract class ImageGalleryHostApi {
+  bool canSaveImages();
+
+  @async
+  void saveImage(String path, String mimeType, String displayName);
+}
+
 @HostApi()
 abstract class NativeSheetHostApi {
+  void setTheme(PlatformNativeSheetTheme theme);
+
   @async
   bool presentProfileMenu(PlatformNativeProfileSheetConfig config);
 
   bool dismiss();
 
+  bool requestAppStoreReview();
+
   @async
   String? presentModelSelector(PlatformNativeSheetModelSelectorRequest request);
+
+  void updateModelSelectorModels(
+    String presentationId,
+    List<PlatformNativeSheetModelOption> models,
+  );
+
+  void updateModelSelectorReasoningEffort(
+    String presentationId,
+    String value,
+    List<String> options,
+    bool allowsCustom,
+  );
 
   @async
   String? presentOptionsSelector(
@@ -731,5 +1069,28 @@ abstract class NativeSheetFlutterApi {
   void onControlChanged(PlatformNativeSheetControlChangedEvent event);
   void onDetailAppeared(PlatformNativeSheetDetailAppearedEvent event);
   void onModelPinToggled(PlatformNativeSheetModelPinToggledEvent event);
+  void onReasoningEffortChanged(
+    PlatformNativeSheetReasoningEffortChangedEvent event,
+  );
   void commitEditProfile(PlatformNativeEditProfileCommittedEvent event);
+}
+
+@HostApi()
+abstract class PccHostApi {
+  @async
+  PlatformPccStatus getStatus(PlatformAppleModel model);
+
+  @async
+  bool showQuotaIncreaseSuggestion();
+
+  void start(PlatformPccCompletionRequest request);
+  void cancel(String runId);
+}
+
+@FlutterApi()
+abstract class PccFlutterApi {
+  void onEvent(PlatformPccStreamEvent event);
+
+  @async
+  PlatformPccToolResult onToolCall(PlatformPccToolCall call);
 }

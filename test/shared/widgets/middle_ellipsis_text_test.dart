@@ -1,5 +1,5 @@
 import 'package:conduit/shared/widgets/middle_ellipsis_text.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -46,18 +46,6 @@ void main() {
       );
 
       expect(tester.takeException(), isNull);
-      expect(find.byType(MiddleEllipsisText), findsOneWidget);
-    });
-
-    testWidgets('widget can be found by type', (tester) async {
-      await tester.pumpWidget(
-        const MaterialApp(
-          home: Scaffold(
-            body: SizedBox(width: 300, child: MiddleEllipsisText('Test')),
-          ),
-        ),
-      );
-
       expect(find.byType(MiddleEllipsisText), findsOneWidget);
     });
 

@@ -1,10 +1,18 @@
 {
   "@@locale": "ru",
   "appTitle": "Conduit",
+  "serverIncompatibleTitle": "Сервер не поддерживается",
+  "serverIncompatibleMessage": "На этом сервере установлена версия Open WebUI {serverVersion}, которая новее, чем поддерживает это приложение (до {maxVersion}).",
+  "serverIncompatibleResolution": "Чтобы продолжить, понизьте версию сервера до {maxVersion} или более ранней либо дождитесь обновления приложения с поддержкой новой версии.",
+  "serverIncompatibleConnectBlocked": "Этот сервер новее, чем поддерживает это приложение (до {maxVersion}).",
+  "serverIncompatibleRecheck": "Проверить сервер",
+  "serverIncompatibleSwitchServer": "Выбрать другой сервер",
+  "serverIncompatibleStillUnsupported": "Этот сервер по-прежнему новее, чем поддерживает это приложение.",
   "retry": "Повторить",
   "back": "Назад",
   "you": "Вы",
   "loadingProfile": "Загрузка профиля...",
+  "unableToLoadProfile": "Не удалось загрузить профиль.",
   "pleaseCheckConnection": "Пожалуйста, проверьте соединение и повторите попытку",
   "connectionIssueTitle": "Не удается подключиться к серверу",
   "@connectionIssueTitle": {
@@ -15,8 +23,29 @@
     "description": "Подзаголовок с доступными действиями при недоступности сервера"
   },
   "account": "Аккаунт",
+  "supportConduit": "Поддержать Conduit",
+  "supportConduitSubtitle": "Сохраните независимость Conduit, финансируя разработку.",
+  "githubSponsorsTitle": "GitHub Sponsors",
+  "githubSponsorsSubtitle": "Станьте регулярным спонсором для финансирования дорожной карты.",
+  "buyMeACoffeeTitle": "Buy Me a Coffee",
+  "buyMeACoffeeSubtitle": "Сделайте разовое пожертвование в знак благодарности.",
+  "releaseNotesTitle": "Что нового",
+  "releaseNotesAnnouncementTitle": "Что нового в {version}",
+  "@releaseNotesAnnouncementTitle": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
+  },
+  "releaseNotesLearnMore": "Подробнее",
+  "releaseNotesReviewButton": "Оценить Conduit",
+  "releaseNotesDoneButton": "Готово",
   "signOut": "Выйти",
   "endYourSession": "Завершить сеанс",
+  "signOutOptionsDescription": "При выходе с этого устройства удаляются настройки приложения и подключения Direct и Hermes. Сохранённые беседы и данные на сервере не изменяются.",
+  "keepServerDetails": "Сохранить сведения о сервере",
+  "keepServerDetailsDescription": "Адрес сервера и нечувствительные настройки подключения; токены и заголовки Cookie удаляются",
   "defaultModel": "Модель по умолчанию",
   "autoSelect": "По умолчанию сервера",
   "loadingModels": "Загрузка моделей...",
@@ -36,6 +65,9 @@
   "files": "Файлы",
   "takePhoto": "Сделать фото",
   "document": "Документ",
+  "artifact": "Артефакт",
+  "artifactCardHint": "Артефакт · нажмите, чтобы открыть",
+  "documentCardHint": "Документ · нажмите для предпросмотра",
   "backToServerSetup": "Вернуться к настройке сервера",
   "connectedToServer": "Подключено к серверу",
   "signIn": "Войти",
@@ -43,11 +75,11 @@
   "credentials": "Учетные данные",
   "apiKey": "API-ключ",
   "token": "Токен",
+  "jwt": "JWT",
   "usernameOrEmail": "Имя пользователя или email",
   "password": "Пароль",
   "signInWithToken": "Войти с помощью токена",
   "connectToServer": "Подключиться к серверу",
-  "enterServerAddress": "Введите адрес вашего сервера Open-WebUI для начала",
   "serverUrl": "URL сервера",
   "serverUrlHint": "https://your-server.com",
   "enterServerUrlSemantic": "Введите URL или IP-адрес вашего сервера",
@@ -76,6 +108,35 @@
   "useHttpOrHttpsOnly": "Используйте только http:// или https://.",
   "loginFailed": "Ошибка входа",
   "invalidCredentials": "Неверное имя пользователя или пароль. Пожалуйста, попробуйте еще раз.",
+  "signInAccountPendingApproval": "Ваша учётная запись ожидает одобрения администратора. Повторите попытку после одобрения.",
+  "signInTwoStepVerificationRequired": "Для этой учётной записи включена двухэтапная проверка. Войдите снова и введите код из приложения-аутентификатора.",
+  "twoStepVerifyTitle": "Подтвердите вход",
+  "twoStepEnrollTitle": "Настройте аутентификатор",
+  "twoStepRecoverTitle": "Восстановите аутентификатор",
+  "twoStepVerifyDescription": "Введите шестизначный код из приложения-аутентификатора.",
+  "twoStepRecoveryCodeDescription": "Введите один из сохранённых кодов восстановления.",
+  "twoStepEnrollDescription": "Добавьте эту учётную запись в приложение-аутентификатор и введите показанный шестизначный код.",
+  "twoStepRecoverDescription": "Администратор сбросил двухэтапную проверку для этой учётной записи. Введите выданный им токен восстановления.",
+  "twoStepCodeLabel": "Код аутентификатора",
+  "twoStepRecoveryCodeLabel": "Код восстановления",
+  "twoStepResetTokenLabel": "Токен восстановления",
+  "twoStepUseRecoveryCode": "Использовать код восстановления",
+  "twoStepUseAuthenticatorCode": "Использовать код аутентификатора",
+  "twoStepBackToSignIn": "Вернуться ко входу",
+  "twoStepOpenAuthenticator": "Добавить в приложение-аутентификатор",
+  "twoStepSetupKeyLabel": "Ключ настройки",
+  "twoStepCopySetupKey": "Скопировать ключ настройки",
+  "twoStepQrCodeLabel": "QR-код для приложения-аутентификатора",
+  "twoStepSetupLoading": "Подготовка аутентификатора…",
+  "twoStepSetupFailed": "Не удалось загрузить ключ настройки.",
+  "twoStepNoAuthenticatorApp": "Ни одно приложение не смогло его добавить. Скопируйте ключ настройки в приложение-аутентификатор.",
+  "twoStepRecoveryCodesTitle": "Сохраните коды восстановления",
+  "twoStepRecoveryCodesDescription": "Каждый код позволяет войти один раз, если вы потеряете аутентификатор. Храните их в надёжном месте: они больше не будут показаны.",
+  "twoStepCopyRecoveryCodes": "Скопировать коды восстановления",
+  "twoStepInvalidCode": "Этот код не подошёл. Проверьте его и попробуйте ещё раз.",
+  "twoStepExpired": "Время на этот шаг истекло. Вернитесь ко входу и начните заново.",
+  "twoStepTooManyAttempts": "Слишком много попыток. Подождите несколько минут и войдите снова.",
+  "twoStepFailed": "Не удалось проверить код. Попробуйте ещё раз.",
   "serverRedirectingHttps": "Сервер перенаправляет запросы. Проверьте настройки HTTPS вашего сервера.",
   "unableToConnectServer": "Не удается подключиться к серверу. Пожалуйста, проверьте соединение.",
   "requestTimedOut": "Время ожидания запроса истекло. Пожалуйста, попробуйте еще раз.",
@@ -89,7 +150,7 @@
   "voiceInput": "Голосовой ввод",
   "voice": "Голос",
   "voiceStatusListening": "Слушаю...",
-  "voiceStatusRecording": "Запись...",
+  "voiceStatusRecording": "Идет запись…",
   "voiceHoldToTalk": "Удерживайте для разговора",
   "voiceAutoSend": "Автоотправка",
   "voiceTranscript": "Транскрипция",
@@ -132,7 +193,7 @@
   "save": "Сохранить",
   "chooseModel": "Выбрать модель",
   "reviewerMode": "РЕЖИМ РЕЦЕНЗЕНТА",
-  "selectLanguage": "Выбрать язык",
+  "selectLanguage": "Выбор языка",
   "newFolder": "Новая папка",
   "folderName": "Имя папки",
   "newChat": "Новый чат",
@@ -172,6 +233,7 @@
   "japanese": "日本語",
   "czech": "Čeština",
   "slovak": "Slovenčina",
+  "polish": "Польский",
   "deleteMessagesTitle": "Удалить сообщения",
   "deleteMessagesMessage": "Удалить {count, plural, one{{count} сообщение} few{{count} сообщения} other{{count} сообщений}}?",
   "@deleteMessagesMessage": {
@@ -194,7 +256,7 @@
   "deleteFolderTitle": "Удалить папку",
   "deleteFolderMessage": "Эта папка и ее ссылки будут удалены.",
   "failedToDeleteFolder": "Не удалось удалить папку",
-  "aboutApp": "О",
+  "aboutApp": "О проекте",
   "aboutAppSubtitle": "Информация и ссылки Conduit",
   "web": "Веб",
   "imageGen": "Генерация изображений",
@@ -216,9 +278,9 @@
   "usernameOrEmailHint": "Введите ваше имя пользователя или email",
   "passwordHint": "Введите ваш пароль",
   "enterToken": "Введите ваш JWT-токен",
-  "tokenHint": "Получите JWT-токен в настройках OpenWebUI. API-ключи (sk-...) не поддерживаются для потоковой передачи.",
+  "tokenHint": "Получите JWT-токен в настройках Open WebUI. API-ключи (sk-...) не поддерживаются для потоковой передачи.",
   "apiKeyNotSupported": "API-ключи (sk-...) не поддерживаются. Пожалуйста, используйте JWT-токен.",
-  "apiKeyNoLongerSupported": "Вы были выведены из системы, так как API-ключи больше не поддерживаются. Пожалуйста, войдите с JWT-токеном из настроек OpenWebUI.",
+  "apiKeyNoLongerSupported": "Вы были выведены из системы, так как API-ключи больше не поддерживаются. Пожалуйста, войдите с JWT-токеном из настроек Open WebUI.",
   "tokenTooShort": "Токен слишком короткий",
   "signingIn": "Вход...",
   "advancedSettings": "Расширенные настройки",
@@ -245,6 +307,7 @@
   "mutualTlsPrivateKeyPemRequired": "Выбранный файл закрытого ключа должен содержать закрытый ключ PEM.",
   "mutualTlsFileReadFailed": "Не удалось прочитать выбранный файл mTLS.",
   "mutualTlsHandshakeFailed": "Сервер отклонил учетные данные mTLS. Убедитесь, что сертификат, закрытый ключ и пароль указаны верно.",
+  "mutualTlsConnectionClosed": "Сервер закрыл соединение, не ответив. Если он требует клиентский сертификат, убедитесь, что сертификат, закрытый ключ и пароль указаны верно.",
   "headerNameTooLong": "Имя заголовка слишком длинное (максимум 64 символа)",
   "headerNameInvalidChars": "Недопустимое имя заголовка. Используйте только буквы, цифры и эти символы: !#$&-^_`|~",
   "headerNameReserved": "Невозможно переопределить зарезервированный заголовок «{key}»",
@@ -313,7 +376,7 @@
   "analyzing": "Анализирую…",
   "analyzed": "Проанализировано",
   "appCustomization": "Настройка",
-  "appCustomizationSubtitle": "Тема, язык, голос и quickpills",
+  "appCustomizationSubtitle": "Тема, язык, голос и quick actions",
   "quickActionsDescription": "Быстрые клавиши в чате",
   "chatSettings": "Чат",
   "sendOnEnter": "Отправка по Enter",
@@ -330,22 +393,58 @@
   "sttEngineDevice": "На устройстве",
   "sttEngineServer": "Сервер",
   "sttEngineDeviceDescription": "Оставляет звук на этом устройстве. Голосовой ввод не работает, если устройство не поддерживает распознавание речи.",
-  "sttEngineServerDescription": "Всегда отправляет записи на сервер OpenWebUI для транскрибации.",
+  "sttEngineServerDescription": "Отправляет записи для транскрибации на сервер чата: Open WebUI, Hermes или голосовой провайдер для чатов Direct и Apple.",
   "sttDeviceUnavailableWarning": "Распознавание речи на устройстве недоступно на этом устройстве.",
   "sttServerUnavailableWarning": "Подключитесь к серверу с включённой транскрибацией, чтобы использовать эту опцию.",
   "sttSilenceDuration": "Длительность тишины",
   "sttSilenceDurationDescription": "Время ожидания после тишины перед автоматической остановкой записи",
   "sttTranscriptionLanguage": "Язык транскрипции",
-  "sttTranscriptionLanguageDescription": "Авто использует язык этого устройства; либо введите код, например pl.",
+  "sttTranscriptionLanguageDescription": "Авто использует язык этого устройства; либо введите код, например en.",
   "sttTranscriptionLanguageAuto": "Авто",
   "sttTranscriptionLanguageCustom": "Пользовательский код языка",
-  "sttTranscriptionLanguagePlaceholder": "Код ISO-639-1, например pl",
-  "sttTranscriptionLanguageInvalid": "Используйте двухбуквенный код языка, например pl.",
+  "sttTranscriptionLanguagePlaceholder": "Код ISO-639-1, например en",
+  "sttTranscriptionLanguageInvalid": "Используйте двухбуквенный код языка, например en.",
+  "sttDeviceLanguage": "Язык распознавания",
+  "sttDeviceLanguageDescription": "Выберите язык для распознавания речи на устройстве.",
+  "sttDeviceLanguageAutoDescription": "Автоматически переключаться между установленными языками, если поддерживается.",
+  "sttDeviceLanguageSystemDescription": "Использовать текущий системный язык Android.",
+  "sttDeviceLanguagePlaceholder": "Код BCP-47, например pl-PL",
+  "sttDeviceLanguageInvalid": "Введите допустимый код локали, например pl-PL.",
   "ttsSettings": "Преобразование текста в речь",
   "ttsEngineDeviceDescription": "Оставляет синтез на этом устройстве. Воспроизведение голоса не работает, если устройство не поддерживает синтез речи.",
-  "ttsEngineServerDescription": "Всегда запрашивает аудио у вашего сервера OpenWebUI.",
+  "ttsEngineServerDescription": "Создаёт речь на сервере чата: Open WebUI, Hermes или голосовом провайдере для чатов Direct и Apple.",
   "ttsDeviceUnavailableWarning": "Синтез речи на устройстве недоступен на этом устройстве.",
   "ttsServerUnavailableWarning": "Подключитесь к серверу с включённым синтезом речи, чтобы использовать эту опцию.",
+  "voiceProviderTitle": "Голосовой провайдер",
+  "voiceProviderDescription": "Чаты Direct и Apple используют это подключение, когда для «Речь в текст» или «Преобразование текста в речь» выбран «Сервер».",
+  "voiceProviderConnection": "Подключение",
+  "voiceProviderNone": "Нет",
+  "voiceProviderNoConnections": "Добавьте OpenAI-совместимое подключение Direct, чтобы выбрать его здесь.",
+  "voiceProviderTranscriptionModel": "Модель транскрибации",
+  "voiceProviderSpeechModel": "Модель синтеза речи",
+  "voiceProviderModelsHint": "Используйте названия моделей, которые указывает ваш провайдер. Если оставить поле пустым, для этого направления будет использоваться это устройство.",
+  "voiceProviderRealtimeModel": "Модель реального времени",
+  "voiceProviderRealtimeInstructions": "Инструкции",
+  "voiceProviderRealtimeInstructionsHint": "Оставьте пустым, чтобы использовать инструкции Conduit.",
+  "voiceProviderRealtimeFooter": "В звонках в чатах Direct и Apple говорит этот голос, а модель транскрибации выше помогает ему понимать, что вы говорите.",
+  "voiceCallModeTitle": "Звонки",
+  "voiceCallModeRealtime": "В реальном времени",
+  "voiceCallModeStandard": "Стандартные",
+  "voiceCallModeRealtimeDescription": "Разговаривайте с голосом в реальном времени, если он есть у сервера чата или голосового провайдера; его можно перебивать. Остальные звонки — стандартные.",
+  "voiceCallModeStandardDescription": "Звонок слушает вас, отправляет сказанное, а затем зачитывает ответ вслух.",
+  "voiceCallNoticeTranscriptionFailed": "Не удалось разобрать. Повторите, пожалуйста.",
+  "voiceCallNoticeReplyIncomplete": "Ответ голоса оборвался.",
+  "voiceCallNoticeTranscriptNotSaved": "Часть звонка не удалось сохранить в чат.",
+  "voiceReplySpokenLabel": "{model} · голосом",
+  "@voiceReplySpokenLabel": {
+    "description": "Header of a reply a realtime call's voice gave by itself, after the voice model's name.",
+    "placeholders": {
+      "model": {
+        "type": "String",
+        "example": "gpt-realtime-2.1-mini"
+      }
+    }
+  },
   "ttsVoice": "Голос",
   "ttsSpeechRate": "Скорость речи",
   "ttsPitch": "Высота тона",
@@ -808,7 +907,7 @@
   "previous7Days": "Последние 7 дней",
   "previous30Days": "Последние 30 дней",
   "older": "Старше",
-  "wordCount": "{count} слов",
+  "wordCount": "{count, plural, one{{count} слово} few{{count} слова} many{{count} слов} other{{count} слова}}",
   "@wordCount": {
     "placeholders": {
       "count": {
@@ -817,7 +916,7 @@
       }
     }
   },
-  "charCount": "{count} символов",
+  "charCount": "{count, plural, one{{count} символ} few{{count} символа} many{{count} символов} other{{count} символа}}",
   "@charCount": {
     "placeholders": {
       "count": {
@@ -938,6 +1037,95 @@
   "saveChat": "Сохранить чат",
   "temporaryChatByDefault": "Временный чат по умолчанию",
   "temporaryChatByDefaultDescription": "Новые чаты не будут сохраняться в историю, если вы не сохраните их вручную",
+  "advancedFeatures": "Расширенные",
+  "advancedFeaturesDescription": "Показывать инструменты и настройки для опытных пользователей.",
+  "chatSettingsTitle": "Настройки чата",
+  "chatSettingsApplied": "Настройки чата применены",
+  "chatSettingsAppliedDescription": "У этого чата есть сохранённые настройки, и они используются в каждом ответе.",
+  "chatSettingsTurnOnAdvanced": "Включите «Расширенные», чтобы изменить их",
+  "chatSettingsDescription": "Эти настройки действуют только в этом чате. Всё, что установлено на «Ваше по умолчанию», использует значения из ваших настроек.",
+  "chatSettingsSystemPrompt": "Системный промпт",
+  "chatSettingsSystemPromptEmptyNote": "Пустой промпт не отправляет системный промпт вообще, даже если у вас есть промпт по умолчанию. Выберите «Ваше по умолчанию», чтобы использовать его.",
+  "chatSettingsParameters": "Параметры",
+  "chatSettingsInherit": "Ваше по умолчанию",
+  "chatSettingsModelDefault": "По умолчанию модели",
+  "chatSettingsCustom": "Свой",
+  "chatSettingsResetAll": "Сбросить всё",
+  "chatSettingsOtherKept": "Остальные сохранённые настройки остаются без изменений.",
+  "chatSettingsSystemPromptLocked": "Ваша учётная запись не может менять системный промпт.",
+  "chatSettingsParametersLocked": "Ваша учётная запись не может менять параметры.",
+  "chatSettingsOwnerChanged": "Учётная запись или чат изменились. Откройте настройки снова и повторите попытку.",
+  "chatSettingTemperature": "Температура",
+  "chatSettingTopP": "Top P",
+  "chatSettingTopK": "Top K",
+  "chatSettingMinP": "Min P",
+  "chatSettingFrequencyPenalty": "Штраф за частоту",
+  "chatSettingPresencePenalty": "Штраф за присутствие",
+  "chatSettingMaxTokens": "Макс. токенов",
+  "chatSettingSeed": "Seed",
+  "chatSettingStop": "Стоп-последовательности",
+  "chatSettingFunctionCalling": "Вызов инструментов",
+  "chatSettingFunctionCallingNative": "Нативный",
+  "chatSettingFunctionCallingLegacy": "Устаревший",
+  "chatSettingResponseFormat": "Формат ответа",
+  "chatSettingErrorRequired": "Введите значение.",
+  "chatSettingErrorNotANumber": "Введите число.",
+  "chatSettingErrorNotAWholeNumber": "Введите целое число.",
+  "chatSettingErrorRange": "Введите значение от {min} до {max}.",
+  "@chatSettingErrorRange": {"placeholders": {"min": {"type": "String"}, "max": {"type": "String"}}},
+  "chatSettingErrorMinimum": "Введите {min} или больше.",
+  "@chatSettingErrorMinimum": {"placeholders": {"min": {"type": "String"}}},
+  "chatSettingErrorNotJson": "Введите слово, например json, или корректную схему JSON.",
+  "chatSettingErrorNotAChoice": "Выберите поддерживаемое значение.",
+  "personalConnectionsTitle": "Личные подключения",
+  "personalConnectionsStoredOn": "Сохранено для {account} на {server}",
+  "personalConnectionsKeyStorageNote": "Ключи хранятся на сервере вместе с настройками вашей учётной записи Open WebUI.",
+  "personalConnectionsTerminals": "Терминалы",
+  "personalConnectionsEmptyToolServers": "Серверы инструментов не сохранены.",
+  "personalConnectionsEmptyTerminals": "Терминалы не сохранены.",
+  "personalConnectionsAddToolServer": "Добавить сервер инструментов",
+  "personalConnectionsAddTerminal": "Добавить терминал",
+  "personalConnectionsEditToolServer": "Изменить сервер инструментов",
+  "personalConnectionsEditTerminal": "Изменить терминал",
+  "personalConnectionsUnavailableServer": "На вашем сервере Open WebUI не включены личные серверы инструментов и терминалы.",
+  "personalConnectionsUnavailablePermission": "Вашей учётной записи не разрешено управлять личными серверами инструментов и терминалами.",
+  "personalConnectionsLoadFailed": "Не удалось загрузить ваши личные подключения.",
+  "personalConnectionsSaveFailed": "Не удалось сохранить. Ваши подключения не изменены.",
+  "personalConnectionsSaveRejected": "Сервер не сохранил это изменение. Возможно, вашей учётной записи не разрешено сохранять личные подключения.",
+  "personalConnectionsOwnerChanged": "Ваш аккаунт или доступ изменился с момента открытия. Ничего не сохранено и не отправлено, введённые данные остались здесь. Откройте это подключение снова, чтобы продолжить.",
+  "personalConnectionsSavedForPreviousAccount": "Сохранено в аккаунте, из которого открыта эта форма. Аккаунт, в который вы вошли сейчас, не изменён.",
+  "personalConnectionsDuplicate": "Другое подключение уже использует этот идентификатор.",
+  "personalConnectionsNotFound": "Это подключение изменено или удалено в другом месте. Обновите и повторите попытку.",
+  "personalConnectionsUrl": "URL",
+  "personalConnectionsPath": "Путь",
+  "personalConnectionsSpecSource": "Спецификация OpenAPI",
+  "personalConnectionsSpecFromUrl": "Получить по URL",
+  "personalConnectionsSpecInline": "Вставить JSON",
+  "personalConnectionsSpecJson": "JSON OpenAPI",
+  "personalConnectionsDescriptionField": "Описание",
+  "personalConnectionsAuth": "Аутентификация",
+  "personalConnectionsKeyKept": "Сохранённый ключ сохранён. Введите новый, чтобы заменить его.",
+  "personalConnectionsKeyRemove": "Удалить сохранённый ключ",
+  "personalConnectionsKeyWillRemove": "Сохранённый ключ будет удалён.",
+  "personalConnectionsKeyKeep": "Оставить сохранённый ключ",
+  "personalConnectionsTestConnection": "Проверить подключение",
+  "personalConnectionsTestOk": "Подключение работает. Найдено операций: {count}.",
+  "personalConnectionsTestOkTerminal": "Терминал ответил.",
+  "personalConnectionsTestUnauthorized": "Хост отклонил ключ.",
+  "personalConnectionsTestUnreachable": "Не удалось связаться с хостом.",
+  "personalConnectionsTestInvalidSpec": "Хост не вернул корректный документ OpenAPI.",
+  "personalConnectionsTestInvalidTarget": "Сначала введите корректные URL и путь.",
+  "personalConnectionsTestUnsupportedAuth": "Этот способ аутентификации нельзя проверить здесь.",
+  "personalConnectionsUnsupported": "Это подключение использует настройки, которые приложение не может изменить. Его всё равно можно включить, выключить или удалить.",
+  "personalConnectionsDeleteTitle": "Удалить подключение?",
+  "personalConnectionsDeleteMessage": "{name} будет удалено из вашей учётной записи Open WebUI.",
+  "personalConnectionsUrlRequired": "Введите URL.",
+  "personalConnectionsUrlInvalid": "Введите полный URL с http или https.",
+  "personalConnectionsPathRequired": "Введите путь.",
+  "personalConnectionsSpecInvalid": "Введите корректный документ JSON OpenAPI.",
+  "personalConnectionsSelectionCleared": "Удалено из этого чата, потому что подключение изменилось: {names}",
+  "personalConnectionsTerminalOneActive": "Включение одного терминала выключает остальные.",
+  "personalConnectionsNoAccount": "Войдите в учётную запись Open WebUI, чтобы управлять личными подключениями.",
   "chatSaved": "Чат сохранён в истории",
   "chatSaveFailed": "Не удалось сохранить чат",
   "sidebarChatsTab": "Чаты",
@@ -947,6 +1135,23 @@
   },
   "sidebarNotesTab": "Заметки",
   "sidebarChannelsTab": "Каналы",
+  "sidebarResizeHandle": "Изменить ширину боковой панели",
+  "@sidebarResizeHandle": {
+    "description": "Accessibility label for the draggable tablet sidebar divider."
+  },
+  "sidebarResizeResetHint": "Дважды нажмите, чтобы сбросить ширину боковой панели",
+  "@sidebarResizeResetHint": {
+    "description": "Accessibility hint for resetting the tablet sidebar width."
+  },
+  "sidebarWidthValue": "{width} пт",
+  "@sidebarWidthValue": {
+    "description": "Accessibility value describing the current tablet sidebar width.",
+    "placeholders": {
+      "width": {
+        "type": "int"
+      }
+    }
+  },
   "closeSidebar": "Закрыть боковую панель",
   "terminalSelectServer": "Выберите сервер терминала",
   "@terminalSelectServer": {
@@ -1069,6 +1274,7 @@
   "channelSendError": "Не удалось отправить сообщение",
   "channelDeleted": "Этот канал был удалён",
   "searchChannels": "Поиск каналов...",
+  "channelUnreadCount": "{count, plural, one{{count} непрочитанное сообщение} few{{count} непрочитанных сообщения} many{{count} непрочитанных сообщений} other{{count} непрочитанных сообщений}}",
   "channelCreateError": "Не удалось создать канал",
   "channelMessageHint": "Сообщение...",
   "audioUploadError": "Не удалось загрузить аудио: {error}",
@@ -1088,7 +1294,7 @@
   "@shareChatDeleteLink": {
     "description": "Action label to delete the current shared chat link."
   },
-  "shareChatDeleteAndCreate": "и создать новую ссылку для доступа.",
+  "shareChatDeleteAndCreate": "Удаляет текущую ссылку, чтобы можно было создать новую.",
   "@shareChatDeleteAndCreate": {
     "description": "Continuation text after the delete shared link action."
   },
@@ -1124,33 +1330,36 @@
   "globalSystemPrompt": "Глобальный системный промпт",
   "modelSystemPrompts": "Системные промпты моделей",
   "folderSystemPrompts": "Системные промпты папок",
-  "openWebuiModelSettings": "Настройки моделей OpenWebUI",
-  "openWebuiFolderSettings": "Настройки папок OpenWebUI",
+  "openWebuiModelSettings": "Настройки моделей Open WebUI",
+  "openWebuiFolderSettings": "Настройки папок Open WebUI",
   "accessibleModelsCount": "Доступные модели: {count}",
   "accessibleFoldersCount": "Доступные папки: {count}",
-  "unableToLoadOpenWebuiSettings": "Не удалось загрузить настройки OpenWebUI.",
+  "unableToLoadOpenWebuiSettings": "Не удалось загрузить настройки Open WebUI.",
   "unableToLoadModels": "Не удалось загрузить модели.",
   "unableToLoadFolders": "Не удалось загрузить папки.",
   "noAccessibleModelsFound": "Доступные модели не найдены.",
   "noAccessibleFoldersFound": "Доступные папки не найдены.",
   "tapToLoadServerPromptSettings": "Нажмите, чтобы загрузить настройки промпта с сервера.",
-  "loadingFromOpenWebui": "Загрузка из OpenWebUI...",
-  "globalSystemPromptEditorDescription": "Сохраняется в настройках пользователя OpenWebUI и используется как системный промпт чата по умолчанию.",
+  "loadingFromOpenWebui": "Загрузка из Open WebUI...",
+  "globalSystemPromptEditorDescription": "Сохраняется в настройках пользователя Open WebUI и используется как системный промпт чата по умолчанию.",
   "modelNoEditableServerRecord": "У этой модели нет редактируемой записи на сервере.",
   "modelSystemPromptTitle": "Системный промпт {modelName}",
-  "modelSystemPromptEditorDescription": "Сохраняется в OpenWebUI в params.system модели.",
+  "modelSystemPromptEditorDescription": "Сохраняется в Open WebUI в params.system модели.",
   "modelNoWriteAccessDescription": "У вас нет доступа на запись к этой модели.",
   "unableToLoadFolder": "Не удалось загрузить эту папку.",
   "folderSystemPromptTitle": "Системный промпт {folderName}",
-  "folderSystemPromptEditorDescription": "Сохраняется в OpenWebUI в data.system_prompt папки.",
+  "folderSystemPromptEditorDescription": "Сохраняется в Open WebUI в data.system_prompt папки.",
   "notSet": "Не задано",
   "enterSystemPrompt": "Введите системный промпт",
   "close": "Закрыть",
   "connectionHealth": "Состояние подключения",
   "personalization": "Персонализация",
   "personalizationSubtitle": "Модель по умолчанию, личный промпт и память",
+  "defaultImageGenerationModel": "Модель генерации изображений по умолчанию",
+  "defaultImageGenerationModelDescription": "Введите ID модели изображений OpenRouter. Оставьте поле пустым, чтобы использовать модель OpenRouter по умолчанию.",
+  "openRouterDefaultImageGenerationModel": "Модель OpenRouter по умолчанию (openai/gpt-5-image)",
   "yourSystemPrompt": "Ваш системный промпт",
-  "yourSystemPromptDescription": "Задайте личный системный промпт, который OpenWebUI будет применять к вашим чатам.",
+  "yourSystemPromptDescription": "Задайте личный системный промпт, который Open WebUI будет применять к вашим чатам.",
   "memoryTitle": "Память",
   "memoryEnabledDescription": "Разрешить серверу использовать сохраненные воспоминания в будущих чатах.",
   "memoryDisabledDescription": "Сохраненные воспоминания останутся на сервере, но не будут добавляться в чаты.",
@@ -1159,6 +1368,11 @@
   "savedMemoriesCount": "Сохраненных воспоминаний: {count}",
   "memoryEditorDescription": "Делайте воспоминания короткими и конкретными, чтобы сервер применял их стабильно.",
   "memoryHint": "Пример: я предпочитаю краткие ответы с примерами кода.",
+  "memoryTypeLabel": "Тип",
+  "memoryTypeUser": "Пользователь",
+  "memoryTypeContext": "Контекст",
+  "memoryPathLabel": "Путь (необязательно)",
+  "memoryPathHint": "например, projects/conduit",
   "addMemory": "Добавить воспоминание",
   "editMemory": "Редактировать воспоминание",
   "deleteMemory": "Удалить воспоминание",
@@ -1167,12 +1381,9 @@
   "clearAllMemoriesDescription": "Это навсегда удалит все сохраненные воспоминания для вашей учетной записи.",
   "noMemoriesSaved": "Сохраненных воспоминаний пока нет.",
   "memoryUpdatedAt": "Обновлено {formattedTime}",
-  "advancedPromptOverrides": "Расширенные переопределения промптов",
   "advancedPromptOverridesDescription": "Переопределения промптов моделей находятся в разделе App & Chat.",
   "audioSettingsTitle": "Аудио",
   "audioSettingsSubtitle": "Речь в текст и текст в речь",
-  "appAndChat": "Приложение и чат",
-  "appAndChatSubtitle": "Тема, язык, поведение чата и расширенные переопределения",
   "accountSettingsTitle": "Учетная запись",
   "accountSettingsSubtitle": "Данные профиля и управление паролем",
   "accountDetails": "Данные учетной записи",
@@ -1796,5 +2007,2272 @@
   "terminalNothingToCopy": "Ничего не выбрано для копирования",
   "terminalCopied": "Скопировано в буфер обмена",
   "terminalPasteWhileDisconnected": "Подключитесь, чтобы вставить",
-  "terminalPortsToggle": "Прослушиваемые порты"
+  "terminalPortsToggle": "Прослушиваемые порты",
+  "releaseNotesManualSubtitle": "Встроенный список изменений для {currentVersion}",
+  "settingsCategoryApp": "Приложение",
+  "settingsCategoryAi": "ИИ",
+  "settingsCategoryServer": "Сервер",
+  "settingsCategorySupport": "Поддержка",
+  "settingsDataAndConnection": "Данные и подключение",
+  "settingsAppearance": "Оформление",
+  "settingsAppearanceSubtitle": "Тема, цветовая палитра и язык",
+  "settingsChatSubtitle": "Поведение чата, быстрые действия и расширенные промпты",
+  "workspaceTitle": "Рабочая область",
+  "workspaceSubtitle": "Управление ресурсами сервера и доступом.",
+  "workspaceModels": "Модели",
+  "workspaceKnowledge": "База знаний",
+  "workspacePrompts": "Промпты",
+  "workspaceTools": "Инструменты",
+  "workspaceSkills": "Навыки",
+  "workspaceCreate": "Создать",
+  "workspaceEmpty": "Ресурсов пока нет.",
+  "workspaceDenied": "У вас нет прав для управления этим разделом рабочей области.",
+  "workspaceUnsupported": "Этот сервер не поддерживает управление рабочей областью.",
+  "workspaceLoadFailed": "Не удалось загрузить рабочую область.",
+  "workspaceRetry": "Повторить",
+  "workspaceSelectItem": "Выберите элемент для просмотра сведений.",
+  "workspaceEditorComingSoon": "Этот редактор появится в следующем обновлении рабочей области.",
+  "workspaceSearchHint": "Поиск по ресурсам рабочей области",
+  "workspaceLoadMore": "Загрузить еще",
+  "workspaceAccessPublicDisabled": "У вас нет разрешения делать этот ресурс общедоступным.",
+  "workspaceAccessPeopleHeading": "Пользователи и группы",
+  "workspaceAccessUsersDisabled": "Доступ для отдельных пользователей отключен; разрешены только группы.",
+  "workspaceAccessEmpty": "Совместный доступ пока никому не предоставлен.",
+  "workspaceAccessAddPeople": "Добавить пользователей или группы",
+  "workspaceAccessAddGroups": "Добавить группы",
+  "workspaceAccessAddUsers": "Добавить пользователей",
+  "workspaceAccessGroupsDisabled": "Предоставление доступа группам отключено; можно делиться только с отдельными пользователями.",
+  "workspaceAccessGrantsDisabled": "У вас нет прав предоставлять доступ пользователям или группам. Существующий доступ сохраняется.",
+  "workspaceAccessGroupBadge": "Группа",
+  "workspaceAccessUserBadge": "Пользователь",
+  "workspaceAccessCanEdit": "Может редактировать",
+  "workspaceAccessRemoveGrant": "Удалить доступ",
+  "workspacePrincipalTitle": "Добавить пользователей или группы",
+  "workspacePrincipalUsersTab": "Пользователи",
+  "workspacePrincipalGroupsTab": "Группы",
+  "workspacePrincipalSearchHint": "Поиск по имени или email",
+  "workspacePrincipalLoadFailed": "Не удалось загрузить результаты.",
+  "workspacePrincipalSearchPrompt": "Введите запрос для поиска пользователей.",
+  "workspacePrincipalNoResults": "Совпадений не найдено.",
+  "workspaceReadOnlyBadge": "Только чтение",
+  "workspaceReadOnlyExplanation": "У вас есть доступ только для просмотра этого ресурса.",
+  "workspaceEditorDiscardTitle": "Сбросить изменения?",
+  "workspaceEditorDiscardMessage": "Все несохраненные изменения будут потеряны.",
+  "workspaceEditorDiscardConfirm": "Сбросить",
+  "workspaceEditorKeepEditing": "Продолжить редактирование",
+  "workspaceEditorSaveTooltip": "Сохранить изменения",
+  "workspaceEditorSaving": "Сохранение…",
+  "workspaceEditorMoreActions": "Дополнительные действия",
+  "workspaceImportChooseFile": "Выбрать JSON-файл",
+  "workspaceImportPasteLabel": "Или вставьте JSON",
+  "workspaceImportPasteHint": "Вставьте экспортированный JSON сюда",
+  "workspaceImportRun": "Импортировать",
+  "workspaceImportInvalidJson": "Некорректный формат JSON.",
+  "workspaceImportEmpty": "Не найдено элементов для импорта.",
+  "workspaceImportReadFailed": "Не удалось прочитать выбранный файл.",
+  "workspaceImportBatchFailed": "Импорт не удался.",
+  "workspaceImportSummary": "Импортировано элементов: {success} из {total}",
+  "workspaceImportItemImported": "Импортировано",
+  "workspaceImportItemFailed": "Ошибка импорта",
+  "workspaceImportDone": "Готово",
+  "workspaceModelNewTitle": "New model",
+  "@workspaceModelNewTitle": {
+    "description": "Title shown when creating a new workspace model."
+  },
+  "workspaceModelIdLabel": "Model ID",
+  "@workspaceModelIdLabel": {
+    "description": "Label for the unique model identifier field."
+  },
+  "workspaceModelBaseModel": "Base model",
+  "@workspaceModelBaseModel": {
+    "description": "Label for the base-model selector."
+  },
+  "workspaceModelBaseModelNone": "None (custom)",
+  "workspaceModelBaseModelRequired": "Выберите базовую модель.",
+  "@workspaceModelBaseModelRequired": {"description": "Validation shown when a non-admin model create or protected edit has no base model."},
+  "@workspaceModelBaseModelNone": {
+    "description": "Base-model option meaning no base model is used."
+  },
+  "workspaceModelName": "Name",
+  "@workspaceModelName": {
+    "description": "Label for the model display-name field."
+  },
+  "workspaceModelDescription": "Description",
+  "@workspaceModelDescription": {
+    "description": "Label for the model description field."
+  },
+  "workspaceModelTags": "Tags",
+  "@workspaceModelTags": {
+    "description": "Label for the model tags editor."
+  },
+  "workspaceModelTagsHint": "Add tag",
+  "@workspaceModelTagsHint": {
+    "description": "Action chip label to add a new tag."
+  },
+  "workspaceModelSystemPrompt": "System prompt",
+  "@workspaceModelSystemPrompt": {
+    "description": "Label for the model system prompt field."
+  },
+  "workspaceModelSuggestionPrompts": "Suggested prompts",
+  "@workspaceModelSuggestionPrompts": {
+    "description": "Label for the suggested prompts editor."
+  },
+  "workspaceModelAddSuggestion": "Add suggestion",
+  "@workspaceModelAddSuggestion": {
+    "description": "Button to add a suggested prompt."
+  },
+  "workspaceModelRemoveSuggestion": "Remove suggestion",
+  "@workspaceModelRemoveSuggestion": {
+    "description": "Tooltip to remove a suggested prompt."
+  },
+  "workspaceModelStopSequences": "Stop sequences",
+  "@workspaceModelStopSequences": {
+    "description": "Label for the stop-sequences field."
+  },
+  "workspaceModelStopHint": "Comma-separated stop sequences",
+  "@workspaceModelStopHint": {
+    "description": "Helper text for the stop-sequences field."
+  },
+  "workspaceModelAdvancedParams": "Advanced parameters (JSON)",
+  "@workspaceModelAdvancedParams": {
+    "description": "Label for the advanced inference parameters JSON field."
+  },
+  "workspaceModelParamsHint": "JSON object of additional parameters",
+  "@workspaceModelParamsHint": {
+    "description": "Helper text for a JSON parameters field."
+  },
+  "workspaceModelInvalidJson": "Enter a valid JSON object.",
+  "@workspaceModelInvalidJson": {
+    "description": "Validation error for a malformed JSON field."
+  },
+  "workspaceModelCapabilities": "Capabilities",
+  "@workspaceModelCapabilities": {
+    "description": "Label for the model capability toggles."
+  },
+  "workspaceModelTerminal": "Terminal ID",
+  "@workspaceModelTerminal": {
+    "description": "Label for the terminal identifier field."
+  },
+  "workspaceModelTtsVoice": "Text-to-speech voice",
+  "@workspaceModelTtsVoice": {
+    "description": "Label for the TTS voice field."
+  },
+  "workspaceModelDefaultFeatures": "Default features",
+  "@workspaceModelDefaultFeatures": {
+    "description": "Label for the default feature IDs field."
+  },
+  "workspaceModelBuiltinTools": "Built-in tools (JSON)",
+  "@workspaceModelBuiltinTools": {
+    "description": "Label for the built-in tools JSON field."
+  },
+  "workspaceModelKnowledge": "Knowledge",
+  "@workspaceModelKnowledge": {
+    "description": "Label for the knowledge relationship selector."
+  },
+  "workspaceModelTools": "Tools",
+  "@workspaceModelTools": {
+    "description": "Label for the tools relationship selector."
+  },
+  "workspaceModelSkills": "Skills",
+  "@workspaceModelSkills": {
+    "description": "Label for the skills relationship selector."
+  },
+  "workspaceModelFilters": "Filters",
+  "@workspaceModelFilters": {
+    "description": "Label for the filter functions selector."
+  },
+  "workspaceModelDefaultFilters": "Default filters",
+  "@workspaceModelDefaultFilters": {
+    "description": "Label for the default filter functions selector."
+  },
+  "workspaceModelActions": "Actions",
+  "@workspaceModelActions": {
+    "description": "Label for the action functions selector."
+  },
+  "workspaceModelSectionBasics": "Basics",
+  "@workspaceModelSectionBasics": {
+    "description": "Section header for basic model fields."
+  },
+  "workspaceModelSectionPrompt": "Prompt",
+  "@workspaceModelSectionPrompt": {
+    "description": "Section header for prompt-related model fields."
+  },
+  "workspaceModelSectionAdvanced": "Advanced",
+  "@workspaceModelSectionAdvanced": {
+    "description": "Section header for advanced model fields."
+  },
+  "workspaceModelSectionRelationships": "Relationships",
+  "@workspaceModelSectionRelationships": {
+    "description": "Section header for model relationship selectors."
+  },
+  "workspaceModelSectionAccess": "Access",
+  "@workspaceModelSectionAccess": {
+    "description": "Section header for model access controls."
+  },
+  "workspaceModelProfileImage": "Profile image",
+  "@workspaceModelProfileImage": {
+    "description": "Label for the model profile image."
+  },
+  "workspaceModelChangeImage": "Change image",
+  "@workspaceModelChangeImage": {
+    "description": "Button to pick a new profile image."
+  },
+  "workspaceModelRemoveImage": "Remove image",
+  "@workspaceModelRemoveImage": {
+    "description": "Button to clear the profile image."
+  },
+  "workspaceModelImageFailed": "Could not load the selected image.",
+  "@workspaceModelImageFailed": {
+    "description": "Error when picking a profile image fails."
+  },
+  "workspaceModelSelectNone": "None selected",
+  "@workspaceModelSelectNone": {
+    "description": "Subtitle when no relationship items are selected."
+  },
+  "workspaceModelSelectCount": "{count} selected",
+  "@workspaceModelSelectCount": {
+    "description": "Subtitle showing how many relationship items are selected.",
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "workspaceModelRelationshipEmpty": "Nothing available to select.",
+  "@workspaceModelRelationshipEmpty": {
+    "description": "Empty state for a relationship picker."
+  },
+  "workspaceModelManageAccess": "Manage access",
+  "@workspaceModelManageAccess": {
+    "description": "Action to open the access-grants sheet for a model."
+  },
+  "workspaceModelClone": "Duplicate",
+  "@workspaceModelClone": {
+    "description": "Action that duplicates the model."
+  },
+  "workspaceModelCloneSuffix": "(copy)",
+  "@workspaceModelCloneSuffix": {
+    "description": "Suffix appended to a duplicated model name."
+  },
+  "workspaceModelActivate": "Activate",
+  "@workspaceModelActivate": {
+    "description": "Action that marks the model active."
+  },
+  "workspaceModelDeactivate": "Deactivate",
+  "@workspaceModelDeactivate": {
+    "description": "Action that marks the model inactive."
+  },
+  "workspaceModelHide": "Hide from selector",
+  "@workspaceModelHide": {
+    "description": "Action that hides the model from model selectors."
+  },
+  "workspaceModelUnhide": "Show in selector",
+  "@workspaceModelUnhide": {
+    "description": "Action that unhides the model in model selectors."
+  },
+  "workspaceModelDelete": "Delete model",
+  "@workspaceModelDelete": {
+    "description": "Action that deletes the model."
+  },
+  "workspaceModelDeleteConfirmTitle": "Delete model?",
+  "@workspaceModelDeleteConfirmTitle": {
+    "description": "Confirmation dialog title for deleting a model."
+  },
+  "workspaceModelDeleteConfirmMessage": "This permanently removes {name}.",
+  "@workspaceModelDeleteConfirmMessage": {
+    "description": "Confirmation dialog body for deleting a model.",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "workspaceModelExport": "Export model",
+  "@workspaceModelExport": {
+    "description": "Action that exports a single model as JSON."
+  },
+  "workspaceModelExportAll": "Export all models",
+  "@workspaceModelExportAll": {
+    "description": "Action that exports every readable model as JSON."
+  },
+  "workspaceModelExportFailed": "The export could not be completed.",
+  "@workspaceModelExportFailed": {
+    "description": "Error when exporting models fails."
+  },
+  "workspaceModelImport": "Import models",
+  "@workspaceModelImport": {
+    "description": "Action that imports models from JSON."
+  },
+  "workspaceModelIdRequired": "A model ID is required.",
+  "@workspaceModelIdRequired": {
+    "description": "Validation error when the model ID is empty."
+  },
+  "workspaceModelNameRequired": "A name is required.",
+  "@workspaceModelNameRequired": {
+    "description": "Validation error when the model name is empty."
+  },
+  "workspaceModelSaved": "Model saved.",
+  "@workspaceModelSaved": {
+    "description": "Confirmation that the model was saved."
+  },
+  "workspaceModelSaveFailed": "The model could not be saved.",
+  "@workspaceModelSaveFailed": {
+    "description": "Error when saving the model fails."
+  },
+  "workspaceModelDeleted": "Model deleted.",
+  "@workspaceModelDeleted": {
+    "description": "Confirmation that the model was deleted."
+  },
+  "workspaceModelAddAction": "Add",
+  "@workspaceModelAddAction": {
+    "description": "Confirm button in a small add-text dialog."
+  },
+  "workspaceKnowledgeCreateTitle": "New knowledge base",
+  "@workspaceKnowledgeCreateTitle": {
+    "description": "Title of the create form for a new knowledge base."
+  },
+  "workspaceKnowledgeName": "Name",
+  "@workspaceKnowledgeName": {
+    "description": "Label for the knowledge base name field."
+  },
+  "workspaceKnowledgeDescription": "Description",
+  "@workspaceKnowledgeDescription": {
+    "description": "Label for the knowledge base description field."
+  },
+  "workspaceKnowledgeNameRequired": "A name is required.",
+  "@workspaceKnowledgeNameRequired": {
+    "description": "Validation error when the knowledge base name is empty."
+  },
+  "workspaceKnowledgeSaved": "Knowledge base saved.",
+  "@workspaceKnowledgeSaved": {
+    "description": "Confirmation that the knowledge base was saved."
+  },
+  "workspaceKnowledgeSaveFailed": "The knowledge base could not be saved.",
+  "@workspaceKnowledgeSaveFailed": {
+    "description": "Error when saving a knowledge base fails."
+  },
+  "workspaceKnowledgeDeleted": "Knowledge base deleted.",
+  "@workspaceKnowledgeDeleted": {
+    "description": "Confirmation that the knowledge base was deleted."
+  },
+  "workspaceKnowledgeDelete": "Delete knowledge base",
+  "@workspaceKnowledgeDelete": {
+    "description": "Overflow action that deletes the knowledge base."
+  },
+  "workspaceKnowledgeDeleteConfirmTitle": "Delete knowledge base?",
+  "@workspaceKnowledgeDeleteConfirmTitle": {
+    "description": "Confirmation dialog title for deleting a knowledge base."
+  },
+  "workspaceKnowledgeDeleteConfirmMessage": "This permanently removes {name} and detaches its files.",
+  "@workspaceKnowledgeDeleteConfirmMessage": {
+    "description": "Confirmation dialog body for deleting a knowledge base.",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "workspaceKnowledgeReset": "Reset",
+  "@workspaceKnowledgeReset": {
+    "description": "Overflow action that removes all files from a knowledge base."
+  },
+  "workspaceKnowledgeResetConfirmTitle": "Reset knowledge base?",
+  "@workspaceKnowledgeResetConfirmTitle": {
+    "description": "Confirmation dialog title for resetting a knowledge base."
+  },
+  "workspaceKnowledgeResetConfirmMessage": "This removes all files from {name} but keeps the knowledge base.",
+  "@workspaceKnowledgeResetConfirmMessage": {
+    "description": "Confirmation dialog body for resetting a knowledge base.",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "workspaceKnowledgeResetDone": "Knowledge base reset.",
+  "@workspaceKnowledgeResetDone": {
+    "description": "Confirmation that the knowledge base files were reset."
+  },
+  "workspaceKnowledgeExport": "Export knowledge base",
+  "@workspaceKnowledgeExport": {
+    "description": "Overflow action that exports a knowledge base archive."
+  },
+  "workspaceKnowledgeExportFailed": "The export could not be completed.",
+  "@workspaceKnowledgeExportFailed": {
+    "description": "Error when exporting a knowledge base fails."
+  },
+  "workspaceKnowledgeManageAccess": "Manage access",
+  "@workspaceKnowledgeManageAccess": {
+    "description": "Action that opens the sharing and access sheet for a knowledge base."
+  },
+  "workspaceKnowledgeViewAll": "All",
+  "@workspaceKnowledgeViewAll": {
+    "description": "Knowledge collection filter showing all knowledge bases."
+  },
+  "workspaceKnowledgeViewCreated": "Created by you",
+  "@workspaceKnowledgeViewCreated": {
+    "description": "Knowledge collection filter showing bases the user created."
+  },
+  "workspaceKnowledgeViewShared": "Shared with you",
+  "@workspaceKnowledgeViewShared": {
+    "description": "Knowledge collection filter showing bases shared with the user."
+  },
+  "workspaceKnowledgeSourceAll": "All sources",
+  "@workspaceKnowledgeSourceAll": {
+    "description": "Knowledge collection filter showing both local and connected sources."
+  },
+  "workspaceKnowledgeSourceLocal": "Local",
+  "@workspaceKnowledgeSourceLocal": {
+    "description": "Knowledge collection filter showing only local knowledge bases."
+  },
+  "workspaceKnowledgeSourceExternal": "Connected",
+  "@workspaceKnowledgeSourceExternal": {
+    "description": "Knowledge collection filter showing only external/connected knowledge bases."
+  },
+  "workspaceKnowledgeExternalBadge": "Connected",
+  "@workspaceKnowledgeExternalBadge": {
+    "description": "Badge marking a knowledge base as external/connected (read-only)."
+  },
+  "workspaceKnowledgeExternalReadOnly": "Connected knowledge bases are read-only in this app.",
+  "@workspaceKnowledgeExternalReadOnly": {
+    "description": "Notice shown when viewing an external/connected knowledge base."
+  },
+  "workspaceKnowledgeFilesTitle": "Files",
+  "@workspaceKnowledgeFilesTitle": {
+    "description": "Heading of the knowledge base file browser."
+  },
+  "workspaceKnowledgeFilesEmpty": "No files yet.",
+  "@workspaceKnowledgeFilesEmpty": {
+    "description": "Empty state when a knowledge base directory contains no files."
+  },
+  "workspaceKnowledgeFilesLoadFailed": "Files could not be loaded.",
+  "@workspaceKnowledgeFilesLoadFailed": {
+    "description": "Error when the knowledge base file list fails to load."
+  },
+  "workspaceKnowledgeRefreshFiles": "Refresh",
+  "@workspaceKnowledgeRefreshFiles": {
+    "description": "Tooltip for the button that refreshes the knowledge file list."
+  },
+  "workspaceKnowledgeRoot": "Root",
+  "@workspaceKnowledgeRoot": {
+    "description": "Breadcrumb label for the top level of a knowledge base."
+  },
+  "workspaceKnowledgeAddMenu": "Добавить файлы",
+  "@workspaceKnowledgeAddMenu": {
+    "description": "Tooltip for the menu that adds files or folders to a knowledge base."
+  },
+  "workspaceKnowledgeUpload": "Upload file",
+  "@workspaceKnowledgeUpload": {
+    "description": "Menu item to upload a single local file into a knowledge base."
+  },
+  "workspaceKnowledgeUploading": "Uploading {name}…",
+  "@workspaceKnowledgeUploading": {
+    "description": "Progress label shown while a file uploads into a knowledge base.",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "workspaceKnowledgeUploadFailed": "The file could not be uploaded.",
+  "@workspaceKnowledgeUploadFailed": {
+    "description": "Error when uploading a file into a knowledge base fails."
+  },
+  "workspaceKnowledgeBatchAttach": "Upload multiple files",
+  "@workspaceKnowledgeBatchAttach": {
+    "description": "Menu item to upload several local files into a knowledge base at once."
+  },
+  "workspaceKnowledgeAttachExisting": "Attach server file",
+  "@workspaceKnowledgeAttachExisting": {
+    "description": "Menu item to attach an existing server file to a knowledge base."
+  },
+  "workspaceKnowledgeAttachFailed": "The file could not be attached.",
+  "@workspaceKnowledgeAttachFailed": {
+    "description": "Error when attaching an existing file to a knowledge base fails."
+  },
+  "workspaceKnowledgeAddText": "Add text file",
+  "@workspaceKnowledgeAddText": {
+    "description": "Menu item to create a text file and attach it to a knowledge base."
+  },
+  "workspaceKnowledgeAddTextName": "File name",
+  "@workspaceKnowledgeAddTextName": {
+    "description": "Label for the file name field when adding a text file."
+  },
+  "workspaceKnowledgeAddTextContent": "Content",
+  "@workspaceKnowledgeAddTextContent": {
+    "description": "Label for the content field when adding a text file."
+  },
+  "workspaceKnowledgeAddTextFailed": "The text file could not be added.",
+  "@workspaceKnowledgeAddTextFailed": {
+    "description": "Error when adding a text file to a knowledge base fails."
+  },
+  "workspaceKnowledgeNewFolder": "New folder",
+  "@workspaceKnowledgeNewFolder": {
+    "description": "Menu item and dialog title to create a new directory in a knowledge base."
+  },
+  "workspaceKnowledgeFolderName": "Folder name",
+  "@workspaceKnowledgeFolderName": {
+    "description": "Label for the folder name field."
+  },
+  "workspaceKnowledgeFolderCreateFailed": "The folder could not be created.",
+  "@workspaceKnowledgeFolderCreateFailed": {
+    "description": "Error when creating or renaming a knowledge base folder fails."
+  },
+  "workspaceKnowledgeRenameFolder": "Rename folder",
+  "@workspaceKnowledgeRenameFolder": {
+    "description": "Action to rename a knowledge base directory."
+  },
+  "workspaceKnowledgeDeleteFolder": "Delete folder",
+  "@workspaceKnowledgeDeleteFolder": {
+    "description": "Action to delete a knowledge base directory."
+  },
+  "workspaceKnowledgeDeleteFolderConfirmTitle": "Delete folder?",
+  "@workspaceKnowledgeDeleteFolderConfirmTitle": {
+    "description": "Confirmation dialog title for deleting a knowledge base directory."
+  },
+  "workspaceKnowledgeDeleteFolderConfirmMessage": "Files inside {name} move to the parent folder.",
+  "@workspaceKnowledgeDeleteFolderConfirmMessage": {
+    "description": "Confirmation dialog body for deleting a knowledge base directory.",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "workspaceKnowledgeFolderDeleteFailed": "The folder could not be deleted.",
+  "@workspaceKnowledgeFolderDeleteFailed": {
+    "description": "Error when deleting a knowledge base folder fails."
+  },
+  "workspaceKnowledgeFileRename": "Rename",
+  "@workspaceKnowledgeFileRename": {
+    "description": "Per-file action to rename a knowledge base file."
+  },
+  "workspaceKnowledgeFileRefresh": "Re-index",
+  "@workspaceKnowledgeFileRefresh": {
+    "description": "Per-file action to re-index a knowledge base file."
+  },
+  "workspaceKnowledgeFileReindexed": "Re-indexing started.",
+  "@workspaceKnowledgeFileReindexed": {
+    "description": "Confirmation that re-indexing a knowledge base file began."
+  },
+  "workspaceKnowledgeFileMove": "Move",
+  "@workspaceKnowledgeFileMove": {
+    "description": "Per-file action to move a knowledge base file to another folder."
+  },
+  "workspaceKnowledgeFileRenameFailed": "The file could not be renamed.",
+  "@workspaceKnowledgeFileRenameFailed": {
+    "description": "Error when renaming a knowledge base file fails."
+  },
+  "workspaceKnowledgeFileMoveFailed": "The file could not be moved.",
+  "@workspaceKnowledgeFileMoveFailed": {
+    "description": "Error when moving a knowledge base file fails."
+  },
+  "workspaceKnowledgeFileDetach": "Remove from knowledge",
+  "@workspaceKnowledgeFileDetach": {
+    "description": "Per-file action to detach a file from a knowledge base."
+  },
+  "workspaceKnowledgeFileDetachTitle": "Remove file?",
+  "@workspaceKnowledgeFileDetachTitle": {
+    "description": "Confirmation dialog title for detaching a file from a knowledge base."
+  },
+  "workspaceKnowledgeFileDetachMessage": "Remove {name} from this knowledge base?",
+  "@workspaceKnowledgeFileDetachMessage": {
+    "description": "Confirmation dialog body for detaching a file from a knowledge base.",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "workspaceKnowledgeFileDeleteUnderlying": "Also delete the underlying file",
+  "@workspaceKnowledgeFileDeleteUnderlying": {
+    "description": "Checkbox to delete the stored file when detaching, shown to owners/admins."
+  },
+  "workspaceKnowledgeFileDetachFailed": "The file could not be removed.",
+  "@workspaceKnowledgeFileDetachFailed": {
+    "description": "Error when detaching a file from a knowledge base fails."
+  },
+  "workspaceKnowledgeMoveTitle": "Move to folder",
+  "@workspaceKnowledgeMoveTitle": {
+    "description": "Title of the sheet for choosing a destination folder."
+  },
+  "workspaceKnowledgeMoveRoot": "Root (no folder)",
+  "@workspaceKnowledgeMoveRoot": {
+    "description": "Move destination representing the knowledge base root."
+  },
+  "workspaceKnowledgeStatusPending": "Processing…",
+  "@workspaceKnowledgeStatusPending": {
+    "description": "Status shown for a knowledge base file still being ingested."
+  },
+  "workspaceKnowledgeStatusFailed": "Failed",
+  "@workspaceKnowledgeStatusFailed": {
+    "description": "Status shown for a knowledge base file whose ingestion failed."
+  },
+  "workspacePromptCreateTitle": "New prompt",
+  "@workspacePromptCreateTitle": {
+    "description": "Title shown while creating a new workspace prompt."
+  },
+  "workspacePromptName": "Name",
+  "@workspacePromptName": {
+    "description": "Label for the prompt name field."
+  },
+  "workspacePromptNameRequired": "Name is required.",
+  "@workspacePromptNameRequired": {
+    "description": "Validation error when the prompt name is empty."
+  },
+  "workspacePromptCommand": "Command",
+  "@workspacePromptCommand": {
+    "description": "Label for the prompt slash-command field."
+  },
+  "workspacePromptCommandHint": "Only letters, numbers, hyphens, and underscores. Type it as a slash command in chat.",
+  "@workspacePromptCommandHint": {
+    "description": "Helper text explaining the allowed prompt command characters."
+  },
+  "workspacePromptCommandRequired": "Command is required.",
+  "@workspacePromptCommandRequired": {
+    "description": "Validation error when the prompt command is empty."
+  },
+  "workspacePromptCommandInvalid": "Only letters, numbers, hyphens, and underscores are allowed.",
+  "@workspacePromptCommandInvalid": {
+    "description": "Validation error when the prompt command contains illegal characters."
+  },
+  "workspacePromptCommandTaken": "That command is already in use.",
+  "@workspacePromptCommandTaken": {
+    "description": "Error shown when saving a prompt whose command collides with another prompt."
+  },
+  "workspacePromptContent": "Prompt content",
+  "@workspacePromptContent": {
+    "description": "Label for the prompt template body field."
+  },
+  "workspacePromptContentHint": "Write the prompt template…",
+  "@workspacePromptContentHint": {
+    "description": "Placeholder text for the empty prompt content field."
+  },
+  "workspacePromptContentRequired": "Prompt content is required.",
+  "@workspacePromptContentRequired": {
+    "description": "Validation error when the prompt content is empty."
+  },
+  "workspacePromptWriteTab": "Write",
+  "@workspacePromptWriteTab": {
+    "description": "Toggle label for the editable prompt content view."
+  },
+  "workspacePromptPreviewTab": "Preview",
+  "@workspacePromptPreviewTab": {
+    "description": "Toggle label for the rendered markdown preview of the prompt content."
+  },
+  "workspacePromptPreviewEmpty": "Nothing to preview yet.",
+  "@workspacePromptPreviewEmpty": {
+    "description": "Empty-state text shown in the prompt preview when there is no content."
+  },
+  "workspacePromptTags": "Tags",
+  "@workspacePromptTags": {
+    "description": "Label for the prompt tags field."
+  },
+  "workspacePromptTagAdd": "Add tag",
+  "@workspacePromptTagAdd": {
+    "description": "Action to add a tag to a prompt."
+  },
+  "workspacePromptVersionSection": "Version",
+  "@workspacePromptVersionSection": {
+    "description": "Section header for prompt versioning controls."
+  },
+  "workspacePromptCommitMessage": "Commit message",
+  "@workspacePromptCommitMessage": {
+    "description": "Label for the optional commit message recorded with a prompt version."
+  },
+  "workspacePromptCommitMessageHint": "Describe what changed (optional)",
+  "@workspacePromptCommitMessageHint": {
+    "description": "Placeholder for the prompt commit message field."
+  },
+  "workspacePromptSetProduction": "Set as production version",
+  "@workspacePromptSetProduction": {
+    "description": "Toggle that marks the saved prompt version as the live production version."
+  },
+  "workspacePromptSetProductionSubtitle": "Make this the live version used in chat.",
+  "@workspacePromptSetProductionSubtitle": {
+    "description": "Explanation for the production-version toggle."
+  },
+  "workspacePromptManageAccess": "Manage access",
+  "@workspacePromptManageAccess": {
+    "description": "Action to open the sharing/access editor for a prompt."
+  },
+  "workspacePromptClone": "Duplicate",
+  "@workspacePromptClone": {
+    "description": "Overflow action that clones a prompt."
+  },
+  "workspacePromptCloneSuffix": "(copy)",
+  "@workspacePromptCloneSuffix": {
+    "description": "Suffix appended to the name and command of a cloned prompt."
+  },
+  "workspacePromptUpdateDetails": "Save name & command only",
+  "@workspacePromptUpdateDetails": {
+    "description": "Overflow action that updates prompt metadata without creating a new version."
+  },
+  "workspacePromptDetailsSaved": "Details saved",
+  "@workspacePromptDetailsSaved": {
+    "description": "Confirmation that prompt name and command were updated."
+  },
+  "workspacePromptActivate": "Activate",
+  "@workspacePromptActivate": {
+    "description": "Overflow action that enables a prompt."
+  },
+  "workspacePromptDeactivate": "Deactivate",
+  "@workspacePromptDeactivate": {
+    "description": "Overflow action that disables a prompt."
+  },
+  "workspacePromptDelete": "Delete prompt",
+  "@workspacePromptDelete": {
+    "description": "Overflow action that deletes a prompt."
+  },
+  "workspacePromptDeleteConfirmTitle": "Удалить промпт?",
+  "@workspacePromptDeleteConfirmTitle": {
+    "description": "Confirmation dialog title for deleting a prompt."
+  },
+  "workspacePromptDeleteConfirmMessage": "Удалить промпт «{name}»? Это действие нельзя отменить.",
+  "@workspacePromptDeleteConfirmMessage": {
+    "description": "Confirmation dialog body for deleting a prompt.",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "workspacePromptDeleted": "Prompt deleted",
+  "@workspacePromptDeleted": {
+    "description": "Confirmation that a prompt was deleted."
+  },
+  "workspacePromptSaved": "Prompt saved",
+  "@workspacePromptSaved": {
+    "description": "Confirmation that a prompt was saved."
+  },
+  "workspacePromptSaveFailed": "Couldn't save the prompt. Please try again.",
+  "@workspacePromptSaveFailed": {
+    "description": "Error shown when saving a prompt fails."
+  },
+  "workspacePromptImport": "Import prompts",
+  "@workspacePromptImport": {
+    "description": "Overflow action that imports prompt definitions from JSON."
+  },
+  "workspacePromptExport": "Export prompts",
+  "@workspacePromptExport": {
+    "description": "Overflow action that exports readable prompts as JSON."
+  },
+  "workspacePromptExportFailed": "Couldn't export prompts.",
+  "@workspacePromptExportFailed": {
+    "description": "Error shown when exporting prompts fails."
+  },
+  "workspacePromptHistory": "Version history",
+  "@workspacePromptHistory": {
+    "description": "Header of the prompt version-history panel."
+  },
+  "workspacePromptHistoryEmpty": "No versions yet.",
+  "@workspacePromptHistoryEmpty": {
+    "description": "Empty-state text when a prompt has no version history."
+  },
+  "workspacePromptHistoryLoadFailed": "Couldn't load version history.",
+  "@workspacePromptHistoryLoadFailed": {
+    "description": "Error shown when loading prompt history fails."
+  },
+  "workspacePromptHistoryCommitFallback": "No commit message",
+  "@workspacePromptHistoryCommitFallback": {
+    "description": "Placeholder shown for a history entry without a commit message."
+  },
+  "workspacePromptHistoryLive": "Live",
+  "@workspacePromptHistoryLive": {
+    "description": "Badge marking the active production version of a prompt."
+  },
+  "workspacePromptHistoryDiff": "Compare with production",
+  "@workspacePromptHistoryDiff": {
+    "description": "Action to diff a prompt version against the production version."
+  },
+  "workspacePromptHistoryDiffTitle": "Version comparison",
+  "@workspacePromptHistoryDiffTitle": {
+    "description": "Title of the prompt version diff sheet."
+  },
+  "workspacePromptHistoryDiffEmpty": "No content differences.",
+  "@workspacePromptHistoryDiffEmpty": {
+    "description": "Shown when two prompt versions have identical content."
+  },
+  "workspacePromptHistoryDiffNameChanged": "The name changed between these versions.",
+  "@workspacePromptHistoryDiffNameChanged": {
+    "description": "Note shown in the diff sheet when the prompt name changed."
+  },
+  "workspacePromptHistoryDiffFailed": "Couldn't compute the diff.",
+  "@workspacePromptHistoryDiffFailed": {
+    "description": "Error shown when computing a prompt version diff fails."
+  },
+  "workspacePromptHistoryRestore": "Restore this version",
+  "@workspacePromptHistoryRestore": {
+    "description": "Action that loads a version snapshot back into the editor."
+  },
+  "workspacePromptHistoryRestored": "Version content restored. Save to keep it.",
+  "@workspacePromptHistoryRestored": {
+    "description": "Confirmation that a version snapshot was loaded into the editor."
+  },
+  "workspacePromptHistorySetProduction": "Set as production",
+  "@workspacePromptHistorySetProduction": {
+    "description": "Action that pins a version as the production version."
+  },
+  "workspacePromptHistoryProductionSet": "Production version updated.",
+  "@workspacePromptHistoryProductionSet": {
+    "description": "Confirmation that the production version was changed."
+  },
+  "workspacePromptHistoryDelete": "Delete version",
+  "@workspacePromptHistoryDelete": {
+    "description": "Action that deletes a prompt history entry."
+  },
+  "workspacePromptHistoryDeleteConfirmTitle": "Delete version?",
+  "@workspacePromptHistoryDeleteConfirmTitle": {
+    "description": "Confirmation dialog title for deleting a prompt version."
+  },
+  "workspacePromptHistoryDeleteConfirmMessage": "This version snapshot will be removed. This can't be undone.",
+  "@workspacePromptHistoryDeleteConfirmMessage": {
+    "description": "Confirmation dialog body for deleting a prompt version."
+  },
+  "workspacePromptHistoryDeleted": "Version deleted",
+  "@workspacePromptHistoryDeleted": {
+    "description": "Confirmation that a prompt version was deleted."
+  },
+  "workspacePromptHistoryDeleteProduction": "The live production version can't be deleted.",
+  "@workspacePromptHistoryDeleteProduction": {
+    "description": "Error shown when trying to delete the active production version."
+  },
+  "workspaceSkillCreateTitle": "New skill",
+  "@workspaceSkillCreateTitle": {
+    "description": "Title shown while creating a new workspace skill."
+  },
+  "workspaceSkillName": "Name",
+  "@workspaceSkillName": {
+    "description": "Label for the skill name field."
+  },
+  "workspaceSkillNameHint": "e.g. Code Review Guidelines",
+  "@workspaceSkillNameHint": {
+    "description": "Placeholder example for the skill name field."
+  },
+  "workspaceSkillNameRequired": "Name is required.",
+  "@workspaceSkillNameRequired": {
+    "description": "Validation error when the skill name is empty."
+  },
+  "workspaceSkillId": "Skill ID",
+  "@workspaceSkillId": {
+    "description": "Label for the skill identifier field."
+  },
+  "workspaceSkillIdHint": "e.g. code-review-guidelines",
+  "@workspaceSkillIdHint": {
+    "description": "Placeholder example for the skill identifier field."
+  },
+  "workspaceSkillIdRequired": "Skill ID is required.",
+  "@workspaceSkillIdRequired": {
+    "description": "Validation error when the skill identifier is empty."
+  },
+  "workspaceSkillIdInvalid": "Only letters, numbers, hyphens, and underscores are allowed.",
+  "@workspaceSkillIdInvalid": {
+    "description": "Validation error when the skill identifier contains illegal characters."
+  },
+  "workspaceSkillIdTaken": "That skill ID or name is already in use.",
+  "@workspaceSkillIdTaken": {
+    "description": "Error shown when saving a skill whose id or name collides with another skill."
+  },
+  "workspaceSkillDescription": "Description",
+  "@workspaceSkillDescription": {
+    "description": "Label for the optional skill description field."
+  },
+  "workspaceSkillDescriptionHint": "e.g. Step-by-step instructions for code reviews",
+  "@workspaceSkillDescriptionHint": {
+    "description": "Placeholder example for the skill description field."
+  },
+  "workspaceSkillContent": "Instructions",
+  "@workspaceSkillContent": {
+    "description": "Label for the skill Markdown instructions body field."
+  },
+  "workspaceSkillContentHint": "Enter skill instructions in markdown…",
+  "@workspaceSkillContentHint": {
+    "description": "Placeholder text for the empty skill instructions field."
+  },
+  "workspaceSkillContentRequired": "Instructions are required.",
+  "@workspaceSkillContentRequired": {
+    "description": "Validation error when the skill instructions are empty."
+  },
+  "workspaceSkillWriteTab": "Write",
+  "@workspaceSkillWriteTab": {
+    "description": "Toggle label for the editable skill instructions view."
+  },
+  "workspaceSkillPreviewTab": "Preview",
+  "@workspaceSkillPreviewTab": {
+    "description": "Toggle label for the rendered markdown preview of the skill instructions."
+  },
+  "workspaceSkillPreviewEmpty": "Nothing to preview yet.",
+  "@workspaceSkillPreviewEmpty": {
+    "description": "Empty-state text shown in the skill preview when there is no content."
+  },
+  "workspaceSkillManageAccess": "Manage access",
+  "@workspaceSkillManageAccess": {
+    "description": "Action to open the sharing/access editor for a skill."
+  },
+  "workspaceSkillSaved": "Skill saved",
+  "@workspaceSkillSaved": {
+    "description": "Confirmation that a skill was saved."
+  },
+  "workspaceSkillSaveFailed": "Couldn't save the skill. Please try again.",
+  "@workspaceSkillSaveFailed": {
+    "description": "Error shown when saving a skill fails."
+  },
+  "workspaceSkillClone": "Duplicate",
+  "@workspaceSkillClone": {
+    "description": "Overflow action that clones a skill."
+  },
+  "workspaceSkillCloneSuffix": "(Clone)",
+  "@workspaceSkillCloneSuffix": {
+    "description": "Suffix appended to the name of a cloned skill."
+  },
+  "workspaceSkillActivate": "Activate",
+  "@workspaceSkillActivate": {
+    "description": "Overflow action that enables a skill."
+  },
+  "workspaceSkillDeactivate": "Deactivate",
+  "@workspaceSkillDeactivate": {
+    "description": "Overflow action that disables a skill."
+  },
+  "workspaceSkillDelete": "Delete skill",
+  "@workspaceSkillDelete": {
+    "description": "Overflow action that deletes a skill."
+  },
+  "workspaceSkillDeleteConfirmTitle": "Delete skill?",
+  "@workspaceSkillDeleteConfirmTitle": {
+    "description": "Confirmation dialog title for deleting a skill."
+  },
+  "workspaceSkillDeleteConfirmMessage": "\"{name}\" will be permanently deleted.",
+  "@workspaceSkillDeleteConfirmMessage": {
+    "description": "Confirmation dialog body for deleting a skill.",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "workspaceSkillDeleted": "Skill deleted",
+  "@workspaceSkillDeleted": {
+    "description": "Confirmation that a skill was deleted."
+  },
+  "workspaceSkillImport": "Import skills",
+  "@workspaceSkillImport": {
+    "description": "Title of the JSON skill import sheet."
+  },
+  "workspaceSkillImportMarkdown": "Import Markdown",
+  "@workspaceSkillImportMarkdown": {
+    "description": "Overflow action that imports a skill from a Markdown file into the create editor."
+  },
+  "workspaceSkillImportJson": "Import JSON",
+  "@workspaceSkillImportJson": {
+    "description": "Overflow action that imports one or more skills from a JSON file."
+  },
+  "workspaceSkillImportMarkdownLoaded": "Markdown loaded. Review and save to create the skill.",
+  "@workspaceSkillImportMarkdownLoaded": {
+    "description": "Confirmation that a Markdown file was loaded into the unsaved skill editor."
+  },
+  "workspaceSkillImportMarkdownFailed": "Couldn't read the Markdown file.",
+  "@workspaceSkillImportMarkdownFailed": {
+    "description": "Error shown when reading a Markdown skill file fails."
+  },
+  "workspaceSkillExport": "Export skills",
+  "@workspaceSkillExport": {
+    "description": "Overflow action that exports readable skills as JSON."
+  },
+  "workspaceSkillExportFailed": "Couldn't export skills.",
+  "@workspaceSkillExportFailed": {
+    "description": "Error shown when exporting skills fails."
+  },
+  "workspaceToolCreateTitle": "Create tool",
+  "workspaceToolName": "Name",
+  "workspaceToolNameHint": "e.g. My Tools",
+  "workspaceToolNameRequired": "Enter a tool name.",
+  "workspaceToolId": "Tool ID",
+  "workspaceToolIdHint": "Letters, numbers, and underscores; can't start with a number.",
+  "workspaceToolIdRequired": "Enter a tool ID.",
+  "workspaceToolIdInvalid": "Tool IDs use letters, numbers, and underscores and can't start with a number.",
+  "workspaceToolIdTaken": "That tool ID is already in use.",
+  "workspaceToolDescription": "Description",
+  "workspaceToolDescriptionHint": "e.g. Tools for performing various operations",
+  "workspaceToolContent": "Python source",
+  "workspaceToolContentHint": "Write your tool as a Python class named Tools…",
+  "workspaceToolContentRequired": "Add Python source before saving.",
+  "workspaceToolWarning": "Tools run arbitrary Python on the server — only add code from sources you trust.",
+  "workspaceToolSaved": "Tool saved",
+  "workspaceToolDeleted": "Tool deleted",
+  "workspaceToolSaveFailed": "Couldn't save the tool.",
+  "workspaceToolManageAccess": "Manage access",
+  "workspaceToolClone": "Duplicate",
+  "workspaceToolCloneSuffix": "(Clone)",
+  "workspaceToolDelete": "Delete",
+  "workspaceToolDeleteConfirmTitle": "Удалить инструмент?",
+  "workspaceToolDeleteConfirmMessage": "Удалить инструмент «{name}»? Это действие нельзя отменить.",
+  "workspaceToolImport": "Import tools",
+  "workspaceToolImportJson": "Import JSON",
+  "workspaceToolImportUrl": "Import from URL",
+  "workspaceToolImportUrlTitle": "Import tool from URL",
+  "workspaceToolImportUrlHint": "Enter a raw or GitHub URL to a tool's Python file",
+  "workspaceToolImportUrlLabel": "URL",
+  "workspaceToolImportUrlInvalid": "Enter a valid URL.",
+  "workspaceToolImportUrlFailed": "Couldn't import the tool from that URL.",
+  "workspaceToolImportUrlLoaded": "Tool loaded — review and save.",
+  "workspaceToolExport": "Export tools",
+  "workspaceToolExportFailed": "Couldn't export tools.",
+  "workspaceToolManifest": "Manifest",
+  "workspaceToolManifestVersion": "Version {version}",
+  "workspaceToolManifestRequiredVersion": "Requires Open WebUI {version}",
+  "workspaceToolManifestFunding": "Funding: {url}",
+  "workspaceToolSpecs": "Generated specifications",
+  "workspaceToolDetails": "Сведения об инструменте",
+  "workspaceToolFunctionCount": "{count, plural, one{# функция} few{# функции} many{# функций} other{# функции}}",
+  "@workspaceToolFunctionCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "workspaceToolSpecsEmpty": "No specifications were generated for this tool.",
+  "workspaceToolIncompatible": "This tool requires Open WebUI v{required}, but the server is v{current}. Update the server to save.",
+  "workspaceToolValves": "Valves",
+  "workspaceToolValvesTitle": "Valves",
+  "workspaceToolValvesServer": "Server valves",
+  "workspaceToolValvesUser": "User valves",
+  "workspaceToolValvesEmpty": "No valves",
+  "workspaceToolValvesSaved": "Valves updated",
+  "workspaceToolValvesSaveFailed": "Couldn't update valves.",
+  "workspaceToolValvesLoadFailed": "Couldn't load valves.",
+  "workspaceValveRequired": "required",
+  "workspaceValveDefault": "Default",
+  "workspaceValveCustom": "Custom",
+  "workspaceValveNone": "None",
+  "workspaceValveEnabled": "Enabled",
+  "workspaceValveDisabled": "Disabled",
+  "noteConflictCopyBadge": "Конфликтная копия",
+  "noteConflictCopySuffix": " (конфликтная копия)",
+  "notificationChannelDescription": "Уведомлять, когда кто-то отправляет сообщение в канал или личные сообщения.",
+  "notificationChannelMessagesDescription": "Ответы, сообщения канала и завершённые ответы",
+  "notificationChannelMessagesName": "Сообщения",
+  "notificationChannelTitle": "Сообщения канала",
+  "notificationChatDescription": "Уведомлять, когда ответ завершается в чате, который вы не просматриваете.",
+  "notificationChatTitle": "Ответы в чате",
+  "notificationDefaultTitle": "Новое сообщение",
+  "notificationInAppBannerDescription": "Показывать баннер внутри приложения, пока оно открыто.",
+  "notificationInAppBannerTitle": "Баннеры в приложении",
+  "notificationSoundAlwaysDescription": "Воспроизводить звук, даже когда приложение открыто и активно.",
+  "notificationSoundAlwaysTitle": "Всегда воспроизводить звук",
+  "notificationSoundDescription": "Воспроизводить звук при поступлении уведомления.",
+  "notificationSoundTitle": "Звук",
+  "notificationSystemDescription": "Показывать уведомления вне приложения, когда оно работает в фоне.",
+  "notificationSystemTitle": "Системные уведомления",
+  "notificationViewAction": "Просмотреть",
+  "notificationsEnabledDescription": "Получать уведомления, когда приложение работает в фоне и внутри приложения.",
+  "notificationsEnabledTitle": "Включить уведомления",
+  "notificationsPermissionDenied": "Уведомления отключены в системных настройках.",
+  "notificationsSubtitle": "Оповещения об ответах, сообщениях и завершённых ответах",
+  "notificationsTitle": "Уведомления",
+  "hermesSecretsUnavailable": "Не удалось получить доступ к сохраненным учетным данным Hermes. Разблокируйте защищенное хранилище и повторите попытку.",
+  "hermesAgentSettingsTitle": "Агент Hermes",
+  "hermesAgentSettingsSubtitle": "Подключение собственного агента Hermes",
+  "connectOpenWebUITitle": "Подключение к Open WebUI",
+  "connectOpenWebUISubtitle": "Добавить собственный сервер Open WebUI",
+  "backendChooserWelcome": "Добро пожаловать в Conduit",
+  "backendChooserPrompt": "Выберите способ подключения.",
+  "backendChooserOpenWebUISubtitle": "Подключение к серверу Open WebUI с полным доступом к чатам, заметкам и функциям.",
+  "backendChooserHermesTitle": "Агент Hermes",
+  "backendChooserHermesSubtitle": "Прямое подключение к собственному агенту Hermes — сервер Open WebUI не требуется.",
+  "hermesApprovalRequired": "Требуется подтверждение",
+  "hermesApprovalFallback": "Агент запрашивает разрешение на продолжение.",
+  "openWebUiPromptOther": "Другое",
+  "@openWebUiPromptOther": {"description": "Label for a free-form answer to an Open WebUI ask-user question."},
+  "openWebUiPromptAnswerHint": "Введите ответ",
+  "@openWebUiPromptAnswerHint": {"description": "Placeholder for a free-form Open WebUI ask-user answer."},
+  "openWebUiPromptSubmit": "Отправить",
+  "@openWebUiPromptSubmit": {"description": "Action that submits all answers to an Open WebUI ask-user prompt."},
+  "hermesApprovalApproved": "Одобрено ✓",
+  "hermesApprovalDenied": "Отклонено",
+  "hermesApprovalApproveAction": "Одобрить",
+  "hermesApprovalDenyAction": "Отклонить",
+  "hermesEnableTitle": "Включить агента Hermes",
+  "hermesEnableSubtitle": "Использовать собственного агента Hermes как модель в списке выбора.",
+  "hermesServerUrlTitle": "URL сервера",
+  "hermesApiKeyTitle": "Ключ API",
+  "hermesConfiguredReplacePlaceholder": "Настроено — введите для замены",
+  "hermesApiKeyPlaceholder": "Введите ключ API",
+  "hermesMemoryKeyTitle": "Ключ памяти (необязательно)",
+  "hermesMemoryKeyPlaceholder": "Генерируется автоматически, если оставить пустым",
+  "hermesCapabilitiesTitle": "Возможности",
+  "hermesCapabilityApproval": "Подтверждения",
+  "hermesCapabilitySkills": "Навыки",
+  "hermesCapabilityToolsets": "Наборы инструментов",
+  "hermesCapabilityJobs": "Задачи",
+  "hermesCapabilitySessions": "Сессии",
+  "hermesTabInfoTitle": "О Hermes Agent",
+  "hermesTabInfoSubtitle": "Автономный локальный агент с поддержкой инструментов",
+  "hermesNativeSettingsSubtitle": "Прямое подключение к собственному агенту Hermes.",
+  "hermesSelfHostedAgentLabel": "Собственный агент",
+  "hermesNoConversationsMessage": "Пока нет диалогов Hermes.\nНачните новый чат с агентом Hermes, и он появится здесь.",
+  "hermesConversationsTitle": "Диалоги",
+  "hermesBotsTitle": "Боты",
+  "hermesConversationsLoadError": "Не удалось загрузить диалоги Hermes.\nПроверьте подключение в Настройки → Агент Hermes.",
+  "hermesSchedulesLoading": "Загрузка расписаний…",
+  "hermesSchedulesUnavailable": "Расписания недоступны",
+  "hermesNoSchedulesYet": "Пока нет расписаний",
+  "hermesSchedulesSummary": "Активно {active} из {total}",
+  "hermesReviewSchedules": "Просмотреть расписания",
+  "hermesScheduledAgentsTitle": "Запланированные агенты",
+  "workspaceToolImportUrlHost": "Можно импортировать инструменты только с GitHub.",
+  "signInServerDescription": "Введите адрес сервера Open WebUI для авторизации",
+  "openWebUIServer": "Сервер Open WebUI",
+  "serverAddressUnavailable": "Адрес сервера недоступен",
+  "showPassword": "Показать пароль",
+  "hidePassword": "Скрыть пароль",
+  "reviewerModeEnabled": "Режим рецензента включен. Вы можете открыть демо без сервера.",
+  "reviewerModeDisabled": "Режим рецензента отключен.",
+  "openSourceLicenses": "Лицензии открытого ПО",
+  "directConnectionsTitle": "Прямые подключения",
+  "directConnectionsSubtitle": "Управление прямыми подключениями к провайдерам ИИ",
+  "directConnectionsDescription": "Настройте прямое взаимодействие с API OpenAI-совместимых сервисов, Ollama или локальными моделями.",
+  "directConnectionsCombinedDescription": "Подключайтесь напрямую к поставщикам моделей через подключения, синхронизированные с Open WebUI или сохранённые только на этом устройстве.",
+  "openWebUiDirectConnectionsSectionTitle": "Сервер Open WebUI",
+  "openWebUiDirectConnectionsSectionDescription": "Сохранены в вашей учётной записи Open WebUI и доступны в других клиентах, где выполнен вход.",
+  "deviceDirectConnectionsSectionTitle": "На этом устройстве",
+  "deviceDirectConnectionsSectionDescription": "Учётные данные безопасно хранятся на этом устройстве.",
+  "openWebUiDirectProfilesEmptyTitle": "На сервере пока нет подключений",
+  "openWebUiDirectProfilesEmptySubtitle": "Добавьте подключение к API, совместимому с OpenAI, чтобы синхронизировать его через Open WebUI.",
+  "openWebUiDirectConnectionsLoadFailed": "Не удалось синхронизировать подключения из Open WebUI.",
+  "openWebUiDirectConnectionSourceLabel": "Open WebUI",
+  "deviceDirectConnectionSourceLabel": "Это устройство",
+  "openWebUiDirectConnectionUnsupportedAuth": "В этом подключении используется способ аутентификации, который Conduit не может безопасно использовать.",
+  "directConnectionUnavailableLabel": "Недоступно",
+  "openWebUiDirectConnectionEditorDescription": "Изменения сохраняются в вашей учётной записи Open WebUI.",
+  "openWebUiDirectConnectionProviderDescription": "Пользовательские подключения Open WebUI поддерживают API, совместимые с OpenAI.",
+  "openWebUiDirectConnectionFallbackName": "Подключение Open WebUI",
+  "openWebUiDirectConnectionsUnavailable": "Подключения Open WebUI недоступны.",
+  "directConnectionNoLongerExists": "Это подключение больше не существует.",
+  "openWebUiDirectConnectionDeleteMessage": "Подключение {name} будет удалено из вашей учётной записи Open WebUI и других клиентов, где выполнен вход.",
+  "@openWebUiDirectConnectionDeleteMessage": {
+    "description": "Confirmation message shown before deleting an Open WebUI-synced direct connection.",
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "addDirectConnection": "Добавить подключение",
+  "editDirectConnection": "Редактировать подключение",
+  "directConnectionName": "Название подключения",
+  "directDefaultConnectionName": "Мой провайдер",
+  "sidebarButtonLabel": "Боковая панель",
+  "directConnectionNameRequired": "Введите название подключения.",
+  "directConnectionUrlInvalid": "Используйте корректный URL (http:// или https://).",
+  "directConnectionCredentialsReentryRequired": "Введите учетные данные заново при смене сервера.",
+  "directConnectionApiKeyRequired": "Введите ключ API или выберите подключение без аутентификации.",
+  "directConnectionHeaderNameRequired": "Введите имя заголовка, затем добавьте его.",
+  "directConnectionCredentialTransferTitle": "Использовать учетные данные с новым сервером?",
+  "directConnectionCredentialTransferMessage": "Ключ API и все пользовательские заголовки будут отправлены на новый сервер. Продолжайте, только если вы ему доверяете.",
+  "directConnectionCredentialTransferConfirm": "Использовать данные",
+  "directConnectionSaveFailed": "Не удалось сохранить подключение.",
+  "directConnectionSaveConflict": "Это подключение было изменено в другом месте. Перед сохранением откройте его заново.",
+  "directConnectionReachFailed": "Не удалось связаться с провайдером.",
+  "directConnectionDeleteTitle": "Удалить подключение?",
+  "directConnectionDeleteMessage": "Подключение {name} и его учетные данные будут удалены с этого устройства.",
+  "directConnectionDeleteFailed": "Не удалось удалить подключение.",
+  "directConnectionProbeConnected": "Подключено",
+  "directConnectionProbeConnectedModels": "{count, plural, one{Подключено · # модель} few{Подключено · # модели} many{Подключено · # моделей} other{Подключено · # моделей}}",
+  "directProvider": "Тип провайдера",
+  "openAICompatible": "OpenAI-совместимый",
+  "ollama": "Ollama",
+  "openRouterProviderName": "OpenRouter",
+  "directApiBaseUrl": "Базовый URL",
+  "directOpenRouterUrlInvalid": "Используйте корневой HTTPS-адрес /api/v1 OpenRouter (глобальный или для ЕС).",
+  "directOpenRouterBaseUrlDescription": "Использует ваш API-ключ OpenRouter, авторизованный каталог моделей и инструменты, управляемые Conduit.",
+  "directOpenRouterChatCompletionsDescription": "Chat Completions используется для встроенного веб-поиска, генерации изображений, анализа PDF и повторно используемых аннотаций PDF.",
+  "directCompletionApi": "API завершения",
+  "directChatCompletions": "Chat Completions",
+  "directResponses": "Responses",
+  "directChatCompletionsDescription": "Работает с OpenAI-совместимыми провайдерами, такими как LM Studio, vLLM, LocalAI и OpenRouter.",
+  "directResponsesDescription": "Использовать типизированный поток событий Responses. Выбирайте только если провайдер поддерживает эндпоинт /responses.",
+  "directApiVersion": "Версия API",
+  "directApiVersionDescription": "Необязательно. Добавляет параметр запроса api-version, необходимый для Azure OpenAI.",
+  "directAuthentication": "Аутентификация",
+  "noAuthentication": "Без аутентификации",
+  "bearerToken": "Токен Bearer",
+  "directApiKeyHeader": "Заголовок api-key",
+  "directApiKeyHeaderDescription": "Отправляет учетные данные в заголовке api-key, используемом Azure OpenAI.",
+  "directApiKey": "Ключ API",
+  "directCustomHeaders": "Пользовательские заголовки",
+  "directManualModelIds": "ID моделей вручную",
+  "directManualModelIdsDescription": "Необязательно. Если сервер не может показать список моделей, вводите по одному ID в строке.",
+  "@directManualModelIdsDescription": {
+    "placeholders": {}
+  },
+  "directModelIdPrefix": "Префикс ID модели",
+  "directModelIdPrefixDescription": "Необязательно. Добавляет видимое пространство имен (например, studio.model-name) без изменения ID модели, отправляемого провайдеру.",
+  "directModelTags": "Теги модели",
+  "directModelTagsDescription": "Необязательно. Разделяйте теги запятыми или переносами строк.",
+  "syncDirectHistory": "История Open WebUI",
+  "syncDirectHistorySubtitle": "Новые прямые чаты синхронизируются при входе. Существующие чаты сохраняются на месте.",
+  "directHistoryLocalOnlySubtitle": "Новые прямые чаты сохраняются на этом устройстве. Существующие чаты остаются на месте.",
+  "backendChooserDirectTitle": "Прямое подключение",
+  "backendChooserDirectSubtitle": "Подключение API OpenAI или Ollama. Учетные данные хранятся на устройстве.",
+  "testDirectConnection": "Проверить подключение",
+  "directConnectionTestUnavailable": "Проверка подключения пока недоступна.",
+  "finishDirectSetup": "Начать общение",
+  "directProfilesEmptyTitle": "Пока нет прямых подключений",
+  "directProfilesEmptySubtitle": "Добавьте OpenAI-совместимый сервер или Ollama для начала работы.",
+  "directConnectionsSectionTitle": "Подключения",
+  "directSavedDataUnreadable": "Не удалось прочитать сохраненные данные подключения.",
+  "directSecureStorageUnavailable": "Проверьте доступ к защищенному хранилищу и повторите попытку.",
+  "onDevice": "На устройстве",
+  "directConnectionError": "Ошибка прямого подключения",
+  "directAttachmentUnsupported": "Эта модель прямого подключения не поддерживает такие вложения.",
+  "backendChooserOpenWebUITitle": "Open WebUI",
+  "hermesMemoryKeyDescription": "Ключ памяти привязывает долговременную память агента к вам (X-Hermes-Session-Key). Если оставить пустым, стабильный ключ сгенерируется автоматически при первом сообщении.",
+  "moreModels": "Больше моделей",
+  "reasoningEffort": "Уровень рассуждения",
+  "reasoningEffortLow": "Низкий",
+  "reasoningEffortMedium": "Средний",
+  "reasoningEffortHigh": "Высокий",
+  "reasoningEffortMinimal": "Минимальный",
+  "reasoningEffortExtraHigh": "Очень высокий",
+  "reasoningEffortMaximum": "Максимальный",
+  "reasoningEffortNone": "Нет",
+  "customReasoningEffort": "Другой уровень",
+  "customReasoningEffortHint": "Введите уровень, поддерживаемый провайдером",
+  "proxyServerVerificationFailed": "Не удалось проверить сервер Open WebUI. Возможно, сеанс прокси истёк или недействителен. Повторите попытку.",
+  "proxyManualSignInRequired": "Не удалось пройти аутентификацию. Попробуйте войти вручную.",
+  "sidebarSyncingChats": "Синхронизация чатов",
+  "sidebarSyncingNotes": "Синхронизация заметок",
+  "sidebarFinishingSync": "Завершение синхронизации",
+  "loadMermaidPreview": "Загрузить предпросмотр Mermaid",
+  "loadChartPreview": "Загрузить предпросмотр диаграммы",
+  "loadPdfPreview": "Загрузить предпросмотр PDF: {title}",
+  "ollamaCloudDefaultName": "Ollama Cloud",
+  "ollamaCloudBaseUrlHint": "https://ollama.com",
+  "ollamaCloudBaseUrlDescription": "Используйте https://ollama.com с API-ключом Ollama Cloud.",
+  "ollamaModelLoaded": "Загружена",
+  "ollamaModelActions": "Память модели",
+  "ollamaModelActionsDescription": "Управляйте этой моделью в оперативной или видеопамяти Ollama.",
+  "ollamaLoadModel": "Загрузить модель",
+  "ollamaLoadModelDescription": "Загрузите её сейчас, чтобы ускорить первый ответ.",
+  "ollamaUnloadModel": "Выгрузить модель",
+  "ollamaUnloadModelDescription": "Освободите оперативную или видеопамять. Модель автоматически загрузится при следующем сообщении.",
+  "ollamaUnloadModelConfirmTitle": "Выгрузить {name}?",
+  "ollamaUnloadModelConfirmMessage": "Это освободит оперативную или видеопамять модели. Ollama автоматически загрузит её снова, когда вы отправите сообщение.",
+  "ollamaKeepAlive": "Хранение в памяти",
+  "ollamaKeepAliveDescription": "Применяется к этой модели после каждого запроса чата.",
+  "ollamaKeepAliveServerDefault": "По умолчанию на сервере",
+  "ollamaKeepAliveFiveMinutes": "5 минут",
+  "ollamaKeepAliveThirtyMinutes": "30 минут",
+  "ollamaKeepAliveOneHour": "1 час",
+  "ollamaKeepAliveAlways": "Всегда загружена",
+  "ollamaKeepAliveImmediate": "Выгружать после каждого ответа",
+  "ollamaKeepAliveCustom": "Другое значение",
+  "ollamaKeepAliveCustomHint": "Примеры: 10m, 24h, 3600, -1 или 0",
+  "ollamaKeepAliveInvalid": "Укажите секунды или длительность, например 10m или 24h.",
+  "ollamaModelLoadedMessage": "Модель {name} загружена.",
+  "ollamaModelUnloadedMessage": "Модель {name} выгружена.",
+  "ollamaModelActionFailed": "Не удалось обновить состояние модели в памяти.",
+  "ollamaThinking": "Рассуждение",
+  "ollamaCloudModelActionsDescription": "Настройте ответы этой модели Ollama Cloud.",
+  "ollamaThinkingDescription": "Выберите, насколько подробно должна рассуждать модель. Доступные уровни зависят от модели.",
+  "ollamaThinkingAutomatic": "Автоматически",
+  "ollamaThinkingDisabled": "Выкл.",
+  "ollamaThinkingLow": "Низкий",
+  "ollamaThinkingMedium": "Средний",
+  "ollamaThinkingHigh": "Высокий",
+  "ollamaThinkingMaximum": "Максимальный",
+  "releaseNotesSupportPromptHeading": "Нравится Conduit?",
+  "releaseNotesSupportPromptMessage": "Короткий отзыв помогает большему числу людей найти Conduit. Небольшие чаевые помогают мне продолжать разработку. И то и другое очень ценно.",
+  "directConnectProvider": "Подключить провайдера",
+  "directConnectProviderTitle": "Подключить провайдера",
+  "directConnectionEnabledSubtitle": "Показывать модели этого подключения в списке моделей.",
+  "directConnectionDetailsTitle": "Параметры подключения",
+  "directBaseUrlDescription": "Укажите префикс API, ожидаемый провайдером, обычно /v1.",
+  "directConfiguredReplacePlaceholder": "Настроено, введите новое значение для замены",
+  "directApiKeyPlaceholder": "Введите ключ API",
+  "hermesOnboardingFailed": "Не удалось завершить настройку Hermes. Проверьте защищённое хранилище и повторите попытку.",
+  "hermesConnectionDetailsTitle": "Параметры подключения",
+  "hermesMemoryKeyShortDescription": "Связывает долгосрочную память агента с вами. Оставьте поле пустым, и Conduit создаст ключ.",
+  "hermesConnectAction": "Подключить Hermes",
+  "hermesToolCount": "{count, plural, one{# инструмент} few{# инструмента} many{# инструментов} other{# инструмента}}",
+  "@hermesToolCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "hermesNoToolsets": "Сервер не сообщил о наборах инструментов.",
+  "hermesToolsetsNewSessions": "Изменения применяются к новым сеансам Hermes. Существующие чаты сохраняют текущие инструменты.",
+  "hermesServerStatusTitle": "Состояние сервера",
+  "hermesNoServerStatus": "Сервер не сообщил о состоянии.",
+  "hermesLegacySessionToken": "Устаревший токен сеанса",
+  "hermesLegacySessionTokenHint": "Вставьте токен сеанса Hermes",
+  "hermesGatewayStopped": "Панель Hermes в сети, но Desktop Gateway остановлен. Запустите шлюз на сервере Hermes и повторите проверку.",
+  "hermesProfile": "Профиль Hermes",
+  "hermesProfileLabel": "Профиль",
+  "hermesRefreshProfiles": "Обновить профили",
+  "hermesDesktopAuthentication": "Аутентификация на компьютере",
+  "hermesDashboardAuthHelp": "Откройте панель Hermes в окне входа, затем вернитесь сюда, чтобы проверить подключение.",
+  "hermesAuthLegacy": "Устаревший",
+  "hermesAuthNative": "Нативный",
+  "hermesAuthDashboard": "Панель",
+  "hermesNativeSignIn": "Войти через Hermes",
+  "hermesDashboardSignIn": "Открыть вход в панель",
+  "hermesGatewayAccessHeaders": "Заголовки доступа шлюза",
+  "hermesGatewayAccessHeadersHelp": "Необязательные заголовки для защищённой панели Hermes.",
+  "hermesDesktopGateway": "Desktop Gateway",
+  "hermesReloadSkills": "Перезагрузить навыки",
+  "hermesNoInstalledSkills": "Нет установленных навыков",
+  "hermesMcpServers": "Серверы MCP",
+  "hermesSignOut": "Выйти из Hermes",
+  "hermesActionFailed": "Не удалось выполнить действие Hermes.",
+  "hermesToolsetUpdateFailed": "Не удалось обновить набор инструментов Hermes.",
+  "hermesJobStateLabel": "Состояние",
+  "hermesJobDeliveryLabel": "Доставка",
+  "hermesJobLastLabel": "Последний",
+  "hermesJobNextLabel": "Следующий",
+  "hermesJobRunHistory": "История запусков",
+  "hermesApprovalAllowOnce": "Разрешить один раз",
+  "hermesApprovalAllowSession": "Разрешить на сеанс",
+  "hermesApprovalAlwaysAllow": "Всегда разрешать",
+  "hermesClarificationTitle": "Hermes требуется уточнение",
+  "hermesSudoTitle": "Hermes требуется доступ sudo",
+  "hermesSecretTitle": "Hermes требуется секрет",
+  "hermesMcpSetupTitle": "Hermes требуется настройка MCP",
+  "hermesResponseSent": "Ответ отправлен",
+  "hermesNotNow": "Не сейчас",
+  "hermesSetUp": "Настроить",
+  "hermesSensitiveResponse": "Конфиденциальный ответ",
+  "hermesResponse": "Ответ",
+  "hermesSendResponse": "Отправить ответ",
+  "hermesFastTier": "Быстрый уровень",
+  "hermesFastTierOn": "Вкл.",
+  "hermesFastTierOff": "Выкл.",
+  "hermesTurnSteer": "Направить",
+  "hermesTurnSendNext": "Отправить следующее",
+  "hermesTurnControlsUnsupported": "Обновите Hermes, чтобы включить безопасное управление ходами.",
+  "sidebarHermesTab": "Hermes",
+  "markdownShowMoreLines": "Показать ещё {count, plural, one{{count} строку} few{{count} строки} many{{count} строк} other{{count} строк}}",
+  "@markdownShowMoreLines": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "markdownShowLess": "Показать меньше",
+  "voiceBargeIn": "Перебивание",
+  "voiceBargeInDescription": "Продолжает слушать, пока ассистент говорит, чтобы вы могли его перебить.",
+  "voiceCallSpeakerOn": "Включить динамик",
+  "voiceCallSpeakerOff": "Выключить динамик",
+  "colorScheme": "Цветовая схема",
+  "channelEmptyHint": "Создайте канал, чтобы начать групповой разговор.",
+  "passwordChangeDescription": "Обновить пароль учётной записи",
+  "profileDetailsSummary": "О себе, пол и дата рождения",
+  "notificationRequiresMaster": "Включите уведомления, чтобы изменить эту настройку.",
+  "notificationRequiresSound": "Включите звук, чтобы изменить эту настройку.",
+  "enabled": "Вкл.",
+  "disabled": "Выкл.",
+  "hermesJobNew": "Новое запланированное задание",
+  "hermesJobAdminDisabled": "Управление заданиями отключено на этом сервере. Расписания доступны только для чтения.",
+  "hermesJobEmptyMessage": "Создайте запланированное задание для автоматического выполнения запроса.",
+  "hermesJobLoadFailed": "Не удалось загрузить запланированные задания. Проверьте подключение к Hermes и повторите попытку.",
+  "hermesJobCreateFailed": "Не удалось создать запланированное задание.",
+  "hermesJobCreated": "Запланированное задание создано.",
+  "hermesJobPaused": "Приостановлено",
+  "hermesJobRunNow": "Запустить сейчас",
+  "hermesJobEdit": "Изменить запланированное задание",
+  "hermesJobDelete": "Удалить запланированное задание",
+  "hermesJobResumeFailed": "Не удалось возобновить запланированное задание.",
+  "hermesJobPauseFailed": "Не удалось приостановить запланированное задание.",
+  "hermesJobResumed": "Запланированное задание возобновлено.",
+  "hermesJobPausedSuccess": "Запланированное задание приостановлено.",
+  "hermesJobRunFailed": "Не удалось запустить запланированное задание.",
+  "hermesJobStarted": "Запланированное задание запущено.",
+  "hermesJobUpdateFailed": "Не удалось обновить запланированное задание.",
+  "hermesJobUpdated": "Запланированное задание обновлено.",
+  "hermesJobDeleteTitle": "Удалить задание",
+  "hermesJobDeleteMessage": "Удалить это запланированное задание? Это действие нельзя отменить.",
+  "hermesJobDeleteFailed": "Не удалось удалить запланированное задание.",
+  "hermesJobDeleted": "Запланированное задание удалено.",
+  "hermesJobEditorEditTitle": "Изменить задание",
+  "hermesJobNameHint": "Ежедневная сводка",
+  "hermesJobPromptLabel": "Запрос",
+  "hermesJobPromptHint": "Что агент должен делать при каждом запуске?",
+  "hermesJobScheduleLabel": "Расписание",
+  "hermesJobScheduleHint": "0 9 * * * или every 2h",
+  "hermesJobTooLong": "Используйте не более {count} символов",
+  "hermesJobScheduleInvalid": "Введите длительность, интервал, дату, время или допустимое расписание cron.",
+  "hermesJobScheduleHelp": "Используйте cron (0 9 * * *), интервал (every 2h), задержку (30m) или дату и время ISO.",
+  "hermesJobsSheetSubtitle": "Приостановите расписания или проверьте, что будет запущено далее.",
+  "hermesJobsSheetReview": "Проверьте время запуска и приостановите расписания.",
+  "hermesJobsManageDescription": "Создавайте, изменяйте, запускайте или удаляйте расписания.",
+  "hermesJobsEmptyManageHint": "Используйте «Управление», чтобы создать запланированный запрос.",
+  "hermesLastStatus": "Последний статус: {status}",
+  "hermesSessionUntitled": "Разговор без названия",
+  "hermesSessionFork": "Ответвить",
+  "hermesSessionRenameTitle": "Переименовать разговор",
+  "hermesSessionNameHint": "Название разговора",
+  "hermesSessionDeleteTitle": "Удалить разговор",
+  "hermesSessionDeleteMessage": "Удалить этот разговор Hermes? Это действие нельзя отменить.",
+  "hermesSessionForkFailed": "Не удалось ответвить разговор.",
+  "hermesSessionRenameFailed": "Не удалось переименовать разговор.",
+  "hermesSessionDeleteFailed": "Не удалось удалить разговор.",
+  "hermesSessionLoadFailed": "Не удалось загрузить этот разговор. Проверьте подключение и повторите попытку.",
+  "hermesMemoryKeyFieldLabel": "Ключ памяти",
+  "directMcpServersTitle": "MCP servers", "directMcpEmptyTitle": "No MCP servers yet", "directMcpReachabilityHelp": "Add a Streamable HTTP endpoint that this phone can reach.", "directMcpEditorTitle": "Edit MCP server", "directMcpAddTitle": "Add MCP server", "directMcpName": "Server name", "directMcpEndpoint": "Streamable HTTP endpoint", "directMcpBearerToken": "Bearer token (optional)", "directMcpCustomHeaders": "Custom headers (optional)", "directMcpCustomHeadersHint": "One per line: Name: Value", "directMcpTestConnection": "Test connection", "directMcpTesting": "Testing connection…", "directMcpTestSucceeded": "Connected — {count} tools found.", "directMcpTestFailed": "Could not list tools from this MCP server.", "directMcpSaveFailed": "Could not save this MCP server.", "directMcpLoadFailed": "Could not load MCP servers from secure storage.", "directMcpMissing": "This MCP server no longer exists.", "directMcpCredentialTransferTitle": "Use credentials with new server?", "directMcpCredentialTransferMessage": "This sends the bearer token and custom headers to the new server. Continue only if you trust it. Cancel saves the server without credentials.", "directMcpCredentialTransferConfirm": "Use credentials", "directMcpDeleteTitle": "Delete MCP server?", "directMcpDeleteMessage": "This removes {name} and its credentials from this device.", "directMcpDeleteFailed": "Could not delete this MCP server.", "directMcpAuthMode": "Authentication", "directMcpAuthNone": "None", "directMcpAuthBearer": "Bearer token", "directMcpAuthOAuth": "OAuth", "directMcpOAuthConnect": "Connect in browser", "directMcpOAuthReconnect": "Reconnect in browser", "directMcpOAuthDisconnect": "Disconnect OAuth", "directMcpOAuthPending": "Waiting for authorization in the browser…", "directMcpOAuthConnected": "OAuth connected.", "directMcpOAuthConnectionDetails": "Connected to {issuerHost} · {scopes}", "directMcpOAuthNoScopes": "No scopes reported", "directMcpOAuthConnectFailed": "Could not connect this MCP server with OAuth.", "directMcpOAuthDisconnectFailed": "Could not disconnect OAuth from this MCP server.", "directMcpApprovalTitle": "Tool approval", "directMcpApprovalAllowOnce": "Allow once", "directMcpApprovalAllowSession": "Allow for session", "directMcpApprovalAllowAlways": "Always allow", "directMcpApprovalAlwaysTitle": "Always allow this tool?", "directMcpApprovalAlwaysMessage": "{serverName} will be allowed to run {toolName} without asking again. The approval is revoked automatically if the tool schema changes.", "@directMcpApprovalAlwaysMessage": {"placeholders":{"serverName":{"type":"String"},"toolName":{"type":"String"}}}, "directMcpApprovalSaveFailed": "Could not remember this approval. You can retry or choose another option.", "directMcpApprovalDeny": "Deny", "directMcpApprovalAllowed": "Allowed once", "directMcpApprovalAllowedSession": "Allowed for session", "directMcpApprovalAllowedAlways": "Always allowed", "directMcpApprovalDenied": "Denied", "directMcpApprovalExpired": "Approval expired", "directMcpRememberedApprovalsTitle": "Always allowed tools", "directMcpRememberedApprovalsSubtitle": "These exact tools can run without asking while their server and input schema remain unchanged.", "directMcpRememberedApprovalRevoke": "Revoke", "directMcpRememberedApprovalsRevokeAll": "Revoke all", "directMcpRememberedApprovalRevokeFailed": "Could not revoke the remembered approval."
+  ,"directMcpContentAction": "MCP content"
+  ,"directMcpContentTitle": "MCP content"
+  ,"directMcpContentServer": "MCP server"
+  ,"directMcpContentSearch": "Search prompts and resources"
+  ,"directMcpContentPrompts": "Prompts"
+  ,"directMcpContentResources": "Resources"
+  ,"directMcpContentEmpty": "This server has no prompts or resources."
+  ,"directMcpContentNoMatches": "No matching prompts or resources."
+  ,"directMcpContentLoadFailed": "Could not load content from this MCP server."
+  ,"directMcpContentRefresh": "Refresh MCP content"
+  ,"directMcpContentPreviewTitle": "Preview"
+  ,"directMcpContentInsert": "Insert"
+  ,"directMcpContentPromptHeading": "MCP prompt from {serverName}: {promptName}"
+  ,"@directMcpContentPromptHeading": {"placeholders":{"serverName":{"type":"String"},"promptName":{"type":"String"}}}
+  ,"directMcpContentResourceHeading": "MCP resource from {serverName}: {resourceUri}"
+  ,"@directMcpContentResourceHeading": {"placeholders":{"serverName":{"type":"String"},"resourceUri":{"type":"String"}}}
+  ,"directMcpContentRoleUser": "User"
+  ,"directMcpContentRoleAssistant": "Assistant"
+  ,"directMcpContentRequestFailed": "Could not load this MCP content. Try again."
+  ,"directMcpContentUnsupported": "This item is binary or unsupported. Choose a text prompt or text resource."
+  ,"directMcpContentChanged": "This item changed on the server. Refresh and choose it again."
+  ,"directMcpContentTooLarge": "This content is too large to insert."
+  ,"directMcpContentComposerTooLarge": "The draft and this content exceed the 256 KiB message limit. Shorten the draft or content and try again."
+  ,"directMcpContentLoading": "Loading MCP content…",
+  "reasoningEffortLight": "Низкий",
+  "reasoningEffortModerate": "Средний",
+  "reasoningEffortDeep": "Высокий",
+  "backendChooserSelfHostedSectionTitle": "Собственные серверы",
+  "backendChooserAppleSectionTitle": "Apple Intelligence",
+  "backendChooserModelApisSectionTitle": "API моделей",
+  "backendChooserAppleOnDeviceTitle": "Локальная модель Apple",
+  "backendChooserAppleOnDeviceSubtitle": "Запуск приватной модели Apple на устройстве без интернета.",
+  "appleOnDeviceUnavailable": "Локальная модель Apple недоступна на этом устройстве.",
+  "backendChooserApplePccTitle": "Apple Private Cloud Compute",
+  "backendChooserApplePccSubtitle": "Приватная облачная модель Apple без ключа API.",
+  "applePccUnavailable": "Apple Private Cloud Compute недоступна на этом устройстве.",
+  "applePccStatusAvailable": "Доступно",
+  "applePccQuotaApproaching": "Приближение к дневному лимиту",
+  "applePccQuotaReached": "Дневной лимит исчерпан",
+  "applePccQuotaResetsAt": "Сброс в {time}",
+  "applePccShowQuotaOptions": "Варианты использования",
+  "applePccOnDeviceFallback": "Резерв на устройстве",
+  "applePccOnDeviceFallbackSubtitle": "Использовать компактную локальную модель Apple при недоступности PCC. Запросы с рассуждениями не переключаются.",
+  "applePccCurrentLanguageUnsupported": "Текущий язык устройства может не поддерживаться.",
+  "applePccContextSize": "Контекст: {tokens} токенов",
+  "directContextLimit": "Лимит контекста: {tokens}",
+  "directContextCompactionTitle": "Сжатие контекста",
+  "directContextCompactionDescription": "Эти модели не сообщают размер контекста. Conduit использует выбранный лимит для сжатия старых сообщений.",
+  "directContextCompactionPickerDescription": "Выберите размер контекста, который Conduit должен использовать для автоматического сжатия.",
+  "directMcpInsecureCredentialsTitle": "Send credentials without encryption?",
+  "directMcpInsecureCredentialsMessage": "This server uses unencrypted HTTP. Your bearer token, OAuth token, and custom headers could be read or changed on the network.",
+  "directMcpInsecureCredentialsConfirm": "Send without encryption",
+  "hermesSessionTooLarge": "Этот разговор слишком большой, чтобы загрузить его на этом устройстве.",
+  "hermesSessionNotFound": "Этот разговор больше недоступен на сервере Hermes.",
+  "hermesSessionLoadFailedDetail": "Не удалось загрузить этот разговор: {detail}",
+  "@hermesSessionLoadFailedDetail": {
+    "placeholders": {
+      "detail": {
+        "type": "String"
+      }
+    }
+  },
+  "directBearerDescription": "Отправляет учётные данные в заголовке Authorization: Bearer. Большинство OpenAI-совместимых серверов (llama.cpp, vLLM, LM Studio, Ollama) ожидают именно это.",
+  "directApiKeyHeaderAzureOnlyDescription": "Отправляет учётные данные в заголовке api-key. Используйте только для Azure OpenAI; другие OpenAI-совместимые серверы ожидают токен Bearer.",
+  "citationShowTitles": "Показывать заголовки страниц в источниках",
+  "citationShowTitlesDescription": "Использовать заголовки страниц вместо доменов сайтов в значках источников",
+  "notificationSystemSettingsDescription": "Измените разрешения, звук и параметры баннеров для Conduit.",
+  "notificationSystemSettingsOpenFailed": "Не удалось открыть системные настройки уведомлений.",
+  "notificationTargetsTitle": "Адреса webhook",
+  "notificationTargetsDescription": "Ваш сервер Open WebUI отправляет события на эти URL, даже когда приложение закрыто.",
+  "notificationTargetsAdd": "Добавить адрес",
+  "notificationTargetsEmpty": "Адресов webhook пока нет.",
+  "notificationTargetsLoadFailed": "Не удалось загрузить адреса webhook.",
+  "notificationTargetsStale": "Сохранено, но не удалось обновить список.",
+  "notificationTargetsUnavailable": "Адреса webhook недоступны для этого аккаунта.",
+  "notificationTargetsAccountChanged": "Аккаунт изменился. Закройте это окно и снова откройте адрес.",
+  "notificationTargetNewTitle": "Новый адрес",
+  "notificationTargetEditTitle": "Изменить адрес",
+  "notificationTargetNameLabel": "Название (необязательно)",
+  "notificationTargetNameHint": "например, team-chat",
+  "notificationTargetUrlLabel": "Webhook URL",
+  "notificationTargetUrlHint": "https://example.com/webhook",
+  "notificationTargetUrlKeepHint": "Оставьте пустым, чтобы сохранить текущий URL",
+  "notificationTargetUrlRequired": "Введите URL webhook.",
+  "notificationTargetEnabledTitle": "Включено",
+  "notificationTargetDeliveryLabel": "Доставка",
+  "notificationTargetDeliveryAway": "Когда меня нет",
+  "notificationTargetDeliveryAlways": "Всегда",
+  "notificationTargetEventsLabel": "События",
+  "notificationTargetEventsUnavailable": "Не удалось загрузить список событий сервера.",
+  "notificationTargetUnknownEvent": "Этого события нет в списке событий этого сервера. Подписка сохраняется, пока вы её не отключите.",
+  "notificationTargetDefaultBadge": "По умолчанию",
+  "notificationTargetMakeDefault": "Сделать основным",
+  "notificationTargetTest": "Отправить тестовое уведомление",
+  "notificationTargetTestSent": "Тестовое уведомление отправлено.",
+  "notificationTargetTestFailed": "Не удалось доставить тестовое уведомление.",
+  "notificationTargetDelete": "Удалить адрес",
+  "notificationTargetDeleteConfirm": "Удалить «{name}»? Сервер перестанет отправлять на него уведомления.",
+  "@notificationTargetDeleteConfirm": {"placeholders":{"name":{"type":"String"}}},
+  "notificationSystemSettingsTitle": "Системные настройки уведомлений",
+  "proxyAuthSignInAgain": "Войти через прокси ещё раз",
+  "readOnly": "Только чтение",
+  "readOnlySharedChat": "Этим чатом поделились с вами. Отправлять сообщения может только владелец.",
+  "sharedBadge": "Общий",
+  "sharedFolderOwner": "Поделился {name}",
+  "@sharedFolderOwner": {"description": "Owner label on a folder another user shared with this account.", "placeholders": {"name": {"type": "String", "example": "Alex"}}},
+  "transcribingAudio": "Расшифровка...",
+  "chatTaskProgress": "Задачи: выполнено {completed} из {total}",
+  "@chatTaskProgress": {
+    "description": "Summary of the Open WebUI task checklist above the chat composer.",
+    "placeholders": {
+      "completed": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
+    }
+  },
+  "chatTaskPending": "Ожидает",
+  "chatTaskInProgress": "Выполняется",
+  "chatTaskCompleted": "Выполнено",
+  "chatTaskCancelled": "Отменено",
+  "webSearchSettingsFooterAuto": "Используется моделями Direct без собственного веб-поиска. Поиск выполняется с этого устройства: запросы отправляются в DuckDuckGo, а если он не отвечает — в Brave, Bing, Mojeek или Википедию. Страницы, которые читает модель, тоже загружаются с этого устройства.",
+  "webSearchSettingsFooterEngine": "Используется моделями Direct без собственного веб-поиска. Поиск выполняется с этого устройства, а запросы отправляются только в {engine}. Страницы, которые читает модель, тоже загружаются с этого устройства.",
+  "@webSearchSettingsFooterEngine": {"placeholders": {"engine": {"type": "String", "example": "DuckDuckGo"}}},
+  "webSearchEngineLabel": "Поисковая система",
+  "webSearchEngineAuto": "Автоматически",
+  "webSearchSafeSearchLabel": "Безопасный поиск",
+  "webSearchSafeSearchStrict": "Строгий",
+  "webSearchSafeSearchModerate": "Умеренный",
+  "webSearchSafeSearchOff": "Выключен",
+  "webSearchRegionLabel": "Регион",
+  "webSearchRegionAuto": "Как на устройстве",
+  "webSearchRegionWorldwide": "Весь мир",
+  "directModelToolsUnsupported": "Эта модель не умеет использовать инструменты, поэтому не может искать в интернете. Отключите веб-поиск и все инструменты, затем повторите попытку.",
+  "directContextCompactionModelCount": "{count, plural, one{{count} модель} few{{count} модели} many{{count} моделей} other{{count} модели}}",
+  "@directContextCompactionModelCount": {"placeholders": {"count": {"type": "int", "example": "42"}}},
+  "imageViewerPosition": "{current} из {total}",
+  "@imageViewerPosition": {"placeholders": {"current": {"type": "int", "example": "2"}, "total": {"type": "int", "example": "5"}}},
+  "saveImage": "Сохранить изображение",
+  "imageSaved": "Изображение сохранено",
+  "imageSaveFailed": "Не удалось сохранить изображение.",
+  "settingsTitle": "Настройки",
+  "profileTitle": "Профиль",
+  "aiAndMemoryTitle": "ИИ и память",
+  "voiceCallMinimize": "Свернуть",
+  "@voiceCallMinimize": {
+    "description": "Accessibility label for the button that shrinks the voice call panel to a small pill."
+  },
+  "voiceCallExpand": "Развернуть",
+  "@voiceCallExpand": {
+    "description": "Accessibility label for the button that opens the minimized voice call pill back into the full panel."
+  },
+  "askConduitAction": "Спросите Conduit",
+  "voiceCallStartTimeout": "Запуск голосового вызова занял слишком много времени. Попробуйте ещё раз.",
+  "@voiceCallStartTimeout": {"description": "Error shown when starting a voice call takes too long."},
+  "voiceCallNoSpeech": "Речь не обнаружена.",
+  "@voiceCallNoSpeech": {"description": "Message shown when the voice call heard no speech for several tries."},
+  "voiceCallFailed": "Не удалось продолжить голосовой вызов.",
+  "@voiceCallFailed": {"description": "Generic error shown when a voice call fails for a reason with no specific message."},
+  "personalToolSettings": "Настройки инструментов",
+  "personalToolSettingsDescription": "Ваши личные параметры для выбранных инструментов и модели.",
+  "personalToolSettingsYours": "Ваши настройки",
+  "personalToolSettingsUnavailable": "Ваши настройки недоступны для этого элемента.",
+  "personalToolSettingsOwnerChanged": "Учётная запись изменилась, поэтому ничего не сохранено. Откройте настройки снова, чтобы продолжить.",
+  "personalToolSettingsInvalid": "Сервер не принял эти значения.",
+  "noteReadOnlyNotice": "Эта заметка доступна только для чтения. Вы можете читать её, но не изменять.",
+  "noteAccessUnverifiedNotice": "Подключитесь снова, чтобы подтвердить, что вы можете редактировать эту заметку.",
+  "noteAccessRevokedNotice": "Вы больше не можете редактировать эту заметку. Несохранённые изменения сохранены здесь.",
+  "noteSaveAsOwnNote": "Сохранить как мою заметку",
+  "noteDiscardChanges": "Отменить изменения",
+  "noteSessionChangedNotice": "Аккаунт, в который выполнен вход, изменился, поэтому заметка не была сохранена.",
+  "noteNoAccess": "У вас больше нет доступа к этой заметке.",
+  "noteShare": "Поделиться заметкой",
+  "folderShareSettings": "Поделиться папкой",
+  "chatShareAudience": "У кого есть доступ",
+  "chatShareAudienceDescription": "Выберите, кто может открыть этот чат",
+  "resourceSharingSaved": "Параметры доступа обновлены",
+  "resourceSharingFiltered": "Сохранено. Сервер оставил только часть выбранного доступа.",
+  "resourceSharingSessionChanged": "Аккаунт, в который выполнен вход, изменился, поэтому ничего не сохранено. Закройте это окно и откройте его снова.",
+  "resourceSharingDenied": "Вы больше не можете менять, у кого есть доступ к этому элементу.",
+  "resourceSharingMissing": "Этот элемент больше не существует.",
+  "resourceSharingLoadFailed": "Не удалось загрузить список тех, у кого есть доступ.",
+  "resourceSharingSaveFailed": "Не удалось сохранить доступ. Повторите попытку.",
+  "resourceAudiencePrivateHint": "Открыть могут только перечисленные ниже пользователи и группы.",
+  "resourceAudienceOpenHint": "Просмотреть может любой, у кого есть ссылка.",
+  "channelMembersSearchHint": "Поиск участников",
+  "channelMembersEmpty": "Участники не найдены.",
+  "channelMembersLoadFailed": "Не удалось загрузить участников.",
+  "channelMembersLoadMore": "Загрузить еще",
+  "channelMembersLoadMoreFailed": "Не удалось загрузить больше участников. Нажмите, чтобы повторить попытку.",
+  "channelMembersAdd": "Добавить участников",
+  "channelMembersAddConfirm": "Добавить",
+  "channelMembersRemoveMember": "Удалить: {name}",
+  "@channelMembersRemoveMember": {"description": "Accessibility label for the button that removes one person from the channel.", "placeholders": {"name": {"type": "String", "example": "Alex"}}},
+  "channelMembersChangeFailed": "Не удалось обновить список участников. Повторите попытку.",
+  "channelMembersChangeDenied": "Сервер не разрешил это изменение.",
+  "channelMembersChangeNotPermitted": "У вас нет прав управлять участниками этого канала.",
+  "chatBranchContinueFromResponse": "Продолжить отсюда",
+  "chatBranchForkChat": "Ветка в новом чате",
+  "chatBranchSwitcherSemantics": "Изменённое сообщение, версия {position} из {total}. Показать все версии.",
+  "@chatBranchSwitcherSemantics": {
+    "placeholders": {
+      "position": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
+    }
+  },
+  "chatBranchSheetTitle": "Версии сообщения",
+  "chatBranchSheetDescription": "Выберите версию, с которой продолжить. Каждая версия сохраняет свои ответы.",
+  "chatBranchVersionTitle": "Версия {position}",
+  "@chatBranchVersionTitle": {
+    "placeholders": {
+      "position": {
+        "type": "int"
+      }
+    }
+  },
+  "chatBranchVersionCurrent": "Показана сейчас",
+  "chatBranchSelectedNotice": "Продолжение с версии {position} из {total}",
+  "@chatBranchSelectedNotice": {
+    "placeholders": {
+      "position": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
+    }
+  },
+  "chatBranchWaitForResponse": "Дождитесь завершения этого ответа.",
+  "chatBranchUnavailable": "Ветки этого чата нельзя изменить здесь.",
+  "chatBranchOwnerChanged": "Вошедший аккаунт изменился, поэтому ничего не было изменено.",
+  "chatBranchMessageMissing": "Эта версия больше недоступна.",
+  "chatForkOffline": "Подключитесь к интернету, чтобы создать ветку этого чата.",
+  "chatForkForbidden": "Ваша учётная запись не может создавать ветки чатов.",
+  "chatForkSourceMissing": "На сервере больше нет этого чата.",
+  "chatForkUnsupported": "Этот сервер не может создавать ветки чатов.",
+  "chatForkFailed": "Не удалось создать ветку этого чата. Попробуйте ещё раз.",
+  "codeInterpreter": "Интерпретатор кода",
+  "codeInterpreterDescription": "Запускайте код на сервере, чтобы анализировать данные и создавать файлы.",
+  "codeInterpreterBrowserEngine": "Этот сервер выполняет код в браузере, а Conduit этого не умеет.",
+  "codeInterpreterUnavailable": "Недоступно для этого сервера, учётной записи или модели.",
+  "folderProjectSettings": "Настройки проекта",
+  "folderProjectSettingsDescription": "Параметры по умолчанию для новых чатов в этой папке. Сервер применяет её знания и системный промпт к каждому чату в ней.",
+  "folderProjectModels": "Модели по умолчанию",
+  "folderProjectModelsHint": "Новый чат начинается с первой доступной из этих моделей.",
+  "folderProjectNoKnowledge": "Знания не подключены.",
+  "folderProjectNoModels": "Модели по умолчанию нет. Новые чаты используют вашу модель по умолчанию.",
+  "folderProjectAddKnowledge": "Добавить знания",
+  "folderProjectAddModel": "Добавить модель",
+  "folderProjectNothingToAdd": "Добавлять больше нечего.",
+  "folderProjectNotAvailable": "Недоступно — новые чаты пропустят это",
+  "folderProjectMoveUp": "Переместить {name} вверх",
+  "folderProjectRemove": "Удалить {name}",
+  "folderProjectKindCollection": "База знаний",
+  "folderProjectKindFile": "Файл",
+  "folderProjectKindNote": "Заметка",
+  "folderProjectOwnerChanged": "Аккаунт, в который выполнен вход, изменился, поэтому ничего не сохранено. Откройте настройки проекта снова, чтобы продолжить.",
+  "folderProjectReadOnly": "Эта общая папка доступна только для чтения, поэтому её настройки проекта нельзя изменить.",
+  "folderProjectGone": "Эта папка больше недоступна.",
+  "folderProjectModelFallbackNotice": "Модель этой папки по умолчанию недоступна, поэтому используется ваша модель по умолчанию.",
+  "@folderProjectMoveUp": {"placeholders": {"name": {"type": "String"}}},
+  "@folderProjectRemove": {"placeholders": {"name": {"type": "String"}}},
+  "scheduledTasksTitle": "Запланированные задачи",
+  "scheduledTasksDescription": "Ваш сервер Open WebUI выполняет эти задачи по собственному расписанию, даже когда этот телефон не в сети.",
+  "scheduledTasksUnavailable": "Запланированные задачи недоступны для этого аккаунта на этом сервере.",
+  "scheduledTasksSearchHint": "Поиск задач",
+  "scheduledTasksFilterAll": "Все",
+  "scheduledTasksFilterActive": "Активные",
+  "scheduledTasksFilterPaused": "Приостановленные",
+  "scheduledTasksEmpty": "Запланированных задач пока нет.",
+  "scheduledTasksEmptyFiltered": "Подходящих задач нет.",
+  "scheduledTasksLoadFailed": "Не удалось загрузить запланированные задачи.",
+  "scheduledTasksStale": "Список может быть устаревшим. Нажмите, чтобы обновить.",
+  "scheduledTasksLoadMore": "Загрузить еще",
+  "scheduledTasksAdd": "Новая запланированная задача",
+  "scheduledTasksAccountChanged": "Аккаунт изменился. Чтобы продолжить, снова откройте запланированные задачи.",
+  "scheduledTasksNotFound": "Этой задачи больше не существует.",
+  "scheduledTaskStatusActive": "Активна",
+  "scheduledTaskStatusPaused": "Приостановлена",
+  "scheduledTaskNextRun": "Следующий запуск: {time}",
+  "@scheduledTaskNextRun": {"placeholders": {"time": {"type": "String"}}},
+  "scheduledTaskNoNextRun": "Предстоящих запусков нет",
+  "scheduledTaskLastRun": "Последний запуск: {time}",
+  "@scheduledTaskLastRun": {"placeholders": {"time": {"type": "String"}}},
+  "scheduledTaskNeverRun": "Ещё не запускалась",
+  "scheduledTaskScheduleOnce": "Один раз",
+  "scheduledTaskScheduleDaily": "Ежедневно",
+  "scheduledTaskScheduleWeekly": "Еженедельно",
+  "scheduledTaskScheduleOnceSummary": "Один раз, {date}",
+  "@scheduledTaskScheduleOnceSummary": {"placeholders": {"date": {"type": "String"}}},
+  "scheduledTaskScheduleDailySummary": "Ежедневно в {time}",
+  "@scheduledTaskScheduleDailySummary": {"placeholders": {"time": {"type": "String"}}},
+  "scheduledTaskScheduleWeeklySummary": "{days} в {time}",
+  "@scheduledTaskScheduleWeeklySummary": {"placeholders": {"days": {"type": "String"}, "time": {"type": "String"}}},
+  "scheduledTaskScheduleCustom": "Своё расписание",
+  "scheduledTaskNewTitle": "Новая запланированная задача",
+  "scheduledTaskEditTitle": "Изменить запланированную задачу",
+  "scheduledTaskNameLabel": "Название",
+  "scheduledTaskPromptLabel": "Инструкции",
+  "scheduledTaskPromptHint": "Что модель должна делать при каждом запуске?",
+  "scheduledTaskModelLabel": "Модель",
+  "scheduledTaskModelChoose": "Выберите модель",
+  "scheduledTaskModelUnavailable": "{id} (больше недоступна)",
+  "@scheduledTaskModelUnavailable": {"placeholders": {"id": {"type": "String"}}},
+  "scheduledTaskScheduleLabel": "Расписание",
+  "scheduledTaskTimeLabel": "Время",
+  "scheduledTaskDateLabel": "Дата",
+  "scheduledTaskDaysLabel": "Дни",
+  "scheduledTaskAdvancedSchedule": "Расширенное расписание",
+  "scheduledTaskRruleLabel": "Правило повторения",
+  "scheduledTaskRruleKept": "Это расписание использует правило, которое нельзя изменить с помощью этих элементов управления. Оно останется прежним, пока вы его не измените.",
+  "scheduledTaskTimezoneNote": "Время указано в часовом поясе вашей учётной записи Open WebUI, который может отличаться от пояса этого устройства.",
+  "scheduledTaskActiveLabel": "Активна",
+  "scheduledTaskDestinationLabel": "Результат отправляется в",
+  "scheduledTaskDestinationChat": "Новый чат",
+  "scheduledTaskDestinationChannel": "Канал",
+  "scheduledTaskFolderLabel": "Папка",
+  "scheduledTaskFolderNone": "Нет",
+  "scheduledTaskFolderUnavailable": "Сохранённая папка (больше недоступна)",
+  "scheduledTaskChannelChoose": "Выберите канал",
+  "scheduledTaskChannelUnavailable": "Сохранённый канал (больше недоступен)",
+  "scheduledTaskChannelNoWrite": "Вы не можете писать в этот канал.",
+  "scheduledTaskNameRequired": "Введите название.",
+  "scheduledTaskPromptRequired": "Введите инструкции.",
+  "scheduledTaskModelRequired": "Выберите модель.",
+  "scheduledTaskModelUnavailableIssue": "Выберите модель, доступную сейчас.",
+  "scheduledTaskChannelRequired": "Выберите канал.",
+  "scheduledTaskChannelUnavailableIssue": "Выберите канал, доступный сейчас.",
+  "scheduledTaskFolderUnavailableIssue": "Выберите папку, доступную сейчас, или не выбирайте папку.",
+  "scheduledTaskScheduleIncomplete": "Заполните расписание.",
+  "scheduledTaskSaveFailed": "Не удалось сохранить эту задачу.",
+  "scheduledTaskRunNow": "Запустить сейчас",
+  "scheduledTaskRunRequested": "Запуск запрошен. Сервер выполняет его в фоновом режиме, а результат появится в истории по завершении.",
+  "scheduledTaskRunRequestFailed": "Не удалось запросить запуск.",
+  "scheduledTaskNextRunsLabel": "Предстоящие запуски (по данным сервера)",
+  "scheduledTaskHistoryTitle": "История",
+  "scheduledTaskHistoryEmpty": "Запусков пока нет.",
+  "scheduledTaskHistoryLoadFailed": "Не удалось загрузить историю.",
+  "scheduledTaskRunSucceeded": "Выполнено",
+  "scheduledTaskRunFailedStatus": "Ошибка",
+  "scheduledTaskViewChat": "Открыть чат",
+  "scheduledTaskViewChannel": "Открыть канал",
+  "scheduledTaskOpenResultFailed": "Не удалось открыть этот результат.",
+  "scheduledTaskDelete": "Удалить задачу",
+  "scheduledTaskDeleteConfirm": "Задача «{name}» больше не будет выполняться на сервере, а её история запусков будет удалена.",
+  "@scheduledTaskDeleteConfirm": {"placeholders": {"name": {"type": "String"}}},
+  "scheduledTaskChangeFailed": "Не удалось изменить эту задачу.",
+  "scheduledTaskTerminalKept": "К этой задаче подключён терминал. При редактировании он сохраняется.",
+  "scheduledTaskPromptSection": "Инструкции",
+  "queueDraftAction": "В очередь",
+  "queuedDraftsTitle": "Сообщения в очереди",
+  "queuedDraftsCount": "{count, plural, one{{count} сообщение в очереди} few{{count} сообщения в очереди} many{{count} сообщений в очереди} other{{count} сообщения в очереди}}",
+  "queuedDraftsSessionNote": "Сообщения в очереди хранятся, только пока Conduit открыт. Когда ответ завершится, они будут отправлены вместе как одно сообщение.",
+  "queuedDraftSendNow": "Остановить и отправить",
+  "queuedDraftUploading": "Ожидание загрузки файла",
+  "queuedDraftFileFailed": "Файл не загрузился. Повторите попытку или удалите его.",
+  "queuedDraftsSendFailed": "Не удалось отправить сообщения из очереди. Они остаются в очереди.",
+  "queuedDraftsSending": "Отправка сообщений из очереди…",
+  "@queuedDraftsCount": {"placeholders": {"count": {"type": "int"}}},
+  "calendarTitle": "Календарь",
+  "calendarUnavailable": "Календарь недоступен для этого аккаунта на этом сервере.",
+  "calendarTimezoneNote": "Время показывается в часовом поясе этого устройства.",
+  "calendarRangeLabel": "{start} – {end}",
+  "@calendarRangeLabel": {"placeholders": {"start": {"type": "String"}, "end": {"type": "String"}}},
+  "calendarToday": "Сегодня",
+  "calendarEmpty": "В этом периоде нет событий.",
+  "calendarLoadFailed": "Не удалось загрузить календарь.",
+  "calendarStale": "Календарь может быть устаревшим.",
+  "calendarAddEvent": "Новое событие",
+  "calendarManageCalendars": "Календари",
+  "calendarAllDay": "Весь день",
+  "calendarRepeatsMarker": "Повторяется",
+  "calendarUntitledEvent": "Событие без названия",
+  "calendarScheduledUpcoming": "Запланированная задача",
+  "calendarScheduledRunFinished": "Запуск задачи завершён",
+  "calendarScheduledRunFailed": "Запуск задачи завершился ошибкой",
+  "calendarScheduledEntryReadOnly": "Запланированными задачами управляют на странице «Запланированные задачи», а не как событиями.",
+  "calendarEventDetailTitle": "Событие",
+  "calendarEventSeriesNote": "Это событие повторяется. Изменения и удаление применяются ко всей серии.",
+  "calendarRsvpPrompt": "Ваш ответ",
+  "calendarRsvpAccepted": "Пойду",
+  "calendarRsvpTentative": "Возможно",
+  "calendarRsvpDeclined": "Не пойду",
+  "calendarRsvpPending": "Ответа пока нет",
+  "calendarRsvpFailed": "Не удалось отправить ответ.",
+  "calendarEventEdit": "Изменить",
+  "calendarEventEditSeries": "Изменить серию",
+  "calendarEventDelete": "Удалить",
+  "calendarEventDeleteSeries": "Удалить серию",
+  "calendarEventDeleteConfirm": "Удалить «{title}»? Это действие нельзя отменить.",
+  "@calendarEventDeleteConfirm": {"placeholders": {"title": {"type": "String"}}},
+  "calendarEventDeleteSeriesConfirm": "Удалить «{title}» и все его повторения? Это действие нельзя отменить.",
+  "@calendarEventDeleteSeriesConfirm": {"placeholders": {"title": {"type": "String"}}},
+  "calendarEventDeleteFailed": "Не удалось удалить это событие.",
+  "calendarEventLoadFailed": "Не удалось открыть это событие для редактирования.",
+  "calendarEventReadOnly": "Вы не можете изменить это событие. Ответить на приглашение по-прежнему можно.",
+  "calendarEventGone": "Этого события больше не существует. Расписание обновляется.",
+  "calendarNewEventTitle": "Новое событие",
+  "calendarEditEventTitle": "Изменить событие",
+  "calendarEditSeriesTitle": "Изменить серию",
+  "calendarFieldTitle": "Название",
+  "calendarFieldDescription": "Описание",
+  "calendarFieldLocation": "Место",
+  "calendarFieldAllDay": "Весь день",
+  "calendarFieldStarts": "Начало",
+  "calendarFieldStartTime": "Время начала",
+  "calendarFieldEnds": "Окончание",
+  "calendarFieldEndTime": "Время окончания",
+  "calendarAddEnd": "Добавить время окончания",
+  "calendarFieldRepeat": "Повтор",
+  "calendarRepeatNone": "Не повторяется",
+  "calendarRepeatDaily": "Ежедневно",
+  "calendarRepeatWeekdays": "По будням",
+  "calendarRepeatWeekly": "Еженедельно",
+  "calendarRepeatMonthly": "Ежемесячно",
+  "calendarRepeatYearly": "Ежегодно",
+  "calendarRepeatCustom": "Свой повтор",
+  "calendarRepeatKept": "Это событие повторяется по правилу, которое нельзя изменить здесь. Оно сохранится, пока вы не выберете другой повтор.",
+  "calendarRecurrenceTimezoneNote": "Повторы следуют часовому поясу вашего аккаунта, который может отличаться от часового пояса этого устройства.",
+  "calendarFieldCalendar": "Календарь",
+  "calendarChooseCalendar": "Выберите календарь",
+  "calendarFieldAttendees": "Участники",
+  "calendarAddPeople": "Добавить участников",
+  "calendarInvitedPerson": "Приглашённый участник",
+  "calendarRemovePerson": "Удалить: {name}",
+  "@calendarRemovePerson": {"placeholders": {"name": {"type": "String"}}},
+  "calendarAttendeesNote": "Приглашённые отвечают сами за себя. Их ответы сохраняются при изменении списка.",
+  "calendarNoWritableCalendar": "У вас нет календаря, в который можно добавлять события. Создайте календарь, чтобы продолжить.",
+  "calendarTitleRequired": "Введите название.",
+  "calendarCalendarRequired": "Выберите календарь.",
+  "calendarEndBeforeStart": "Окончание не может быть раньше начала.",
+  "calendarSaveFailed": "Не удалось сохранить это событие.",
+  "calendarCalendarsTitle": "Календари",
+  "calendarPickTitle": "Выберите календарь",
+  "calendarEmptyCalendars": "Календарей пока нет.",
+  "calendarDefaultBadge": "По умолчанию",
+  "calendarSharedBadge": "Общий",
+  "calendarReadOnlyBadge": "Только чтение",
+  "calendarMakeDefault": "Сделать основным",
+  "calendarMakeDefaultFailed": "Не удалось изменить календарь по умолчанию.",
+  "calendarNewCalendar": "Новый календарь",
+  "calendarNewCalendarHint": "Название календаря",
+  "calendarCreateCalendar": "Создать календарь",
+  "calendarNameRequired": "Введите название календаря.",
+  "calendarCreateFailed": "Не удалось создать календарь.",
+  "calendarWriteDenied": "Ваш аккаунт не может внести это изменение в данном календаре.",
+  "calendarNotInvited": "Вас не приглашали на это событие.",
+  "calendarNotFound": "Этот календарь или событие не найдены.",
+  "calendarAccountChanged": "Аккаунт изменился, пока это окно было открыто. Закройте его и повторите попытку.",
+  "chatDataControlsTitle": "Управление данными",
+  "chatDataControlsStoredOn": "Чаты аккаунта {account} на сервере {server}",
+  "@chatDataControlsStoredOn": {
+    "placeholders": {
+      "account": {
+        "type": "String"
+      },
+      "server": {
+        "type": "String"
+      }
+    }
+  },
+  "chatDataControlsMediaNote": "Экспорт содержит историю чатов, настройки и ссылки на вложения, сохранённые на сервере. Сами прикреплённые файлы и изображения в него не входят.",
+  "chatDataControlsLocalOnly": "{count, plural, one{{count} чат есть только на этом устройстве} few{{count} чата есть только на этом устройстве} many{{count} чатов есть только на этом устройстве} other{{count} чата есть только на этом устройстве}}",
+  "@chatDataControlsLocalOnly": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "chatDataControlsUnsent": "{count, plural, one{В {count} чате есть изменения, которые сервер не получил} few{В {count} чатах есть изменения, которые сервер не получил} many{В {count} чатах есть изменения, которые сервер не получил} other{В {count} чата есть изменения, которые сервер не получил}}",
+  "@chatDataControlsUnsent": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "chatDataControlsUnsyncedNote": "Экспорт не включает их, пока они не отправлены.",
+  "chatDataControlsSyncNow": "Синхронизировать сейчас",
+  "chatDataControlsSyncing": "Синхронизация…",
+  "chatDataControlsBackupSection": "Экспорт и импорт",
+  "chatDataControlsManageSection": "Все чаты",
+  "chatDataControlsExportLibrary": "Экспортировать все чаты",
+  "chatDataControlsImport": "Импортировать чаты",
+  "chatDataControlsArchiveAll": "Архивировать все чаты",
+  "chatDataControlsUnarchiveAll": "Вернуть все чаты из архива",
+  "chatDataControlsUnshareAll": "Удалить все ссылки для доступа",
+  "chatDataControlsDeleteAll": "Удалить все чаты",
+  "chatDataControlsExporting": "Экспорт… прочитано чатов: {count}",
+  "@chatDataControlsExporting": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "chatDataControlsExportReady": "Экспорт готов. Сохранено чатов: {count}",
+  "@chatDataControlsExportReady": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "chatDataControlsExportEmpty": "На сервере нет чатов для экспорта.",
+  "chatDataControlsExportFailed": "Ничего не сохранено. Экспорт был прерван или неполон.",
+  "chatDataControlsExportStopped": "Экспорт остановлен. Ничего не сохранено.",
+  "chatDataControlsExportConfirmTitle": "Экспортировать данные с сервера?",
+  "chatDataControlsExportConfirmMessage": "Будут сохранены чаты аккаунта {account}, хранящиеся на сервере {server}. Чаты, существующие только на этом устройстве, и изменения, которые сервер не получил, не включаются.",
+  "@chatDataControlsExportConfirmMessage": {
+    "placeholders": {
+      "account": {
+        "type": "String"
+      },
+      "server": {
+        "type": "String"
+      }
+    }
+  },
+  "chatDataControlsExportAction": "Экспортировать",
+  "chatDataControlsImportConfirmTitle": "Импортировать эти чаты?",
+  "chatDataControlsImportConfirmMessage": "Добавить чаты из файла в аккаунт {account} на сервере {server}? Чатов: {chats}. Сообщений: {messages}. Уже существующие чаты не заменяются; при импорте добавляются копии.",
+  "@chatDataControlsImportConfirmMessage": {
+    "placeholders": {
+      "account": {
+        "type": "String"
+      },
+      "server": {
+        "type": "String"
+      },
+      "chats": {
+        "type": "int"
+      },
+      "messages": {
+        "type": "int"
+      }
+    }
+  },
+  "chatDataControlsImportAction": "Импортировать",
+  "chatDataControlsImportInvalid": "Этот файл не является экспортом чатов Open WebUI.",
+  "chatDataControlsImportEmpty": "В этом файле нет чатов.",
+  "chatDataControlsImportTooLarge": "Этот файл слишком велик, чтобы импортировать его за один шаг.",
+  "chatDataControlsImportBadEntry": "Чат номер {position} в файле не удаётся импортировать.",
+  "@chatDataControlsImportBadEntry": {
+    "placeholders": {
+      "position": {
+        "type": "int"
+      }
+    }
+  },
+  "chatDataControlsImportChooseAnother": "Выбрать другой файл",
+  "chatDataControlsImportFile": "Файл: {name}",
+  "@chatDataControlsImportFile": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "chatDataControlsImported": "Импорт завершён. Импортировано чатов: {count}",
+  "@chatDataControlsImported": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "chatDataControlsImportedSyncNote": "Часть чатов появится здесь после следующей синхронизации.",
+  "chatDataControlsImportUnknown": "Сервер не ответил, поэтому неизвестно, были ли чаты импортированы. Прежде чем импортировать снова, проверьте свои чаты; повторный импорт добавляет копии.",
+  "chatDataControlsForbidden": "Этому аккаунту это действие не разрешено.",
+  "chatDataControlsArchiveAllMessage": "Архивировать все ваши чаты на сервере? Позже их можно вернуть из архива.",
+  "chatDataControlsUnarchiveAllMessage": "Вернуть из архива все ваши архивные чаты на сервере?",
+  "chatDataControlsUnshareAllMessage": "Удалить все созданные вами ссылки для доступа? Те, у кого есть ссылка, потеряют доступ. Сами чаты останутся.",
+  "chatDataControlsDeleteAllMessage": "Удалить все чаты аккаунта {account} на сервере {server}? Это действие нельзя отменить. Чаты, существующие только на этом устройстве, будут сохранены.",
+  "@chatDataControlsDeleteAllMessage": {
+    "placeholders": {
+      "account": {
+        "type": "String"
+      },
+      "server": {
+        "type": "String"
+      }
+    }
+  },
+  "chatDataControlsDeleteUnsentMessage": "Ещё не отправлено на сервер — чатов с изменениями: {edits}; чатов с ответами в очереди: {replies}. При удалении они будут потеряны.",
+  "@chatDataControlsDeleteUnsentMessage": {
+    "placeholders": {
+      "edits": {
+        "type": "int"
+      },
+      "replies": {
+        "type": "int"
+      }
+    }
+  },
+  "chatDataControlsResponseRunning": "Ответ ещё формируется. Остановите его и повторите попытку.",
+  "chatDataControlsLocalChanged": "Пока шло ожидание, чат, существовавший только на этом устройстве, попал на сервер. Ничего не изменено. Проверьте и повторите попытку.",
+  "chatDataControlsRefused": "Сервер не смог это выполнить. Ничего не изменено.",
+  "chatDataControlsUnknown": "Сервер не ответил, поэтому результат неизвестен. Проверьте свои чаты; повторное выполнение безопасно.",
+  "chatDataControlsOwnerChanged": "Аккаунт, в который выполнен вход, изменился. Ничего не выполнено.",
+  "chatDataControlsAccountUnknown": "Этот аккаунт пока не удалось определить. Выполните синхронизацию и повторите попытку.",
+  "chatDataControlsWaiting": "Ожидание завершения синхронизации…",
+  "chatExportAction": "Экспортировать чат",
+  "chatExportJson": "Резервная копия (JSON)",
+  "chatExportJsonDescription": "Весь чат со всеми ветками и их настройками. Open WebUI может его импортировать.",
+  "chatExportMarkdown": "Расшифровка (Markdown)",
+  "chatExportMarkdownDescription": "Текущая беседа в виде читаемого текста. Это не резервная копия.",
+  "chatExportUnsentNote": "Включает изменения, которые сервер ещё не получил.",
+  "chatExportFailed": "Не удалось экспортировать чат.",
+  "chatDataControlsWorkChanged": "Пока шло ожидание, на этом устройстве появились неотправленные изменения. Ничего не удалено. Проверьте и повторите попытку.",
+  "chatComparisonTabsLabel": "Ответы моделей",
+  "chatComparisonSlotLabel": "{model} · {number}",
+  "@chatComparisonSlotLabel": {
+    "placeholders": {
+      "model": {
+        "type": "String"
+      },
+      "number": {
+        "type": "int"
+      }
+    }
+  },
+  "chatComparisonUnnamedModel": "Модель",
+  "chatComparisonSlotResponding": "Отвечает",
+  "chatComparisonSlotFailed": "Ошибка",
+  "chatMergedResponseTitle": "Объединённый ответ",
+  "chatCompareModelsAction": "Сравнить модели",
+  "chatCompareModelsDescription": "Отправить двум моделям и сравнить ответы.",
+  "chatCompareNeedsMessage": "Сначала введите сообщение",
+  "chatCompareFirstModel": "Первая модель",
+  "chatCompareSecondModel": "Вторая модель",
+  "chatCompareChooseModel": "Выберите модель",
+  "chatCompareStart": "Сравнить",
+  "chatCompareErrorUnavailable": "Сравнение моделей недоступно в этом чате.",
+  "chatCompareErrorModelUnavailable": "{count, plural, =1{Модель {models} недоступна на этом сервере.} other{Модели {models} недоступны на этом сервере.}}",
+  "@chatCompareErrorModelUnavailable": {
+    "placeholders": {
+      "models": {
+        "type": "String"
+      }
+    }
+  },
+  "chatCompareErrorVision": "{count, plural, =1{Модель {models} не умеет читать изображения. Удалите изображение или выберите другую модель.} other{Модели {models} не умеют читать изображения. Удалите изображение или выберите другие модели.}}",
+  "@chatCompareErrorVision": {
+    "placeholders": {
+      "models": {
+        "type": "String"
+      }
+    }
+  },
+  "chatCompareErrorTerminal": "{count, plural, =1{Модель {models} не может использовать выбранный терминал. Отключите терминал или выберите другую модель.} other{Модели {models} не могут использовать выбранный терминал. Отключите терминал или выберите другие модели.}}",
+  "@chatCompareErrorTerminal": {
+    "placeholders": {
+      "models": {
+        "type": "String"
+      }
+    }
+  },
+  "chatCompareErrorInterpreter": "{count, plural, =1{Модель {models} не может запускать интерпретатор кода. Отключите его или выберите другую модель.} other{Модели {models} не могут запускать интерпретатор кода. Отключите его или выберите другие модели.}}",
+  "@chatCompareErrorInterpreter": {
+    "placeholders": {
+      "models": {
+        "type": "String"
+      }
+    }
+  },
+  "chatCompareErrorEffortOverride": "{count, plural, =1{В этом чате сохранён уровень рассуждений, который модель {models} не может использовать. Удалите его в настройках чата или выберите другую модель.} other{В этом чате сохранён уровень рассуждений, который модели {models} не могут использовать. Удалите его в настройках чата или выберите другие модели.}}",
+  "@chatCompareErrorEffortOverride": {
+    "placeholders": {
+      "models": {
+        "type": "String"
+      }
+    }
+  },
+  "chatCompareErrorEffortPicker": "Выбранным моделям нужны разные уровни рассуждений. Задайте одинаковый уровень для обеих или выберите другие модели.",
+  "chatMergeResponsesAction": "Объединить ответы",
+  "chatMergeStopAction": "Остановить объединение",
+  "chatMergeErrorUnavailable": "Этот сервер не может объединять ответы.",
+  "chatMergeErrorFailed": "Не удалось объединить ответы. Исходные ответы не изменены.",
+  "chatMergeErrorNotMergeable": "Чтобы объединить ответы, каждый из них должен завершаться текстом.",
+  "chatMergeErrorOwnerChanged": "Аккаунт или чат изменился, поэтому объединение остановлено.",
+  "chatComparisonStopAnswerAction": "Остановить этот ответ",
+  "chatMergeChooseDescription": "Выберите ответы для объединения. Выберите не меньше двух; исходные ответы остаются без изменений.",
+  "folderProjectComparisonFallbackNotice": "Не все сохранённые в этом проекте модели можно использовать, поэтому чат начинается с меньшим их числом. Для сравнения используются ровно две.",
+  "advancedFeaturesFooter": "Добавляет сравнение моделей, настройки чата, настройки инструментов, запланированные задачи, личные подключения, вебхуки и управление данными. Выключение лишь скрывает их; всё уже настроенное продолжает работать.",
+  "profileAdvancedFooter": "Показано, потому что в Настройки > Чат включён режим «Расширенные».",
+  "advancedRequiredTitle": "Часть расширенных функций",
+  "advancedRequiredMessage": "{feature} относится к расширенным функциям. Включите «Расширенные», чтобы пользоваться этим. Всё уже настроенное продолжает работать.",
+  "advancedTurnOn": "Включить расширенные",
+  "promptOverridesTitle": "Переопределения промптов",
+  "chatSettingsStopHint": "Ваше по умолчанию (через запятую)",
+  "chatSettingsUseYourDefault": "Использовать ваше значение по умолчанию",
+  "personalToolSettingsSaved": "Настройки инструментов сохранены",
+  "personalToolSettingsLoadFailed": "Не удалось загрузить настройки инструментов.",
+  "personalToolSettingsSaveFailed": "Не удалось сохранить настройки инструментов.",
+  "scheduledTaskDeleteTitle": "Удалить запланированную задачу?",
+  "scheduledTaskRunning": "Выполняется…",
+  "scheduledTaskRunFinished": "Запуск завершён.",
+  "scheduledTaskRunFailedNotice": "Запуск не удался. Подробности смотрите в истории.",
+  "scheduledTaskLastRunFailed": "Последний запуск не удался",
+  "scheduledTaskRruleRuns": "Запуск: {summary}",
+  "scheduledTaskFolderSearchHint": "Поиск папок",
+  "scheduledTasksEmptyHint": "Пусть модель выполняет ваши инструкции по расписанию, например готовит утреннюю сводку новостей.",
+  "scheduledTasksShowAll": "Показать все задачи",
+  "personalConnectionsEmptyToolServersHint": "Добавьте сервер инструментов OpenAPI, чтобы использовать его инструменты в чатах.",
+  "personalConnectionsEmptyTerminalsHint": "Добавьте сервер терминала, которым модели смогут пользоваться из ваших чатов.",
+  "chatCompareModelPair": "{first} и {second}",
+  "chatDataControlsNoAccount": "Войдите в аккаунт Open WebUI, чтобы управлять его чатами.",
+  "chatDataControlsAccountChanged": "Аккаунт изменился. Вернитесь назад и снова откройте «Управление данными».",
+  "chatDataControlsArchiveAllConfirm": "Архивировать все",
+  "chatDataControlsUnarchiveAllConfirm": "Разархивировать все",
+  "chatDataControlsUnshareAllConfirm": "Удалить ссылки",
+  "chatDataControlsDeleteAllConfirm": "Удалить все чаты",
+  "chatDataControlsDiscardAndDeleteConfirm": "Отбросить и удалить все чаты",
+  "chatDataControlsDeleteFooter": "Удаляет все чаты {account} с сервера {server}. Чаты, которые есть только на этом устройстве, сохраняются.",
+  "chatDataControlsImporting": "{count, plural, one{Импорт {count} чата…} few{Импорт {count} чатов…} many{Импорт {count} чатов…} other{Импорт {count} чата…}}",
+  "chatDataControlsImportFooter": "Импорт добавляет копии. Он никогда не заменяет чаты, которые уже есть на сервере.",
+  "nativeSheetOptionUnavailable": "Этот параметр сейчас недоступен.",
+  "nativeWebhookDestinationsCount": "{count, plural, =0{Нет} one{{count} адрес} few{{count} адреса} many{{count} адресов} other{{count} адреса}}",
+  "chatBranchForkOpened": "Открыт новый чат отсюда",
+  "queuedDraftStopFailed": "Не удалось остановить текущий ответ. Ваше сообщение по-прежнему в очереди.",
+  "queuedDraftRemoved": "Удалено из очереди",
+  "queuedDraftUndo": "Отменить",
+  "chatExportPreparing": "Подготовка экспорта…",
+  "chatStopResponseFailed": "Не удалось остановить этот ответ.",
+  "calendarStartsAt": "Начало в {time}",
+  "calendarEndsAt": "Окончание в {time}",
+  "calendarDayToday": "Сегодня · {date}",
+  "calendarDayTomorrow": "Завтра · {date}",
+  "calendarPreviousDays": "{count, plural, one{Предыдущий {count} день} few{Предыдущие {count} дня} many{Предыдущие {count} дней} other{Предыдущие {count} дня}}",
+  "calendarNextDays": "{count, plural, one{Следующий {count} день} few{Следующие {count} дня} many{Следующие {count} дней} other{Следующие {count} дня}}",
+  "calendarRemoveEnd": "Убрать время окончания",
+  "calendarEventReadOnlyNotInvited": "Вы не можете изменить это событие.",
+  "calendarFieldOrganizer": "Организатор",
+  "calendarColorName": "{color, select, blue{Синий} green{Зелёный} amber{Янтарный} red{Красный} purple{Фиолетовый} teal{Бирюзовый} other{Цвет}}",
+  "calendarVisibilityFooter": "Показываются события из отмеченных календарей. Нажмите на календарь, чтобы показать или скрыть его события.",
+  "personalizationMemoryTypeUserDescription": "Предпочтение, факт или указание о вас.",
+  "personalizationMemoryTypeContextDescription": "Контекст, который нужно учитывать в будущих чатах.",
+  "personalizationMemoryTypeUnknown": "У этого воспоминания тип, который приложение не распознаёт. Он сохранится, пока вы не выберете другой.",
+  "personalizationMemoryAccountChanged": "Аккаунт изменился. Закройте это окно и снова откройте воспоминание.",
+  "notificationTargetDeliveryAwayDescription": "Только когда вы не пользуетесь Open WebUI.",
+  "notificationTargetDeliveryAlwaysDescription": "Каждый раз, даже когда вы активны.",
+  "notificationTargetTestNeedsSave": "Сохраните изменения, чтобы проверить их.",
+  "notificationTargetNameHelper": "Нельзя изменить позже. Оставьте пустым, чтобы использовать хост из URL.",
+  "notificationTargetIdLabel": "Название",
+  "codeInterpreterTurnOff": "Выключить",
+  "libraryShareTitle": "Поделиться",
+  "libraryGeneralAccess": "Общий доступ",
+  "libraryAccessOnlyPeopleAdded": "Только добавленные люди",
+  "libraryAccessEveryoneOnServer": "Все на этом сервере",
+  "libraryAccessAnyoneWithLink": "Все, у кого есть ссылка",
+  "libraryAccessEveryoneHint": "Любой, у кого есть аккаунт на этом сервере, может это просматривать.",
+  "libraryAccessLinkNotAllowed": "У вас нет прав делиться по ссылке.",
+  "libraryAccessCanView": "Может просматривать",
+  "libraryAccessLevelFor": "Доступ для {name}",
+  "libraryAccessRemovePrincipal": "Удалить {name}",
+  "libraryAccessUnknownPerson": "Неизвестный пользователь",
+  "libraryAccessUnknownGroup": "Неизвестная группа",
+  "libraryAccessOwner": "Владелец",
+  "libraryAccessOwnerOnlyNotice": "Изменять доступ могут только владелец и те, у кого есть право редактирования.",
+  "libraryAccessAccountCantShare": "Ваш аккаунт не может делиться этим.",
+  "libraryAccessPartialSave": "Сохранено, но не удалось дать доступ: {names}.",
+  "libraryAccessDone": "Готово",
+  "libraryAccessSummaryOnlyYou": "Только вы",
+  "libraryAccessSummaryShared": "{count, plural, one{Доступно {count} человеку или группе} few{Доступно {count} людям или группам} many{Доступно {count} людям или группам} other{Доступно {count} людям или группам}}",
+  "libraryPickerAddCount": "{count, plural, =0{Добавить} other{Добавить ({count})}}",
+  "libraryPickerHasAccess": "Есть доступ",
+  "libraryPickerAlreadyMember": "Уже участник",
+  "libraryPickerSearchGroups": "Поиск групп",
+  "libraryChannelRemoveTitle": "Удалить {name}?",
+  "libraryChannelRemoveMessage": "Этот человек больше не будет видеть канал и его сообщения.",
+  "libraryChannelRemoveConfirm": "Удалить",
+  "libraryChannelMemberRemoved": "{name}: удалён(а)",
+  "libraryChannelMembersAdded": "Участники добавлены",
+  "libraryNoteSharedBy": "Поделился(-ась) {name}. Вы можете просматривать эту заметку, но не изменять её.",
+  "libraryNoteOpen": "Открыть",
+  "chatDataControlsArchivedAll": "Все чаты заархивированы.",
+  "chatDataControlsUnarchivedAll": "Все чаты извлечены из архива.",
+  "chatDataControlsUnsharedAll": "Все ссылки для общего доступа удалены.",
+  "chatDataControlsDeletedAll": "Все чаты удалены.",
+  "notificationTargetMakeDefaultNeedsSave": "Сохраните изменения, чтобы сделать это основным.",
+  "hermesConnectionsSectionTitle": "Подключения",
+  "hermesAddConnection": "Добавить подключение",
+  "hermesNewConnectionTitle": "Новое подключение",
+  "hermesConnectionNameHint": "Отображается в выборе модели и на боковой панели",
+  "hermesNoConnectionsTitle": "Нет подключений Hermes",
+  "hermesNoConnectionsSubtitle": "Добавьте сервер Hermes, чтобы общаться со своим агентом.",
+  "hermesActiveConnection": "Активно",
+  "hermesUseConnection": "Использовать это подключение",
+  "hermesInactiveConnectionNotice": "Переключитесь на это подключение, чтобы увидеть его состояние и управлять сервером.",
+  "hermesSignInActivatesConnection": "После входа это подключение станет активным.",
+  "hermesDeleteConnectionTitle": "Удалить подключение?",
+  "hermesDeleteConnectionMessage": "Подключение {name} и его учетные данные будут удалены с этого устройства.",
+  "hermesDeleteConnectionFailed": "Не удалось удалить это подключение.",
+  "hermesSwitchConnectionFailed": "Не удалось переключиться на это подключение.",
+  "hermesSwitchConnectionTitle": "Сменить подключение",
+  "hermesSwitchConnectionPromptTitle": "Переключиться на {name}?",
+  "hermesSwitchConnectionPromptMessage": "Сеанс Hermes этого чата принадлежит подключению {name}. Переключитесь, чтобы продолжить его, или оставьте текущее подключение, чтобы начать новый сеанс.",
+  "hermesSwitchConnectionConfirm": "Переключить",
+  "hermesKeepCurrentConnection": "Оставить текущее",
+  "accountsTitle": "Аккаунты",
+  "accountsAddAccount": "Добавить аккаунт",
+  "accountsManage": "Управление аккаунтами",
+  "accountsSignedOut": "Вход не выполнен",
+  "accountsActive": "Активен",
+  "accountsAddAccountTitle": "Добавить аккаунт",
+  "accountsAddAccountMessage": "Войдите в другой аккаунт на сохранённом сервере или подключитесь к новому.",
+  "accountsNewServer": "Новый сервер",
+  "accountsContinueWith": "Продолжить с {server}",
+  "accountsKindDirect": "Напрямую",
+  "accountsAddOnThisServer": "Добавить аккаунт на этом сервере",
+  "accountsSwitch": "Переключиться",
+  "accountsSignOutOf": "Выйти из аккаунта {name}",
+  "accountsSignOutConfirmTitle": "Выйти из аккаунта {name}?",
+  "accountsSignOutConfirmMessage": "Аккаунт и сохранённые в нём чаты будут удалены с этого устройства. В остальных аккаунтах вход сохранится.",
+  "accountsSignOutAll": "Выйти из всех аккаунтов",
+  "accountsReplyInProgressTitle": "Ответ ещё формируется",
+  "accountsSwitchStopsReply": "Переключение аккаунта остановит его.",
+  "accountsSignOutStopsReply": "Выход остановит его.",
+  "accountsSwitchAnyway": "Всё равно переключиться",
+  "accountsAddressChangeStopsReply": "Изменение используемого адреса остановит его.",
+  "accountsAddressChangeAnyway": "Всё равно изменить",
+  "accountsSignOutAnyway": "Всё равно выйти",
+  "accountsServerAddresses": "Адреса",
+  "accountsServerAddressesHelp": "Conduit подключается через первый ответивший адрес, начиная сверху. Перетащите, чтобы изменить порядок.",
+  "accountsAddAddress": "Добавить адрес",
+  "accountsEditAddress": "Изменить адрес",
+  "accountsSaveAddress": "Сохранить адрес",
+  "accountsAddressInUse": "Используется",
+  "accountsAddressName": "Название (необязательно)",
+  "accountsAddressNameHint": "Домашняя сеть, Tailscale…",
+  "accountsAddressDifferentServer": "Этот адрес ведёт на другой сервер или к другому аккаунту на нём.",
+  "accountsAddressNeedsSignIn": "Сначала войдите в аккаунт на этом сервере, чтобы адрес можно было проверить.",
+  "accountsRemoveAddress": "Удалить адрес",
+  "accountsRemoveAddressMessage": "Conduit перестанет пробовать этот адрес. Вход в ваши аккаунты сохранится.",
+  "accountsAddressConfirmTitle": "Проверить этот адрес?",
+  "accountsAddressConfirmMessage": "Чтобы убедиться, что {host} — это тот же сервер, Conduit отправит туда сеанс аккаунта, сохранённого на этом устройстве. Продолжайте, только если доверяете этому адресу.",
+  "accountsAddressConfirmAction": "Проверить адрес",
+  "sidebarEmailTab": "Почта",
+  "searchEmail": "Поиск писем...",
+  "emailLoadFailed": "Не удалось загрузить почту.",
+  "emailDownloadFailed": "Не удалось сохранить вложение. Попробуйте ещё раз.",
+  "notificationChannelEmailName": "Почта",
+  "notificationChannelEmailDescription": "Новые письма во входящих",
+  "emailNotificationDefaultTitle": "Новое письмо"
 }

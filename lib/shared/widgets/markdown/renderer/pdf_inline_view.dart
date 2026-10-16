@@ -6,7 +6,7 @@ import 'dart:ui' as ui;
 
 import 'package:conduit/l10n/app_localizations.dart';
 import 'package:crypto/crypto.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -16,10 +16,18 @@ import 'package:path_provider/path_provider.dart';
 import 'package:pdfrx/pdfrx.dart';
 import 'package:share_plus/share_plus.dart';
 
-import '../../../../core/models/server_config.dart';
+import 'package:conduit_core/models/server_config.dart';
+import 'package:conduit_core/utils/pdf_link_utils.dart';
+import 'package:conduit_core/utils/pdf_link_utils.dart'
+    as core_pdf
+    show isPdfLink;
+
 import '../../../../core/network/image_header_utils.dart';
-import '../../../../core/providers/app_providers.dart';
-import '../../../../core/services/server_tls_http_client_factory.dart';
+
+import 'package:conduit_core/providers/app_providers.dart';
+
+import 'package:conduit_core/services/server_tls_http_client_factory.dart';
+
 import '../../../theme/theme_extensions.dart';
 
 const Duration _pdfCacheStalePeriod = Duration(days: 7);
@@ -27,6 +35,41 @@ const Duration _pdfCacheNamespaceSweepInterval = Duration(minutes: 15);
 const String _pdfCacheKeyPrefix = 'conduit_pdf_cache_';
 const int _pdfCacheMaxObjects = 30;
 const int _pdfCacheMaxContexts = 6;
+const double _pdfHydrationViewportMargin = 320;
+
+@visibleForTesting
+bool debugShouldHydratePdfForBounds({
+  required double top,
+  required double bottom,
+  required double viewportHeight,
+}) =>
+    bottom >= -_pdfHydrationViewportMargin &&
+    top <= viewportHeight + _pdfHydrationViewportMargin;
+
+@visibleForTesting
+bool debugShouldHydratePdfForActivity({
+  required double top,
+  required double bottom,
+  required double viewportHeight,
+  required bool routeIsCurrent,
+  required bool tickersEnabled,
+  bool userRequested = false,
+}) =>
+    routeIsCurrent &&
+    tickersEnabled &&
+    _shouldHydratePdfPreview(
+      nearViewport: debugShouldHydratePdfForBounds(
+        top: top,
+        bottom: bottom,
+        viewportHeight: viewportHeight,
+      ),
+      userRequested: userRequested,
+    );
+
+bool _shouldHydratePdfPreview({
+  required bool nearViewport,
+  required bool userRequested,
+}) => nearViewport || userRequested;
 
 final LinkedHashMap<String, _PdfCacheManagerEntry> _pdfCacheManagers =
     LinkedHashMap<String, _PdfCacheManagerEntry>();
@@ -467,16 +510,7 @@ class PdfInlineView extends ConsumerStatefulWidget {
   final String url;
   final String? label;
 
-  static bool isPdfLink(String href) {
-    final trimmed = href.trim();
-    if (trimmed.isEmpty) return false;
-
-    final uri = Uri.tryParse(trimmed);
-    final rawPath = uri?.path.isNotEmpty == true
-        ? uri!.path
-        : trimmed.split('?').first.split('#').first;
-    return _decodeUriComponent(rawPath).toLowerCase().endsWith('.pdf');
-  }
+  static bool isPdfLink(String href) => core_pdf.isPdfLink(href);
 
   @override
   ConsumerState<PdfInlineView> createState() => _PdfInlineViewState();
@@ -495,6 +529,14 @@ class _PdfInlineViewState extends ConsumerState<PdfInlineView> {
   Object? _loadError;
   bool _started = false;
   bool _disposed = false;
+  bool _userRequestedHydration = false;
+  bool _viewportCheckScheduled = false;
+  bool _nearViewport = false;
+  bool _routeActive = true;
+  ScrollPosition? _scrollPosition;
+  PdfPageRenderCancellationToken? _previewRenderToken;
+  Object? _previewWorkToken;
+  bool _resumePreviewAfterCurrent = false;
 
   bool get _canOpen => _filePath != null && _documentReady;
   bool get _canShare => _filePath != null;
@@ -502,17 +544,102 @@ class _PdfInlineViewState extends ConsumerState<PdfInlineView> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    if (_started) return;
-    _started = true;
-    _startLoad(refresh: false, notify: false);
+    final nextPosition = Scrollable.maybeOf(context)?.position;
+    if (!identical(nextPosition, _scrollPosition)) {
+      _scrollPosition?.removeListener(_scheduleViewportCheck);
+      _scrollPosition = nextPosition;
+      _scrollPosition?.addListener(_scheduleViewportCheck);
+    }
+    _scheduleViewportCheck();
   }
 
   @override
   void didUpdateWidget(covariant PdfInlineView oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.url != widget.url) {
-      _startLoad(refresh: false);
+      _loadGeneration += 1;
+      _started = false;
+      _userRequestedHydration = false;
+      _nearViewport = false;
+      _resetLoadState();
+      _scheduleViewportCheck();
     }
+  }
+
+  void _scheduleViewportCheck() {
+    if (_viewportCheckScheduled || !mounted) {
+      return;
+    }
+    _viewportCheckScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _viewportCheckScheduled = false;
+      if (mounted) {
+        _updateViewportActivity();
+      }
+    });
+  }
+
+  void _updateViewportActivity() {
+    final nextRouteActive =
+        TickerMode.valuesOf(context).enabled &&
+        (ModalRoute.isCurrentOf(context) ?? true);
+    final routeBecameActive = !_routeActive && nextRouteActive;
+    _routeActive = nextRouteActive;
+
+    // A covered/offstage route can retain the same global bounds as the
+    // visible route. Suspend cancellable raster work independently of bounds.
+    if (!nextRouteActive) {
+      if (_started) _suspendDeferredPreview();
+      return;
+    }
+
+    final renderObject = context.findRenderObject();
+    if (renderObject is! RenderBox || !renderObject.hasSize) {
+      return;
+    }
+    final top = renderObject.localToGlobal(Offset.zero).dy;
+    final nextNearViewport = debugShouldHydratePdfForBounds(
+      top: top,
+      bottom: top + renderObject.size.height,
+      viewportHeight: MediaQuery.sizeOf(context).height,
+    );
+    final shouldHydrate = _shouldHydratePdfPreview(
+      nearViewport: nextNearViewport,
+      userRequested: _userRequestedHydration,
+    );
+    if (_nearViewport == nextNearViewport) {
+      if (routeBecameActive && shouldHydrate) {
+        _activateHydration();
+      }
+      return;
+    }
+    _nearViewport = nextNearViewport;
+    if (shouldHydrate) {
+      _activateHydration();
+    } else if (_started && !_userRequestedHydration) {
+      _suspendDeferredPreview();
+    }
+  }
+
+  void _activateHydration({bool userRequested = false}) {
+    if (userRequested) {
+      _userRequestedHydration = true;
+    }
+    if (_started) {
+      _resumeDeferredPreviewIfNeeded();
+      return;
+    }
+    _started = true;
+    _startLoad(refresh: false);
+  }
+
+  void _suspendDeferredPreview() {
+    // Cache-manager downloads and PdfDocument.openFile aren't cancellable.
+    // Keep that single load serialized instead of invalidating it and starting
+    // a duplicate when the row re-enters the viewport. First-page rendering is
+    // cancellable and should stop immediately while offscreen.
+    _previewRenderToken?.cancel();
+    _previewRenderToken = null;
   }
 
   void _startLoad({required bool refresh, bool notify = true}) {
@@ -525,6 +652,10 @@ class _PdfInlineViewState extends ConsumerState<PdfInlineView> {
   }
 
   void _resetLoadState() {
+    _previewRenderToken?.cancel();
+    _previewRenderToken = null;
+    _previewWorkToken = null;
+    _resumePreviewAfterCurrent = false;
     _previewImage?.dispose();
     _previewImage = null;
     _filePath = null;
@@ -542,7 +673,7 @@ class _PdfInlineViewState extends ConsumerState<PdfInlineView> {
     try {
       final container = ProviderScope.containerOf(context, listen: false);
       final api = container.read(apiServiceProvider);
-      final requestUrl = _resolvePdfRequestUrl(loadingUrl, api?.baseUrl);
+      final requestUrl = resolvePdfRequestUrl(loadingUrl, api?.baseUrl);
       final headers = buildImageHeadersForUrlFromContainer(
         container,
         requestUrl,
@@ -584,14 +715,27 @@ class _PdfInlineViewState extends ConsumerState<PdfInlineView> {
           return;
         }
 
+        if (!_shouldRenderPreview) {
+          if (_isCurrentLoad(generation, loadingUrl)) {
+            setState(() => _previewSettled = true);
+          }
+          return;
+        }
+
+        final previewWorkToken = Object();
+        _previewWorkToken = previewWorkToken;
         ui.Image? image;
         try {
           image = await _renderPreviewPage(pages.first);
         } catch (_) {
           image = null;
+        } finally {
+          if (identical(_previewWorkToken, previewWorkToken)) {
+            _previewWorkToken = null;
+          }
         }
 
-        if (!_isCurrentLoad(generation, loadingUrl)) {
+        if (!_isCurrentLoad(generation, loadingUrl) || !_shouldRenderPreview) {
           image?.dispose();
           return;
         }
@@ -599,6 +743,12 @@ class _PdfInlineViewState extends ConsumerState<PdfInlineView> {
           _previewImage = image;
           _previewSettled = true;
         });
+        final shouldResume =
+            image == null && _resumePreviewAfterCurrent && _shouldRenderPreview;
+        _resumePreviewAfterCurrent = false;
+        if (shouldResume) {
+          _resumeDeferredPreviewIfNeeded();
+        }
       } finally {
         await doc?.dispose();
       }
@@ -626,20 +776,104 @@ class _PdfInlineViewState extends ConsumerState<PdfInlineView> {
     _cacheNamespaceLease = _retainPdfCacheNamespace(cacheKey);
   }
 
-  Future<ui.Image?> _renderPreviewPage(PdfPage page) async {
-    final pdfImage = await page.render(
-      fullWidth: _previewRenderWidth,
-      fullHeight: _heightForWidth(
-        pageWidth: page.width,
-        pageHeight: page.height,
-        width: _previewRenderWidth,
+  bool get _shouldRenderPreview =>
+      _routeActive && (_nearViewport || _userRequestedHydration);
+
+  void _resumeDeferredPreviewIfNeeded() {
+    final filePath = _filePath;
+    if (!_documentReady ||
+        filePath == null ||
+        _previewImage != null ||
+        !_shouldRenderPreview) {
+      return;
+    }
+    if (_previewWorkToken != null) {
+      _resumePreviewAfterCurrent = true;
+      return;
+    }
+    final generation = _loadGeneration;
+    final loadingUrl = widget.url;
+    final previewWorkToken = Object();
+    _previewWorkToken = previewWorkToken;
+    _resumePreviewAfterCurrent = false;
+    _previewSettled = false;
+    if (mounted) setState(() {});
+    unawaited(
+      _renderCachedPreview(
+        filePath: filePath,
+        loadingUrl: loadingUrl,
+        generation: generation,
+        previewWorkToken: previewWorkToken,
       ),
     );
-    if (pdfImage == null) return null;
+  }
+
+  Future<void> _renderCachedPreview({
+    required String filePath,
+    required String loadingUrl,
+    required int generation,
+    required Object previewWorkToken,
+  }) async {
+    ui.Image? image;
+    PdfDocument? document;
     try {
-      return await pdfImage.createImage();
+      document = await PdfDocument.openFile(filePath);
+      if (_isCurrentLoad(generation, loadingUrl) && _shouldRenderPreview) {
+        final pages = document.pages;
+        if (pages.isNotEmpty) {
+          image = await _renderPreviewPage(pages.first);
+        }
+      }
+    } catch (_) {
+      image = null;
     } finally {
-      pdfImage.dispose();
+      await document?.dispose();
+      if (identical(_previewWorkToken, previewWorkToken)) {
+        _previewWorkToken = null;
+      }
+    }
+
+    if (!_isCurrentLoad(generation, loadingUrl) || !_shouldRenderPreview) {
+      image?.dispose();
+      return;
+    }
+    setState(() {
+      _previewImage?.dispose();
+      _previewImage = image;
+      _previewSettled = true;
+    });
+    final shouldResume =
+        image == null && _resumePreviewAfterCurrent && _shouldRenderPreview;
+    _resumePreviewAfterCurrent = false;
+    if (shouldResume) {
+      _resumeDeferredPreviewIfNeeded();
+    }
+  }
+
+  Future<ui.Image?> _renderPreviewPage(PdfPage page) async {
+    final token = page.createCancellationToken();
+    _previewRenderToken?.cancel();
+    _previewRenderToken = token;
+    try {
+      final pdfImage = await page.render(
+        fullWidth: _previewRenderWidth,
+        fullHeight: pdfHeightForWidth(
+          pageWidth: page.width,
+          pageHeight: page.height,
+          width: _previewRenderWidth,
+        ),
+        cancellationToken: token,
+      );
+      if (pdfImage == null) return null;
+      try {
+        return await pdfImage.createImage();
+      } finally {
+        pdfImage.dispose();
+      }
+    } finally {
+      if (identical(_previewRenderToken, token)) {
+        _previewRenderToken = null;
+      }
     }
   }
 
@@ -653,6 +887,10 @@ class _PdfInlineViewState extends ConsumerState<PdfInlineView> {
   @override
   void dispose() {
     _disposed = true;
+    _loadGeneration += 1;
+    _scrollPosition?.removeListener(_scheduleViewportCheck);
+    _previewRenderToken?.cancel();
+    _previewRenderToken = null;
     _previewImage?.dispose();
     _cacheNamespaceLease?.release();
     super.dispose();
@@ -660,8 +898,12 @@ class _PdfInlineViewState extends ConsumerState<PdfInlineView> {
 
   @override
   Widget build(BuildContext context) {
+    // Ancestor markdown/layout rebuilds can move or resize this row without a
+    // scroll notification. Re-evaluate its post-layout bounds every build so
+    // newly visible PDFs hydrate and displaced PDFs suspend raster work.
+    _scheduleViewportCheck();
     final l10n = AppLocalizations.of(context);
-    final title = _pdfTitle(
+    final title = pdfTitle(
       rawLabel: widget.label,
       url: widget.url,
       fallback: l10n?.document ?? 'PDF document',
@@ -679,9 +921,11 @@ class _PdfInlineViewState extends ConsumerState<PdfInlineView> {
           clipBehavior: Clip.antiAlias,
           child: Semantics(
             button: true,
-            label: _semanticsLabel(title),
+            label: _semanticsLabel(title, l10n),
             child: InkWell(
-              onTap: _canOpen
+              onTap: !_started
+                  ? () => _activateHydration(userRequested: true)
+                  : _canOpen
                   ? () => _openFullscreen(context, _filePath!, title)
                   : (_loadError != null
                         ? () => _startLoad(refresh: true)
@@ -714,7 +958,15 @@ class _PdfInlineViewState extends ConsumerState<PdfInlineView> {
   ) {
     final image = _previewImage;
     final Widget content;
-    if (_loadError != null && !_canOpen) {
+    if (!_started) {
+      content = Center(
+        child: Icon(
+          Icons.picture_as_pdf_outlined,
+          size: 48,
+          color: conduitTheme.iconSecondary,
+        ),
+      );
+    } else if (_loadError != null && !_canOpen) {
       content = Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -793,7 +1045,9 @@ class _PdfInlineViewState extends ConsumerState<PdfInlineView> {
     ConduitThemeExtension conduitTheme,
   ) {
     final l10n = AppLocalizations.of(context);
-    final status = _canOpen
+    final status = !_started
+        ? (l10n?.preview ?? 'Preview')
+        : _canOpen
         ? 'Open'
         : (_loadError != null
               ? (l10n?.retry ?? 'Retry')
@@ -852,7 +1106,10 @@ class _PdfInlineViewState extends ConsumerState<PdfInlineView> {
     );
   }
 
-  String _semanticsLabel(String title) {
+  String _semanticsLabel(String title, AppLocalizations? l10n) {
+    if (!_started) {
+      return l10n?.loadPdfPreview(title) ?? 'Load PDF preview: $title';
+    }
     if (_canOpen) return 'Open PDF: $title';
     if (_loadError != null) return 'PDF failed to load: $title';
     return 'PDF loading: $title';
@@ -886,12 +1143,18 @@ class _PdfFullscreenPageState extends State<_PdfFullscreenPage> {
   List<double> _aspects = const <double>[];
   double _targetWidth = 1080;
 
-  final Map<int, ui.Image> _images = <int, ui.Image>{};
-  final List<int> _lru = <int>[];
+  final PdfPageImageCache<ui.Image> _images = PdfPageImageCache<ui.Image>(
+    maxBytes: _maxBitmapBytes,
+    sizeOf: (image) => image.width * image.height * 4,
+    onEvict: (image) => image.dispose(),
+  );
   final Map<int, PdfPageRenderCancellationToken> _rendering =
       <int, PdfPageRenderCancellationToken>{};
   final Set<int> _failed = <int>{};
-  int _heldBytes = 0;
+
+  /// Pages the list currently has built (on screen or inside its cache
+  /// extent). Their bitmaps are in use, so the cache must not evict them.
+  final Set<int> _builtPages = <int>{};
   _PdfCacheNamespaceLease? _cacheNamespaceLease;
 
   @override
@@ -935,7 +1198,10 @@ class _PdfFullscreenPageState extends State<_PdfFullscreenPage> {
         _opened = true;
         _error = null;
         _pageCount = pages.length;
-        _aspects = <double>[for (final page in pages) _pageAspect(page)];
+        _aspects = <double>[
+          for (final page in pages)
+            pdfPageAspect(width: page.width, height: page.height),
+        ];
       });
     } catch (error) {
       await doc?.dispose();
@@ -952,8 +1218,8 @@ class _PdfFullscreenPageState extends State<_PdfFullscreenPage> {
     if (_disposed || doc == null || index < 0 || index >= _pageCount) {
       return;
     }
-    if (_images.containsKey(index)) {
-      _touch(index);
+    if (_images.contains(index)) {
+      _images.touch(index);
       return;
     }
     if (_rendering.containsKey(index)) return;
@@ -965,7 +1231,7 @@ class _PdfFullscreenPageState extends State<_PdfFullscreenPage> {
       _rendering[index] = token;
       final pdfImage = await page.render(
         fullWidth: _targetWidth,
-        fullHeight: _heightForWidth(
+        fullHeight: pdfHeightForWidth(
           pageWidth: page.width,
           pageHeight: page.height,
           width: _targetWidth,
@@ -991,10 +1257,7 @@ class _PdfFullscreenPageState extends State<_PdfFullscreenPage> {
         return;
       }
 
-      _images[index] = image;
-      _heldBytes += image.width * image.height * 4;
-      _touch(index);
-      _evictIfNeeded(keep: index);
+      _images.put(index, image, keep: _builtPages.contains);
       if (mounted) setState(() {});
     } catch (_) {
       if (!_disposed && mounted) {
@@ -1005,36 +1268,13 @@ class _PdfFullscreenPageState extends State<_PdfFullscreenPage> {
     }
   }
 
-  void _touch(int index) {
-    _lru
-      ..remove(index)
-      ..insert(0, index);
-  }
-
-  void _evictIfNeeded({required int keep}) {
-    while (_heldBytes > _maxBitmapBytes && _lru.length > 1) {
-      final victim = _lru.lastWhere((index) => index != keep, orElse: () => -1);
-      if (victim < 0) break;
-      _lru.remove(victim);
-      final image = _images.remove(victim);
-      if (image == null) continue;
-      _heldBytes -= image.width * image.height * 4;
-      image.dispose();
-    }
-  }
-
   @override
   void dispose() {
     _disposed = true;
     for (final token in _rendering.values) {
       token.cancel();
     }
-    for (final image in _images.values) {
-      image.dispose();
-    }
     _images.clear();
-    _lru.clear();
-    _heldBytes = 0;
     final cacheNamespaceLease = _cacheNamespaceLease;
     _cacheNamespaceLease = null;
     unawaited(
@@ -1125,51 +1365,93 @@ class _PdfFullscreenPageState extends State<_PdfFullscreenPage> {
       scrollCacheExtent: const ScrollCacheExtent.pixels(900),
       itemCount: _pageCount,
       separatorBuilder: (_, _) => const SizedBox(height: Spacing.sm),
-      itemBuilder: (context, index) {
-        final image = _images[index];
-        final aspect = index < _aspects.length ? _aspects[index] : 0.707;
-        if (image != null) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (!_disposed && _images.containsKey(index)) _touch(index);
-          });
-          return Semantics(
-            image: true,
-            label: 'Page ${index + 1} of $_pageCount',
-            child: AspectRatio(
-              aspectRatio: aspect,
-              child: RawImage(image: image, fit: BoxFit.fill),
-            ),
-          );
-        }
+      itemBuilder: (context, index) => _PdfPageSlot(
+        key: ValueKey<int>(index),
+        index: index,
+        builtPages: _builtPages,
+        child: Builder(
+          builder: (context) {
+            final image = _images.peek(index);
+            final aspect = index < _aspects.length ? _aspects[index] : 0.707;
+            if (image != null) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (!_disposed) _images.touch(index);
+              });
+              return Semantics(
+                image: true,
+                label: 'Page ${index + 1} of $_pageCount',
+                child: AspectRatio(
+                  aspectRatio: aspect,
+                  child: RawImage(image: image, fit: BoxFit.fill),
+                ),
+              );
+            }
 
-        if (!_failed.contains(index)) {
-          unawaited(_ensureRendered(index));
-        }
-        return AspectRatio(
-          aspectRatio: aspect,
-          child: ColoredBox(
-            color: conduitTheme.surfaceContainer,
-            child: Center(
-              child: _failed.contains(index)
-                  ? Icon(Icons.broken_image_outlined, color: scheme.error)
-                  : SizedBox(
-                      width: 24,
-                      height: 24,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: conduitTheme.loadingIndicator,
-                      ),
-                    ),
-            ),
-          ),
-        );
-      },
+            if (!_failed.contains(index)) {
+              unawaited(_ensureRendered(index));
+            }
+            return AspectRatio(
+              aspectRatio: aspect,
+              child: ColoredBox(
+                color: conduitTheme.surfaceContainer,
+                child: Center(
+                  child: _failed.contains(index)
+                      ? Icon(Icons.broken_image_outlined, color: scheme.error)
+                      : SizedBox(
+                          width: 24,
+                          height: 24,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: conduitTheme.loadingIndicator,
+                          ),
+                        ),
+                ),
+              ),
+            );
+          },
+        ),
+      ),
     );
   }
 }
 
+/// Marks its page as built in [builtPages] while it is in the tree, so the
+/// bitmap cache keeps the pages the list may still draw.
+class _PdfPageSlot extends StatefulWidget {
+  const _PdfPageSlot({
+    super.key,
+    required this.index,
+    required this.builtPages,
+    required this.child,
+  });
+
+  final int index;
+  final Set<int> builtPages;
+  final Widget child;
+
+  @override
+  State<_PdfPageSlot> createState() => _PdfPageSlotState();
+}
+
+class _PdfPageSlotState extends State<_PdfPageSlot> {
+  @override
+  void initState() {
+    super.initState();
+    widget.builtPages.add(widget.index);
+  }
+
+  @override
+  void dispose() {
+    widget.builtPages.remove(widget.index);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
+}
+
 Future<void> _sharePdf(String filePath, String title) async {
-  final name = _pdfFileName(title);
+  final name = pdfShareFileName(title);
   try {
     final base = await getTemporaryDirectory();
     final root = Directory(path.join(base.path, 'pdf-share'));
@@ -1215,104 +1497,4 @@ Future<void> _sweepOldShareTemps(Directory root) async {
   } catch (_) {
     // Best effort cleanup only.
   }
-}
-
-String _pdfFileName(String title) {
-  var base = title
-      .replaceAll(RegExp(r'[^\p{L}\p{N}\s._\-]', unicode: true), ' ')
-      .replaceAll(RegExp(r'\s+'), ' ')
-      .trim();
-  if (base.length > 80) base = base.substring(0, 80).trim();
-  if (base.isEmpty) base = 'document';
-  return base.toLowerCase().endsWith('.pdf') ? base : '$base.pdf';
-}
-
-String _pdfTitle({
-  required String? rawLabel,
-  required String url,
-  required String fallback,
-}) {
-  final label = (rawLabel ?? '')
-      .replaceFirst(RegExp(r'^\s*\u{1F4C4}\s*', unicode: true), '')
-      .trim();
-  if (label.isNotEmpty && label != url.trim()) {
-    return label;
-  }
-
-  final fileName = _fileNameFromUrl(url);
-  if (fileName != null && fileName.isNotEmpty) {
-    return fileName;
-  }
-  return fallback;
-}
-
-String? _fileNameFromUrl(String url) {
-  final trimmed = url.trim();
-  if (trimmed.isEmpty) return null;
-  final uri = Uri.tryParse(trimmed);
-  final rawPath = uri?.path.isNotEmpty == true
-      ? uri!.path
-      : trimmed.split('?').first.split('#').first;
-  final segments = rawPath.split('/').where((part) => part.isNotEmpty);
-  if (segments.isEmpty) return null;
-  return _decodeUriComponent(segments.last).trim();
-}
-
-String _resolvePdfRequestUrl(String url, String? baseUrl) {
-  final trimmed = url.trim();
-  if (trimmed.isEmpty) return url;
-
-  final uri = Uri.tryParse(trimmed);
-  if (uri == null || uri.hasScheme) {
-    return trimmed;
-  }
-
-  var baseUri = baseUrl == null
-      ? null
-      : ServerTlsHttpClientFactory.parseBaseUri(baseUrl);
-  if (baseUri == null) {
-    return trimmed;
-  }
-
-  if (trimmed.startsWith('/')) {
-    return '${_baseUrlWithoutTrailingSlash(baseUri)}$trimmed';
-  }
-
-  if (!baseUri.path.endsWith('/')) {
-    baseUri = baseUri.replace(path: '${baseUri.path}/');
-  }
-
-  return baseUri.resolveUri(uri).toString();
-}
-
-String _baseUrlWithoutTrailingSlash(Uri uri) {
-  final withoutFragment = uri.removeFragment();
-  final withoutQuery = withoutFragment.replace(query: null);
-  return withoutQuery.toString().replaceFirst(RegExp(r'/+$'), '');
-}
-
-String _decodeUriComponent(String value) {
-  try {
-    return Uri.decodeComponent(value);
-  } catch (_) {
-    return value;
-  }
-}
-
-double _heightForWidth({
-  required double pageWidth,
-  required double pageHeight,
-  required double width,
-}) {
-  if (pageWidth <= 0 || pageHeight <= 0) {
-    return width * 1.414;
-  }
-  return width * pageHeight / pageWidth;
-}
-
-double _pageAspect(PdfPage page) {
-  if (page.width <= 0 || page.height <= 0) {
-    return 0.707;
-  }
-  return page.width / page.height;
 }

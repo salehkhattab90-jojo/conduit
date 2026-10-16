@@ -1,13 +1,22 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
-import '../../../core/models/server_about_info.dart';
-import '../../../core/providers/app_providers.dart';
+import 'package:conduit_core/models/server_about_info.dart';
+
+import 'package:conduit_core/providers/app_providers.dart';
+
+import '../../../core/deployment/deployment_providers.dart';
+import '../../../features/release_notes/data/release_notes_repository.dart';
+import '../../../features/release_notes/release_notes_presenter.dart';
 import '../../../l10n/app_localizations.dart';
 import '../../../shared/theme/theme_extensions.dart';
+import '../../../shared/utils/external_link_launcher.dart';
+import '../../../shared/utils/ui_utils.dart';
 import '../../../shared/widgets/conduit_components.dart';
 import '../widgets/settings_page_scaffold.dart';
+import '../../../shared/widgets/utility_components.dart';
+import '../../../shared/services/app_package_info.dart';
 
 class AboutPage extends ConsumerStatefulWidget {
   const AboutPage({super.key});
@@ -31,34 +40,43 @@ class _AboutPageState extends ConsumerState<AboutPage> {
     final serverAboutAsync = ref.watch(serverAboutInfoProvider);
     final packageInfoAsync = ref.watch(packageInfoProvider);
 
-    return SettingsPageScaffold(
+    return UtilityPageScaffold.settings(
       title: l10n.aboutApp,
       children: [
-        SettingsSectionHeader(title: l10n.appInformation),
-        const SizedBox(height: Spacing.sm),
         packageInfoAsync.when(
           data: (info) => _buildAppCard(context, l10n, info),
-          loading: () => _buildLoadingCard(context),
-          error: (_, _) => _buildMessageCard(context, l10n.unableToLoadAppInfo),
+          loading: () => _buildLoadingCard(context, title: l10n.appInformation),
+          error: (_, _) => _buildMessageCard(
+            context,
+            title: l10n.appInformation,
+            message: l10n.unableToLoadAppInfo,
+          ),
         ),
         settingsSectionGap,
-        SettingsSectionHeader(title: l10n.serverInformation),
-        const SizedBox(height: Spacing.sm),
         serverAboutAsync.when(
           data: (about) => about == null
-              ? _buildMessageCard(context, l10n.serverInfoUnavailable)
+              ? _buildMessageCard(
+                  context,
+                  title: l10n.serverInformation,
+                  message: l10n.serverInfoUnavailable,
+                )
               : _buildServerCard(context, l10n, about),
-          loading: () => _buildLoadingCard(context),
-          error: (_, _) =>
-              _buildMessageCard(context, l10n.unableToLoadOpenWebuiSettings),
+          loading: () =>
+              _buildLoadingCard(context, title: l10n.serverInformation),
+          error: (_, _) => _buildMessageCard(
+            context,
+            title: l10n.serverInformation,
+            message: l10n.unableToLoadOpenWebuiSettings,
+          ),
         ),
       ],
     );
   }
 
-  Widget _buildLoadingCard(BuildContext context) {
-    return const ConduitCard(
-      child: Padding(
+  Widget _buildLoadingCard(BuildContext context, {required String title}) {
+    return InsetGroupedSection(
+      title: title,
+      child: const Padding(
         padding: EdgeInsets.symmetric(vertical: Spacing.lg),
         child: Center(child: ConduitLoadingIndicator()),
       ),
@@ -70,22 +88,17 @@ class _AboutPageState extends ConsumerState<AboutPage> {
     AppLocalizations l10n,
     ServerAboutInfo about,
   ) {
-    return ConduitCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _AboutRow(label: l10n.serverNameLabel, value: about.name),
-          const SizedBox(height: Spacing.sm),
-          _AboutRow(label: l10n.serverVersionLabel, value: about.version),
-          if (about.latestVersion != null) ...[
-            const SizedBox(height: Spacing.sm),
-            _AboutRow(
-              label: l10n.latestVersionLabel,
-              value: about.latestVersion!,
-            ),
-          ],
-        ],
-      ),
+    return InsetGroupedList(
+      title: l10n.serverInformation,
+      children: [
+        UtilityValueRow(label: l10n.serverNameLabel, value: about.name),
+        UtilityValueRow(label: l10n.serverVersionLabel, value: about.version),
+        if (about.latestVersion != null)
+          UtilityValueRow(
+            label: l10n.latestVersionLabel,
+            value: about.latestVersion!,
+          ),
+      ],
     );
   }
 
@@ -94,65 +107,106 @@ class _AboutPageState extends ConsumerState<AboutPage> {
     AppLocalizations l10n,
     PackageInfo info,
   ) {
+    final theme = context.conduitTheme;
+    final brand = ref.watch(brandConfigProvider);
+    final githubUrl = brand.githubUrl;
     final versionLabel = info.buildNumber.isEmpty
         ? info.version
         : '${info.version} (${info.buildNumber})';
 
-    return ConduitCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _AboutRow(label: l10n.appVersion, value: versionLabel),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildMessageCard(BuildContext context, String message) {
-    return ConduitCard(
-      child: Text(
-        message,
-        style: context.conduitTheme.bodyMedium?.copyWith(
-          color: context.conduitTheme.sidebarForeground.withValues(alpha: 0.75),
-        ),
-      ),
-    );
-  }
-}
-
-class _AboutRow extends StatelessWidget {
-  const _AboutRow({required this.label, required this.value});
-
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = context.conduitTheme;
-
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    return InsetGroupedList(
+      title: l10n.appInformation,
       children: [
-        SizedBox(
-          width: 132,
-          child: Text(
-            label,
-            style: theme.bodySmall?.copyWith(
-              color: theme.sidebarForeground.withValues(alpha: 0.7),
+        UtilityValueRow(label: l10n.appVersion, value: versionLabel),
+        if (brand.showReleaseNotes)
+          UtilityRow(
+            leading: Icon(
+              Icons.new_releases_rounded,
+              size: IconSize.medium,
+              color: theme.buttonPrimary,
             ),
+            title: l10n.releaseNotesTitle,
+            showChevron: true,
+            onTap: () => _openReleaseNotes(context, info),
           ),
-        ),
-        const SizedBox(width: Spacing.sm),
-        Expanded(
-          child: Text(
-            value,
-            style: theme.bodyMedium?.copyWith(
-              color: theme.sidebarForeground,
-              fontWeight: FontWeight.w600,
+        if (githubUrl != null)
+          UtilityRow(
+            leading: Icon(
+              Icons.code_rounded,
+              size: IconSize.medium,
+              color: theme.buttonPrimary,
             ),
+            title: l10n.githubRepository,
+            subtitle: brand.githubLabel,
+            trailing: Icon(
+              Icons.open_in_new_rounded,
+              size: IconSize.small,
+              color: theme.iconSecondary,
+            ),
+            onTap: () => _openGithub(context, githubUrl),
           ),
+        UtilityRow(
+          leading: Icon(
+            Icons.description_outlined,
+            size: IconSize.medium,
+            color: theme.buttonPrimary,
+          ),
+          title: l10n.openSourceLicenses,
+          showChevron: true,
+          onTap: () => _showLicenses(context),
         ),
       ],
+    );
+  }
+
+  Widget _buildMessageCard(
+    BuildContext context, {
+    required String title,
+    required String message,
+  }) {
+    return InsetGroupedSection(
+      title: title,
+      child: Text(
+        message,
+        style: AppTypography.bodyMediumStyle.copyWith(
+          color: context.conduitTheme.textSecondary,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openGithub(BuildContext context, String url) async {
+    final launched = await launchExternalLink(url, scope: 'about/github');
+    if (!launched && context.mounted) {
+      UiUtils.showMessage(context, AppLocalizations.of(context)!.errorMessage);
+    }
+  }
+
+  void _showLicenses(BuildContext context) {
+    showLicensePage(
+      context: context,
+      applicationName: ref.read(brandConfigProvider).licenseAppName,
+    );
+  }
+
+  Future<void> _openReleaseNotes(BuildContext context, PackageInfo info) async {
+    final l10n = AppLocalizations.of(context)!;
+    final allNotes = await const ReleaseNotesRepository().load(
+      Localizations.localeOf(context),
+    );
+    if (!context.mounted) return;
+    final notes = latestBundledReleaseNotesForVersion(
+      currentVersion: info.version,
+      notes: allNotes,
+    );
+    if (notes.isEmpty) {
+      UiUtils.showMessage(context, l10n.errorMessage);
+      return;
+    }
+    await showReleaseNotesSheet(
+      context: context,
+      currentVersion: info.version,
+      notes: notes,
     );
   }
 }

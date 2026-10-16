@@ -1,26 +1,25 @@
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
+import 'package:material_ui/material_ui.dart';
 
-import '../../../shared/theme/theme_extensions.dart';
-import '../../../shared/utils/ui_utils.dart';
-import '../../../shared/widgets/conduit_components.dart';
-import 'profile_text_styles.dart';
+import '../../../shared/widgets/utility_components.dart';
 
 /// A tile widget used in customization settings pages, showing a leading
 /// icon, title, subtitle, and optional trailing widget or chevron.
 class CustomizationTile extends StatelessWidget {
   const CustomizationTile({
     super.key,
-    required this.leading,
+    this.leading,
     required this.title,
     required this.subtitle,
     this.subtitleTrailing,
     this.trailing,
     this.onTap,
     this.showChevron = true,
+    this.subtitleMaxLines = 2,
+    this.toggled,
   });
 
-  final Widget leading;
+  final Widget? leading;
   final String title;
   final String subtitle;
 
@@ -29,65 +28,25 @@ class CustomizationTile extends StatelessWidget {
   final Widget? trailing;
   final VoidCallback? onTap;
   final bool showChevron;
+  final int subtitleMaxLines;
+
+  /// The switch state to announce when the tile toggles a setting.
+  final bool? toggled;
 
   @override
   Widget build(BuildContext context) {
-    final theme = context.conduitTheme;
-
-    return ConduitCard(
-      padding: const EdgeInsets.all(Spacing.md),
-      onTap: onTap,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          leading,
-          const SizedBox(width: Spacing.md),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: profileTitleTextStyle(context),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: Spacing.xs),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    Expanded(
-                      child: Text(
-                        subtitle,
-                        style: profileSubtitleTextStyle(context),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    if (subtitleTrailing != null) ...[
-                      const SizedBox(width: Spacing.sm),
-                      subtitleTrailing!,
-                    ],
-                  ],
-                ),
-              ],
-            ),
-          ),
-          if (trailing != null) ...[
-            const SizedBox(width: Spacing.sm),
-            trailing!,
-          ] else if (showChevron && onTap != null) ...[
-            const SizedBox(width: Spacing.sm),
-            Icon(
-              UiUtils.platformIcon(
-                ios: CupertinoIcons.chevron_right,
-                android: Icons.chevron_right,
-              ),
-              color: theme.iconSecondary,
-              size: IconSize.small,
-            ),
-          ],
-        ],
+    return InsetGroupedSection(
+      padding: EdgeInsets.zero,
+      child: UtilityRow(
+        title: title,
+        subtitle: subtitle,
+        subtitleTrailing: subtitleTrailing,
+        subtitleMaxLines: subtitleMaxLines,
+        leading: leading,
+        trailing: trailing,
+        onTap: onTap,
+        showChevron: showChevron,
+        toggled: toggled,
       ),
     );
   }

@@ -1,27 +1,49 @@
-import 'package:adaptive_platform_ui/adaptive_platform_ui.dart';
+import 'package:conduit/shared/widgets/platform_ui/platform_ui.dart';
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
+
 import '../../../shared/theme/theme_extensions.dart';
-import 'package:flutter/cupertino.dart';
+
+import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:conduit/l10n/app_localizations.dart';
-import '../../../core/widgets/error_boundary.dart';
+
+import '../../../core/deployment/deployment_providers.dart';
 import '../../../shared/widgets/conduit_loading.dart';
 import '../../../shared/widgets/adaptive_route_shell.dart';
+import '../../../shared/widgets/adaptive_toolbar_components.dart';
 
 import '../../../shared/utils/ui_utils.dart';
-import '../../../shared/widgets/themed_dialogs.dart';
-import '../../../core/providers/app_providers.dart';
-import '../../../core/services/navigation_service.dart';
-import '../../auth/providers/unified_auth_providers.dart';
-import '../../../core/services/api_service.dart';
-import '../../../core/models/user.dart' as models;
-import '../../../core/utils/user_display_name.dart';
-import '../../../core/utils/user_avatar_utils.dart';
+import '../../../shared/utils/external_link_launcher.dart';
+
+import 'package:conduit_core/providers/app_providers.dart';
+import 'package:conduit_core/features/automations/providers/automation_providers.dart'
+    show scheduledTasksEntryVisibleProvider;
+import 'package:conduit_core/features/calendar/providers/calendar_providers.dart'
+    show calendarAvailableProvider;
+import 'package:conduit_core/features/chat/providers/chat_providers.dart'
+    show chatDataControlsEntryVisibleProvider;
+import 'package:conduit_core/features/integrations/providers/personal_connections_providers.dart';
+
+import 'package:conduit_core/providers/backend_mode_providers.dart';
+import 'package:conduit_core/features/hermes/providers/hermes_providers.dart';
+
+import '../../../shared/services/navigation_service.dart';
+
+import 'package:conduit_core/features/auth/providers/unified_auth_providers.dart';
+
+import '../../workspace/providers/workspace_capabilities_provider.dart';
+
+import 'package:conduit_core/services/api_service.dart';
+
+import 'package:conduit_core/utils/user_display_name.dart';
+
+import 'package:conduit_core/utils/user_avatar_utils.dart';
+
 import '../../../shared/widgets/user_avatar.dart';
-import '../widgets/profile_setting_tile.dart';
-import '../widgets/profile_text_styles.dart';
+import '../../../shared/widgets/utility_components.dart';
+import '../widgets/account_actions.dart';
 
 /// Profile page (You tab) showing user info and main actions
 /// Enhanced with production-grade design tokens for better cohesion
@@ -51,15 +73,41 @@ class ProfilePage extends ConsumerWidget {
       body = _buildProfileBody(context, ref, user, api);
     }
 
-    return ErrorBoundary(child: _buildScaffold(context, body: body));
+    return _buildScaffold(context, body: body);
   }
 
   Widget _buildScaffold(BuildContext context, {required Widget body}) {
     final l10n = AppLocalizations.of(context)!;
 
+    // Use the same floating back control as the settings subpages so the
+    // hub and its destinations share one toolbar style.
+    final backLabel = MaterialLocalizations.of(context).backButtonTooltip;
+    final backButton = Navigator.of(context).canPop()
+        ? AdaptiveTooltip(
+            message: backLabel,
+            child: ConduitAdaptiveAppBarIconButton(
+              icon: context.usesCupertinoChrome
+                  ? CupertinoIcons.chevron_back
+                  : Icons.arrow_back,
+              semanticLabel: backLabel,
+              onPressed: () => Navigator.of(context).maybePop(),
+            ),
+          )
+        : null;
+
     return AdaptiveRouteShell(
-      backgroundColor: context.conduitTheme.surfaceBackground,
-      appBar: AdaptiveAppBar(title: l10n.you),
+      backgroundColor: context.conduitTheme.groupedBackground,
+      appBar: AdaptiveAppBar(
+        title: l10n.you,
+        leading: backButton == null || context.usesCupertinoChrome
+            ? backButton
+            : Center(
+                child: SizedBox.square(
+                  dimension: TouchTarget.minimum,
+                  child: backButton,
+                ),
+              ),
+      ),
       body: body,
     );
   }
@@ -85,7 +133,23 @@ class ProfilePage extends ConsumerWidget {
   ) {
     final mediaQuery = MediaQuery.of(context);
     final topPadding = _topContentPadding(context);
-
+    final directPrimary =
+        ref.watch(preferredBackendProvider) == PreferredBackend.direct;
+    final hasOpenWebUiAccount = userData != null && api != null;
+    final items = _buildSettingsItems(
+      context,
+      ref,
+      directPrimary: directPrimary,
+      hasOpenWebUiAccount: hasOpenWebUiAccount,
+    );
+    final accountsAsync = ref.watch(openWebUiAccountsProvider);
+    final accounts = accountsAsync.value ?? const <OpenWebUiAccountEntry>[];
+    final activeAccount = accounts.where((entry) => entry.isActive).firstOrNull;
+    final locked = ref.watch(deploymentPolicyProvider).isLocked;
+    final donationSection = _buildDonationSection(
+      context,
+      ref.watch(brandConfigProvider).donationUrls,
+    );
     return ListView(
       physics: const BouncingScrollPhysics(
         parent: AlwaysScrollableScrollPhysics(),
@@ -97,145 +161,287 @@ class ProfilePage extends ConsumerWidget {
         Spacing.pagePadding + mediaQuery.padding.bottom,
       ),
       children: [
-        _buildProfileHeader(context, userData, api),
-        const SizedBox(height: Spacing.xl),
-        _buildAccountSection(context, ref),
+        _buildAccountCard(
+          context,
+          ref,
+          user: hasOpenWebUiAccount ? userData : null,
+          api: api,
+          accounts: accounts,
+        ),
+        const SizedBox(height: Spacing.lg),
+        ...items,
+        if (donationSection != null) ...[
+          const SizedBox(height: Spacing.xl),
+          donationSection,
+        ],
+        if (hasOpenWebUiAccount) const SizedBox(height: Spacing.xl),
+        if (hasOpenWebUiAccount)
+          InsetGroupedList(
+            children: [
+              // A locked build has its one account, kept server and all.
+              if (locked)
+                _buildSignOutOption(context, ref)
+              // With several accounts, Sign out leaves this one and the next
+              // takes over; signing out of all is on the Accounts page. With
+              // one, it is what it always was -- and until the accounts are
+              // read, or when they cannot be, there may be several, and it
+              // signs out of every one: say so.
+              else if (accounts.length > 1 && activeAccount != null)
+                _buildSignOutOfAccountOption(context, ref, activeAccount)
+              else
+                _buildSignOutOption(context, ref, all: !accountsAsync.hasValue),
+            ],
+          ),
       ],
     );
   }
 
   double _topContentPadding(BuildContext context) {
-    final mediaQuery = MediaQuery.of(context);
-    if (Theme.of(context).platform == TargetPlatform.iOS) {
-      return mediaQuery.padding.top + kTextTabBarHeight + Spacing.lg;
-    }
     return Spacing.lg;
   }
 
-  Widget _buildProfileHeader(
-    BuildContext context,
-    dynamic user,
-    ApiService? api,
-  ) {
-    final l10n = AppLocalizations.of(context)!;
-    final displayName = deriveUserDisplayName(
-      user,
-      fallback: l10n.userFallbackName,
-    );
-    final characters = displayName.characters;
-    final initial = characters.isNotEmpty
-        ? characters.first.toUpperCase()
-        : 'U';
-    final avatarUrl = resolveUserAvatarUrlForUser(api, user);
-
-    String? extractEmail(dynamic source) {
-      if (source is models.User) {
-        return source.email;
-      }
-      if (source is Map) {
-        final value = source['email'];
-        if (value is String && value.trim().isNotEmpty) {
-          return value.trim();
-        }
-        final nested = source['user'];
-        if (nested is Map) {
-          final nestedValue = nested['email'];
-          if (nestedValue is String && nestedValue.trim().isNotEmpty) {
-            return nestedValue.trim();
-          }
-        }
-      }
-      return null;
-    }
-
-    final email = extractEmail(user) ?? l10n.noEmailLabel;
+  /// The brand's donation links; null when it has none.
+  Widget? _buildDonationSection(BuildContext context, DonationUrls? urls) {
+    final buyMeACoffeeUrl = urls?.buyMeACoffee;
+    final githubSponsorsUrl = urls?.githubSponsors;
+    if (buyMeACoffeeUrl == null && githubSponsorsUrl == null) return null;
     final theme = context.conduitTheme;
-
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: () => context.pushNamed(RouteNames.accountSettings),
-      child: Container(
-        padding: const EdgeInsets.all(Spacing.md),
-        decoration: BoxDecoration(
-          color: theme.sidebarAccent.withValues(alpha: 0.6),
-          borderRadius: BorderRadius.circular(AppBorderRadius.large),
-          border: Border.all(
-            color: theme.sidebarBorder.withValues(alpha: 0.6),
-            width: BorderWidth.thin,
+    final l10n = AppLocalizations.of(context)!;
+    final donationOptions = [
+      if (buyMeACoffeeUrl != null)
+        _buildSupportOption(
+          context,
+          icon: UiUtils.platformIcon(
+            ios: CupertinoIcons.gift,
+            android: Icons.coffee,
           ),
+          title: l10n.buyMeACoffeeTitle,
+          subtitle: l10n.buyMeACoffeeSubtitle,
+          url: buyMeACoffeeUrl,
+          color: theme.warning,
         ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            UserAvatar(size: 56, imageUrl: avatarUrl, fallbackText: initial),
-            const SizedBox(width: Spacing.md),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    displayName,
-                    style: profileTitleTextStyle(context, large: true),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: Spacing.xs),
-                  Row(
-                    children: [
-                      Icon(
-                        UiUtils.platformIcon(
-                          ios: CupertinoIcons.envelope,
-                          android: Icons.mail_outline,
-                        ),
-                        size: IconSize.small,
-                        color: theme.sidebarForeground.withValues(alpha: 0.75),
-                      ),
-                      const SizedBox(width: Spacing.xs),
-                      Flexible(
-                        child: Text(
-                          email,
-                          style: theme.bodySmall?.copyWith(
-                            color: theme.sidebarForeground.withValues(
-                              alpha: 0.75,
-                            ),
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                          maxLines: 1,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: Spacing.sm),
-            Icon(
-              UiUtils.platformIcon(
-                ios: CupertinoIcons.chevron_right,
-                android: Icons.chevron_right,
-              ),
-              color: theme.iconSecondary,
-              size: IconSize.small,
-            ),
-          ],
+      if (githubSponsorsUrl != null)
+        _buildSupportOption(
+          context,
+          icon: UiUtils.platformIcon(
+            ios: CupertinoIcons.heart,
+            android: Icons.favorite_border,
+          ),
+          title: l10n.githubSponsorsTitle,
+          subtitle: l10n.githubSponsorsSubtitle,
+          url: githubSponsorsUrl,
+          color: theme.success,
         ),
+    ];
+
+    return InsetGroupedList(
+      key: const Key('settings-donations'),
+      title: l10n.supportConduit,
+      description: l10n.supportConduitSubtitle,
+      children: donationOptions,
+    );
+  }
+
+  Widget _buildSupportOption(
+    BuildContext context, {
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required String url,
+    required Color color,
+  }) {
+    final theme = context.conduitTheme;
+    return UtilityRow(
+      onTap: () => _openExternalLink(context, url),
+      leading: _buildIconBadge(context, icon, color: color),
+      title: title,
+      subtitle: subtitle,
+      trailing: Icon(
+        UiUtils.platformIcon(
+          ios: CupertinoIcons.arrow_up_right,
+          android: Icons.open_in_new,
+        ),
+        color: theme.iconSecondary,
+        size: IconSize.small,
       ),
     );
   }
 
-  Widget _buildAccountSection(BuildContext context, WidgetRef ref) {
-    final items = [
+  Future<void> _openExternalLink(BuildContext context, String url) async {
+    final launched = await launchExternalLink(url, scope: 'profile/support');
+    if (!launched && context.mounted) {
+      UiUtils.showMessage(context, AppLocalizations.of(context)!.errorMessage);
+    }
+  }
+
+  /// Who Settings is for -- the Open WebUI account signed in, else the
+  /// Hermes connection in use, else Direct -- leading to every account and
+  /// connection, with the way to add another under it.
+  Widget _buildAccountCard(
+    BuildContext context,
+    WidgetRef ref, {
+    required dynamic user,
+    required ApiService? api,
+    required List<OpenWebUiAccountEntry> accounts,
+  }) {
+    final l10n = AppLocalizations.of(context)!;
+    final theme = context.conduitTheme;
+    final signedInName = user == null
+        ? null
+        : deriveUserDisplayName(user, fallback: l10n.userFallbackName);
+    final card = accountCardSummary(
+      l10n,
+      signedInName: signedInName,
+      accounts: accounts,
+      hermesConnections: ref.watch(hermesConnectionsProvider),
+      hermesInUseId: ref.watch(hermesEnabledProvider)
+          ? ref.watch(hermesActiveConnectionIdProvider)
+          : null,
+    );
+    final Widget leading = switch (card.kind) {
+      AccountCardKind.openWebUi => UserAvatar(
+        size: IconSize.xl,
+        imageUrl: resolveUserAvatarUrlForUser(api, user),
+        fallbackText: card.title.characters.isEmpty
+            ? 'U'
+            : card.title.characters.first.toUpperCase(),
+      ),
+      AccountCardKind.hermes => _buildAssetIconBadge(
+        context,
+        'assets/icons/hermes_agent.png',
+        color: theme.textPrimary,
+      ),
+      AccountCardKind.direct => _buildIconBadge(
+        context,
+        UiUtils.platformIcon(
+          ios: CupertinoIcons.link,
+          android: Icons.hub_outlined,
+        ),
+        color: theme.iconSecondary,
+      ),
+    };
+
+    // Without account management the card only says who is signed in.
+    final manageAccounts = ref
+        .watch(deploymentPolicyProvider)
+        .allowAccountManagement;
+    return InsetGroupedList(
+      key: const Key('settings-account-card'),
+      children: [
+        UtilityRow(
+          key: const Key('settings-accounts'),
+          leading: leading,
+          title: card.title,
+          subtitle: card.subtitle,
+          showChevron: manageAccounts,
+          onTap: manageAccounts
+              ? () => context.pushNamed(RouteNames.accounts)
+              : null,
+        ),
+        if (manageAccounts)
+          UtilityRow(
+            key: const Key('settings-add-account'),
+            title: l10n.accountsAddAccount,
+            foregroundColor: theme.buttonPrimary,
+            leading: _buildIconBadge(
+              context,
+              UiUtils.platformIcon(ios: CupertinoIcons.add, android: Icons.add),
+              color: theme.buttonPrimary,
+            ),
+            onTap: () => showAddAccountSheet(context, ref),
+          ),
+      ],
+    );
+  }
+
+  List<Widget> _buildSettingsItems(
+    BuildContext context,
+    WidgetRef ref, {
+    required bool directPrimary,
+    required bool hasOpenWebUiAccount,
+  }) {
+    final l10n = AppLocalizations.of(context)!;
+    final canManageWorkspace = canManageAnyWorkspaceSection(ref);
+    // The calendar is there whenever the server and account allow it.
+    final showCalendar = ref.watch(calendarAvailableProvider);
+    // Personal connections need the Advanced disclosure and the server's own
+    // rule for who may keep them; either one missing hides the entry.
+    final showPersonalConnections = ref.watch(
+      personalConnectionsEntryVisibleProvider,
+    );
+    // Scheduled tasks follow the same rule: Advanced reveals them, and the
+    // server and account decide whether they exist at all.
+    final showScheduledTasks = ref.watch(scheduledTasksEntryVisibleProvider);
+    // Data controls follow the same rule: Advanced reveals them, and a signed
+    // in Open WebUI account decides whether there is anything to act on.
+    final showChatDataControls = ref.watch(
+      chatDataControlsEntryVisibleProvider,
+    );
+
+    final personalizationItem = _buildAccountOption(
+      context,
+      icon: UiUtils.platformIcon(
+        ios: CupertinoIcons.person_crop_circle_badge_checkmark,
+        android: Icons.auto_awesome,
+      ),
+      title: l10n.personalization,
+      onTap: () => context.pushNamed(RouteNames.personalization),
+    );
+    // What belongs to the Open WebUI account signed in.
+    final accountItems = <Widget>[
+      if (hasOpenWebUiAccount) ...[
+        _buildAccountOption(
+          context,
+          key: const Key('settings-profile'),
+          icon: UiUtils.platformIcon(
+            ios: CupertinoIcons.person_crop_circle,
+            android: Icons.account_circle_outlined,
+          ),
+          title: l10n.profileTitle,
+          onTap: () => context.pushNamed(RouteNames.accountSettings),
+        ),
+        _buildAccountOption(
+          context,
+          icon: UiUtils.platformIcon(
+            ios: CupertinoIcons.bell,
+            android: Icons.notifications_outlined,
+          ),
+          title: l10n.notificationsTitle,
+          onTap: () => context.pushNamed(RouteNames.notificationSettings),
+        ),
+        personalizationItem,
+        _buildAccountOption(
+          context,
+          key: const Key('data-connection-entry'),
+          icon: UiUtils.platformIcon(
+            ios: CupertinoIcons.antenna_radiowaves_left_right,
+            android: Icons.sync_alt,
+          ),
+          title: l10n.settingsDataAndConnection,
+          onTap: () => context.pushNamed(RouteNames.dataConnectionSettings),
+        ),
+      ],
+    ];
+    // Single-line settings rows, so each title and its
+    // icon carry the meaning without a descriptive subtitle.
+    final appItems = <Widget>[
       _buildAccountOption(
         context,
         icon: UiUtils.platformIcon(
-          ios: CupertinoIcons.person_crop_circle_badge_checkmark,
-          android: Icons.auto_awesome,
+          ios: CupertinoIcons.paintbrush,
+          android: Icons.palette_outlined,
         ),
-        title: AppLocalizations.of(context)!.personalization,
-        subtitle: AppLocalizations.of(context)!.personalizationSubtitle,
-        onTap: () {
-          context.pushNamed(RouteNames.personalization);
-        },
+        title: l10n.settingsAppearance,
+        onTap: () => context.pushNamed(RouteNames.appearanceSettings),
+      ),
+      _buildAccountOption(
+        context,
+        icon: UiUtils.platformIcon(
+          ios: CupertinoIcons.bubble_left_bubble_right,
+          android: Icons.chat_bubble_outline,
+        ),
+        title: l10n.chatSettings,
+        onTap: () => context.pushNamed(RouteNames.chatSettings),
       ),
       _buildAccountOption(
         context,
@@ -243,95 +449,208 @@ class ProfilePage extends ConsumerWidget {
           ios: CupertinoIcons.waveform,
           android: Icons.graphic_eq,
         ),
-        title: AppLocalizations.of(context)!.audioSettingsTitle,
-        subtitle: AppLocalizations.of(context)!.audioSettingsSubtitle,
-        onTap: () {
-          context.pushNamed(RouteNames.audioSettings);
-        },
+        title: l10n.audioSettingsTitle,
+        onTap: () => context.pushNamed(RouteNames.audioSettings),
       ),
-      _buildAccountOption(
-        context,
-        icon: UiUtils.platformIcon(
-          ios: CupertinoIcons.slider_horizontal_3,
-          android: Icons.tune,
-        ),
-        title: AppLocalizations.of(context)!.appAndChat,
-        subtitle: AppLocalizations.of(context)!.appAndChatSubtitle,
-        onTap: () {
-          context.pushNamed(RouteNames.appCustomization);
-        },
-      ),
-      _buildAboutTile(context),
-      _buildAccountOption(
-        context,
-        icon: UiUtils.platformIcon(
-          ios: CupertinoIcons.square_arrow_left,
-          android: Icons.logout,
-        ),
-        title: AppLocalizations.of(context)!.signOut,
-        subtitle: AppLocalizations.of(context)!.endYourSession,
-        onTap: () => _signOut(context, ref),
-        showChevron: false,
-      ),
+      // Without an account, Direct's default model is set there.
+      if (!hasOpenWebUiAccount && directPrimary) personalizationItem,
     ];
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        for (var i = 0; i < items.length; i++) ...[
-          items[i],
-          if (i != items.length - 1) const SizedBox(height: Spacing.md),
-        ],
+    // Everyday server places: things to open and use, not to configure.
+    final placeItems = <Widget>[
+      if (showCalendar)
+        _buildAccountOption(
+          context,
+          key: const Key('calendar-entry'),
+          icon: UiUtils.platformIcon(
+            ios: CupertinoIcons.calendar,
+            android: Icons.calendar_month_outlined,
+          ),
+          title: l10n.calendarTitle,
+          onTap: () => context.pushNamed(RouteNames.calendar),
+        ),
+      if (canManageWorkspace)
+        _buildAccountOption(
+          context,
+          key: const Key('workspace-entry'),
+          icon: UiUtils.platformIcon(
+            ios: CupertinoIcons.square_grid_2x2,
+            android: Icons.dashboard_customize_outlined,
+          ),
+          title: l10n.workspaceTitle,
+          onTap: () => context.pushNamed(RouteNames.workspace),
+        ),
+    ];
+    // Power-user pages that Advanced reveals. The group disappears with its
+    // last row, so turning Advanced off leaves no empty heading behind.
+    final advancedItems = <Widget>[
+      if (showScheduledTasks)
+        _buildAccountOption(
+          context,
+          key: const Key('scheduled-tasks-entry'),
+          icon: UiUtils.platformIcon(
+            ios: CupertinoIcons.clock,
+            android: Icons.schedule_outlined,
+          ),
+          title: l10n.scheduledTasksTitle,
+          onTap: () => context.pushNamed(RouteNames.scheduledTasks),
+        ),
+      if (showPersonalConnections)
+        _buildAccountOption(
+          context,
+          key: const Key('personal-connections-entry'),
+          icon: UiUtils.platformIcon(
+            ios: CupertinoIcons.cloud,
+            android: Icons.dns_outlined,
+          ),
+          title: l10n.personalConnectionsTitle,
+          onTap: () => context.pushNamed(RouteNames.personalConnections),
+        ),
+      if (showChatDataControls)
+        _buildAccountOption(
+          context,
+          key: const Key('chat-data-controls-entry'),
+          icon: UiUtils.platformIcon(
+            ios: CupertinoIcons.tray_2,
+            android: Icons.storage_outlined,
+          ),
+          title: l10n.chatDataControlsTitle,
+          onTap: () => context.pushNamed(RouteNames.chatDataControls),
+        ),
+    ];
+    return [
+      if (accountItems.isNotEmpty) ...[
+        InsetGroupedList(
+          key: const Key('settings-account-group'),
+          title: l10n.accountSettingsTitle,
+          children: accountItems,
+        ),
+        const SizedBox(height: Spacing.lg),
       ],
+      InsetGroupedList(children: appItems),
+      if (placeItems.isNotEmpty) ...[
+        const SizedBox(height: Spacing.lg),
+        InsetGroupedList(
+          key: const Key('settings-places-group'),
+          children: placeItems,
+        ),
+      ],
+      if (advancedItems.isNotEmpty) ...[
+        const SizedBox(height: Spacing.lg),
+        InsetGroupedList(
+          key: const Key('settings-advanced-group'),
+          title: l10n.advancedFeatures,
+          footer: l10n.profileAdvancedFooter,
+          children: advancedItems,
+        ),
+      ],
+      const SizedBox(height: Spacing.lg),
+      InsetGroupedList(children: [_buildAboutTile(context)]),
+    ];
+  }
+
+  Widget _buildSignOutOfAccountOption(
+    BuildContext context,
+    WidgetRef ref,
+    OpenWebUiAccountEntry entry,
+  ) {
+    final l10n = AppLocalizations.of(context)!;
+    return _buildAccountOption(
+      context,
+      key: const Key('settings-sign-out-account'),
+      icon: UiUtils.platformIcon(
+        ios: CupertinoIcons.square_arrow_left,
+        android: Icons.logout,
+      ),
+      title: l10n.signOut,
+      onTap: () => signOutOfSavedAccount(context, ref, entry),
+      showChevron: false,
+      destructive: true,
+    );
+  }
+
+  Widget _buildSignOutOption(
+    BuildContext context,
+    WidgetRef ref, {
+    bool all = false,
+  }) {
+    final l10n = AppLocalizations.of(context)!;
+    return _buildAccountOption(
+      context,
+      key: const Key('settings-sign-out'),
+      icon: UiUtils.platformIcon(
+        ios: CupertinoIcons.square_arrow_left,
+        android: Icons.logout,
+      ),
+      title: all ? l10n.accountsSignOutAll : l10n.signOut,
+      onTap: () => signOutOfAllAccounts(context, ref),
+      showChevron: false,
+      destructive: true,
     );
   }
 
   Widget _buildAccountOption(
     BuildContext context, {
-    required IconData icon,
+    Key? key,
+    IconData? icon,
+    String? iconAsset,
     required String title,
-    required String subtitle,
+    String? subtitle,
     required VoidCallback onTap,
     bool showChevron = true,
+    bool destructive = false,
   }) {
+    assert(
+      (icon == null) != (iconAsset == null),
+      'Provide exactly one of icon or iconAsset.',
+    );
     final theme = context.conduitTheme;
     final color = theme.buttonPrimary;
-    return ProfileSettingTile(
+    return UtilityRow(
+      key: key,
       onTap: onTap,
-      leading: _buildIconBadge(context, icon, color: color),
+      leading: iconAsset != null
+          ? _buildAssetIconBadge(context, iconAsset, color: color)
+          : _buildIconBadge(context, icon!, color: color),
       title: title,
       subtitle: subtitle,
-      trailing: showChevron
-          ? Icon(
-              UiUtils.platformIcon(
-                ios: CupertinoIcons.chevron_right,
-                android: Icons.chevron_right,
-              ),
-              color: theme.iconSecondary,
-              size: IconSize.small,
-            )
-          : null,
+      showChevron: showChevron,
+      destructive: destructive,
     );
   }
 
+  // Plain monochrome glyphs instead of tinted
+  // badges; the fixed box keeps every row's title on the same leading edge.
   Widget _buildIconBadge(
     BuildContext context,
     IconData icon, {
     required Color color,
   }) {
-    return Container(
-      width: 40,
-      height: 40,
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(AppBorderRadius.small),
-        border: Border.all(
-          color: color.withValues(alpha: 0.2),
-          width: BorderWidth.thin,
+    return SizedBox(
+      width: IconSize.xl,
+      height: IconSize.xl,
+      child: Icon(icon, color: color, size: IconSize.medium),
+    );
+  }
+
+  Widget _buildAssetIconBadge(
+    BuildContext context,
+    String asset, {
+    required Color color,
+  }) {
+    return SizedBox(
+      width: IconSize.xl,
+      height: IconSize.xl,
+      child: Center(
+        child: Image.asset(
+          asset,
+          key: const Key('hermes-settings-logo'),
+          width: IconSize.medium + 2,
+          height: IconSize.medium + 2,
+          color: color,
+          colorBlendMode: BlendMode.srcIn,
+          filterQuality: FilterQuality.high,
         ),
       ),
-      alignment: Alignment.center,
-      child: Icon(icon, color: color, size: IconSize.medium),
     );
   }
 
@@ -345,22 +664,7 @@ class ProfilePage extends ConsumerWidget {
         android: Icons.info_outline,
       ),
       title: AppLocalizations.of(context)!.aboutApp,
-      subtitle: AppLocalizations.of(context)!.aboutAppSubtitle,
       onTap: () => context.pushNamed(RouteNames.about),
     );
-  }
-
-  void _signOut(BuildContext context, WidgetRef ref) async {
-    final confirm = await ThemedDialogs.confirm(
-      context,
-      title: AppLocalizations.of(context)!.signOut,
-      message: AppLocalizations.of(context)!.endYourSession,
-      confirmText: AppLocalizations.of(context)!.signOut,
-      isDestructive: true,
-    );
-
-    if (confirm) {
-      await ref.read(authActionsProvider).logout();
-    }
   }
 }

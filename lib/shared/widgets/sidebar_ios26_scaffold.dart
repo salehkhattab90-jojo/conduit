@@ -1,43 +1,162 @@
-import 'package:adaptive_platform_ui/adaptive_platform_ui.dart';
-// ignore: implementation_imports
-import 'package:adaptive_platform_ui/src/widgets/ios26/ios26_scaffold.dart';
-import 'package:flutter/widgets.dart';
+import 'package:conduit/shared/widgets/platform_ui/platform_ui.dart';
+import 'package:conduit/shared/theme/theme_extensions.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
 
-/// iOS 26 sidebar scaffold workaround for `adaptive_platform_ui`.
-///
-/// `AdaptiveScaffold` currently turns a single tab body into one child per
-/// bottom-tab item before handing off to `IOS26Scaffold`. The sidebar already
-/// owns tab body switching through `_SidebarTabStack`, so that extra
-/// `IndexedStack` layer can switch between duplicate sidebar body trees and
-/// reset tab-local state.
-///
-/// Until the package exposes a public single-body tab scaffold path, the
-/// sidebar uses the lower-level iOS 26 scaffold directly while keeping the same
-/// native toolbar and bottom-tab configuration.
+import 'adaptive_toolbar_components.dart';
+import 'chrome_gradient_fade.dart';
+
+const double _nativeTabBarPlaceholderHeight = 50;
+
+/// iOS 26 sidebar shell backed by cupertino_native_better chrome.
 class SidebarIos26Scaffold extends StatelessWidget {
   const SidebarIos26Scaffold({
     super.key,
-    required this.bottomNavigationBar,
+    this.bottomNavigationBar,
     required this.body,
     this.leading,
     this.actions,
-    this.minimizeBehavior = TabBarMinimizeBehavior.never,
+    this.showNativeView = true,
   });
 
-  final AdaptiveBottomNavigationBar bottomNavigationBar;
+  final AdaptiveBottomNavigationBar? bottomNavigationBar;
   final Widget body;
   final Widget? leading;
   final List<AdaptiveAppBarAction>? actions;
-  final TabBarMinimizeBehavior minimizeBehavior;
+  final bool showNativeView;
 
   @override
   Widget build(BuildContext context) {
-    return IOS26Scaffold(
-      bottomNavigationBar: bottomNavigationBar,
-      leading: leading,
-      actions: actions,
-      minimizeBehavior: minimizeBehavior,
-      children: [body],
+    final route = ModalRoute.of(context);
+    final routeAllowsNativeView =
+        (route?.isCurrent ?? true) ||
+        route?.animation?.status == AnimationStatus.reverse;
+    final composeNativeViews = showNativeView && routeAllowsNativeView;
+    final navigation = bottomNavigationBar;
+    final safePadding = MediaQuery.paddingOf(context);
+    final renderedBottomNavigation = switch (navigation) {
+      final navigation?
+          when navigation.items.length >= 2 && navigation.items.length <= 5 =>
+        navigation.renderer == AdaptiveBottomNavigationRenderer.fullWidth
+            ? buildAdaptiveCupertinoTabBar(navigation)
+            : composeNativeViews
+            ? buildAdaptiveNativeTabBar(
+                navigation,
+                tint:
+                    navigation.selectedItemColor ??
+                    CupertinoTheme.of(context).primaryColor,
+              )
+            : SizedBox(
+                height: safePadding.bottom + _nativeTabBarPlaceholderHeight,
+              ),
+      _ => null,
+    };
+    final hasBottomNavigation = renderedBottomNavigation != null;
+    final textColor = context.conduitTheme.textPrimary;
+    final hasNavigationBar = leading != null || actions?.isNotEmpty == true;
+    final toolbarActions = actions ?? const <AdaptiveAppBarAction>[];
+    final toolbarActionsWidth = toolbarActions.isEmpty
+        ? 0.0
+        : (toolbarActions.length * TouchTarget.minimum) +
+              ((toolbarActions.length - 1) * Spacing.sm);
+
+    return CupertinoPageScaffold(
+      resizeToAvoidBottomInset: !hasBottomNavigation,
+      navigationBar: hasNavigationBar
+          ? ConduitAdaptiveCupertinoNavigationBar(
+              textScaler: MediaQuery.textScalerOf(context),
+              leading: leading ?? const SizedBox.shrink(),
+              trailing: toolbarActions.isEmpty
+                  ? null
+                  : SizedBox(
+                      width: toolbarActionsWidth,
+                      height: TouchTarget.minimum,
+                      child: composeNativeViews
+                          ? _NativeToolbarActions(actions: toolbarActions)
+                          : null,
+                    ),
+            )
+          : null,
+      child: Stack(
+        children: [
+          DefaultTextStyle(
+            style: TextStyle(color: textColor, fontSize: 17),
+            child: body,
+          ),
+          if (hasNavigationBar)
+            Positioned(
+              left: 0,
+              right: 0,
+              top: 0,
+              child: ConduitChromeGradientFade.top(
+                contentHeight:
+                    safePadding.top + conduitAdaptiveToolbarHeightOf(context),
+              ),
+            ),
+          if (renderedBottomNavigation != null)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: renderedBottomNavigation,
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _NativeToolbarActions extends StatelessWidget {
+  const _NativeToolbarActions({required this.actions});
+
+  final List<AdaptiveAppBarAction> actions;
+
+  @override
+  Widget build(BuildContext context) {
+    // The native group reads brightness only when it is created, so rebuild
+    // it when the appearance or action tints change; otherwise a light/dark
+    // switch leaves a light glass pill behind dark-mode icons.
+    return CNGlassButtonGroup.fromWidgets(
+      key: ValueKey<Object>((
+        CupertinoTheme.brightnessOf(context),
+        Object.hashAll(actions.map((action) => action.tintColor)),
+      )),
+      spacing: 8,
+      spacingForGlass: 36,
+      buttonWidgets: [
+        for (final action in actions)
+          if (action.title case final title?)
+            CNButton(
+              label: title,
+              onPressed: action.onPressed,
+              tint: action.tintColor,
+              config: CNButtonConfig(
+                minHeight: TouchTarget.minimum,
+                shrinkWrap: true,
+                style: action.prominent
+                    ? CNButtonStyle.prominentGlass
+                    : CNButtonStyle.glass,
+              ),
+            )
+          else
+            CNButton.icon(
+              icon: action.iosSymbol == null
+                  ? null
+                  : CNSymbol(
+                      action.iosSymbol!,
+                      size: kConduitNativeSingleActionSymbolExtent,
+                    ),
+              customIcon: action.iosSymbol == null ? action.icon : null,
+              onPressed: action.onPressed,
+              tint: action.tintColor,
+              config: CNButtonConfig(
+                minHeight: TouchTarget.minimum,
+                width: TouchTarget.minimum,
+                style: action.prominent
+                    ? CNButtonStyle.prominentGlass
+                    : CNButtonStyle.glass,
+              ),
+            ),
+      ],
     );
   }
 }

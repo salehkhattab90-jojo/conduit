@@ -1,13 +1,15 @@
 import 'dart:async';
 import 'dart:collection';
 
-import 'package:conduit/core/services/worker_manager.dart';
+import 'package:conduit_core/services/worker_manager.dart';
 import 'package:conduit/shared/widgets/markdown/compiled_markdown_document.dart';
 import 'package:conduit/shared/widgets/markdown/markdown_compile_service.dart';
 import 'package:conduit/shared/widgets/markdown/markdown_loading_skeleton.dart';
+import 'package:conduit_core/utils/streaming_markdown_preparation.dart';
 import 'package:conduit/shared/widgets/markdown/renderer/conduit_markdown_widget.dart';
 import 'package:conduit/shared/widgets/markdown/streaming_markdown_widget.dart';
-import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -19,6 +21,7 @@ class _ImmediateMarkdownCompileService extends MarkdownCompileService {
     String preparedContent, {
     bool allowSynchronous = false,
     bool widgetTest = false,
+    bool cacheResult = true,
   }) async {
     return compilePreparedSynchronously(preparedContent);
   }
@@ -30,8 +33,33 @@ class _ImmediateMarkdownCompileService extends MarkdownCompileService {
   }) => true;
 }
 
+mixin _PatchPreparing on MarkdownCompileService {
+  final StreamingMarkdownPreparationEngine _preparationEngine =
+      StreamingMarkdownPreparationEngine();
+
+  @override
+  Future<MarkdownPreparationPatch> prepareStreamingContent(
+    MarkdownPreparationRequest request, {
+    bool allowSynchronous = false,
+    bool widgetTest = false,
+  }) {
+    return prepareContent(
+      request.content,
+      streaming: request.streaming,
+      allowSynchronous: allowSynchronous,
+      widgetTest: widgetTest,
+    ).then((_) => _preparationEngine.prepare(request));
+  }
+
+  @override
+  Future<void> releaseStreamingPreparationSession(String sessionId) async {
+    _preparationEngine.release(sessionId);
+  }
+}
+
 class _RecordingPrepareMarkdownCompileService
-    extends _ImmediateMarkdownCompileService {
+    extends _ImmediateMarkdownCompileService
+    with _PatchPreparing {
   final List<String> preparedContents = <String>[];
 
   @override
@@ -47,8 +75,27 @@ class _RecordingPrepareMarkdownCompileService
   }
 }
 
+class _SynchronousFuturePrepareMarkdownCompileService
+    extends _ImmediateMarkdownCompileService
+    with _PatchPreparing {
+  @override
+  bool shouldPrepareSynchronously(String content, {bool widgetTest = false}) =>
+      false;
+
+  @override
+  Future<String> prepareContent(
+    String content, {
+    required bool streaming,
+    bool allowSynchronous = false,
+    bool widgetTest = false,
+  }) => SynchronousFuture<String>(
+    prepareMarkdownContent(content, streaming: streaming),
+  );
+}
+
 class _BlockingPrepareMarkdownCompileService
-    extends _ImmediateMarkdownCompileService {
+    extends _ImmediateMarkdownCompileService
+    with _PatchPreparing {
   final List<String> preparedContents = <String>[];
   final Completer<void> _release = Completer<void>();
 
@@ -72,7 +119,8 @@ class _BlockingPrepareMarkdownCompileService
 }
 
 class _SequencedBlockingPrepareMarkdownCompileService
-    extends _ImmediateMarkdownCompileService {
+    extends _ImmediateMarkdownCompileService
+    with _PatchPreparing {
   final List<String> preparedContents = <String>[];
   final Queue<Completer<void>> _releases = Queue<Completer<void>>();
 
@@ -122,6 +170,7 @@ class _SequencedBlockingMarkdownCompileService extends MarkdownCompileService {
     String preparedContent, {
     bool allowSynchronous = false,
     bool widgetTest = false,
+    bool cacheResult = true,
   }) async {
     final release = Completer<void>();
     _releases.add(release);
@@ -188,30 +237,118 @@ Widget _buildStreamingHarness({
 }
 
 void main() {
-  setUp(debugResetParsedMarkdownCache);
-  tearDown(debugResetParsedMarkdownCache);
+  setUp(debugResetCompiledMarkdownCache);
+  tearDown(debugResetCompiledMarkdownCache);
+
+  test(
+    'streaming diagnostics are sampled instead of running every revision',
+    () {
+      expect(debugShouldSampleStreamingMarkdownDiagnostics(1), isTrue);
+      expect(debugShouldSampleStreamingMarkdownDiagnostics(2), isFalse);
+      expect(debugShouldSampleStreamingMarkdownDiagnostics(15), isFalse);
+      expect(debugShouldSampleStreamingMarkdownDiagnostics(16), isTrue);
+      expect(
+        debugShouldSampleStreamingMarkdownDiagnostics(
+          16,
+          diagnosticsEnabled: false,
+        ),
+        isFalse,
+      );
+    },
+  );
+
+  testWidgets('deferred streaming preparation lands in its scheduled frame', (
+    tester,
+  ) async {
+    final compileService = _SynchronousFuturePrepareMarkdownCompileService();
+    addTearDown(compileService.dispose);
+
+    await tester.pumpWidget(
+      _buildStreamingHarness(
+        content: 'Initial response',
+        compileService: compileService,
+        debugRenderInterval: Duration.zero,
+      ),
+    );
+    expect(find.text('Initial response', findRichText: true), findsOneWidget);
+
+    await tester.pumpWidget(
+      _buildStreamingHarness(
+        content: 'Updated response in the scheduled frame',
+        compileService: compileService,
+        debugRenderInterval: Duration.zero,
+      ),
+    );
+    expect(
+      find.text('Updated response in the scheduled frame', findRichText: true),
+      findsNothing,
+    );
+
+    // Preparation starts in the transient callback and the synchronous
+    // result is built in this frame. A post-frame callback needs a second
+    // pump to make the result visible.
+    await tester.pump();
+    expect(
+      find.text('Updated response in the scheduled frame', findRichText: true),
+      findsOneWidget,
+    );
+  });
 
   testWidgets('parsed markdown cache keeps recently reused entries', (
     tester,
   ) async {
-    for (var index = 0; index < 32; index += 1) {
-      await tester.pumpWidget(_buildMarkdownHarness('Message $index'));
+    // Filling the cache needs no widget; the widget only has to read and
+    // write through the same cache.
+    final capacity = debugCompiledMarkdownCacheCapacity();
+    for (var index = 0; index < capacity; index += 1) {
+      compilePreparedMarkdownSync('Message $index');
     }
 
-    expect(debugParsedMarkdownCacheSize(), 32);
+    expect(debugCompiledMarkdownCacheSize(), capacity);
 
     await tester.pumpWidget(_buildMarkdownHarness('Message 0'));
-    expect(debugParsedMarkdownCacheKeys().last, 'Message 0');
+    expect(debugCompiledMarkdownCacheKeys().last, 'Message 0');
 
-    await tester.pumpWidget(_buildMarkdownHarness('Message 32'));
+    await tester.pumpWidget(_buildMarkdownHarness('Message $capacity'));
 
-    expect(debugParsedMarkdownCacheSize(), 32);
-    expect(debugParsedMarkdownCacheKeys(), isNot(contains('Message 1')));
+    expect(debugCompiledMarkdownCacheSize(), capacity);
+    expect(debugCompiledMarkdownCacheKeys(), isNot(contains('Message 1')));
     expect(
-      debugParsedMarkdownCacheKeys(),
-      containsAll(<String>['Message 0', 'Message 32']),
+      debugCompiledMarkdownCacheKeys(),
+      containsAll(<String>['Message 0', 'Message $capacity']),
     );
   });
+
+  testWidgets(
+    'conduit markdown switches from a direct document back to prior data',
+    (tester) async {
+      Widget build({String? data, CompiledMarkdownDocument? document}) {
+        return ProviderScope(
+          child: MaterialApp(
+            home: Scaffold(
+              body: ConduitMarkdownWidget(
+                data: data,
+                compiledDocument: document,
+              ),
+            ),
+          ),
+        );
+      }
+
+      await tester.pumpWidget(build(data: 'Data A marker'));
+      expect(find.textContaining('Data A marker'), findsOneWidget);
+
+      await tester.pumpWidget(
+        build(document: compilePreparedMarkdownSync('Direct B marker')),
+      );
+      expect(find.textContaining('Direct B marker'), findsOneWidget);
+      expect(find.textContaining('Data A marker'), findsNothing);
+
+      await tester.pumpWidget(build(data: 'Data A marker'));
+      expect(find.textContaining('Data A marker'), findsOneWidget);
+      expect(find.textContaining('Direct B marker'), findsNothing);
+    },
+  );
 
   testWidgets(
     'conduit markdown shows a skeleton while async compile is pending',

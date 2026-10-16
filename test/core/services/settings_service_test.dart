@@ -1,7 +1,14 @@
 import 'package:checks/checks.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-import 'package:conduit/core/services/settings_service.dart';
+import 'package:conduit_core/features/chat/server_speech/direct_voice_provider_settings.dart';
+import 'package:conduit_core/features/web_search/web_search.dart';
+import 'package:conduit_core/persistence/persistence_keys.dart';
+import 'package:conduit_core/persistence/preferences_store.dart';
+import 'package:conduit_core/services/settings_service.dart';
+import 'package:conduit/platform/flutter_key_value_store.dart';
 
 void main() {
   group('AppSettings', () {
@@ -14,10 +21,6 @@ void main() {
 
       test('animationSpeed defaults to 1.0', () {
         check(settings.animationSpeed).equals(1.0);
-      });
-
-      test('hapticFeedback defaults to true', () {
-        check(settings.hapticFeedback).equals(true);
       });
 
       test('disableHapticsWhileStreaming defaults to false', () {
@@ -34,6 +37,10 @@ void main() {
 
       test('defaultModel defaults to null', () {
         check(settings.defaultModel).isNull();
+      });
+
+      test('OpenRouter image generation model defaults to null', () {
+        check(settings.openRouterImageGenerationModel).isNull();
       });
 
       test('voiceLocaleId defaults to null', () {
@@ -64,8 +71,8 @@ void main() {
         check(settings.sendOnEnter).equals(false);
       });
 
-      test('sttPreference defaults to deviceOnly', () {
-        check(settings.sttPreference).equals(SttPreference.deviceOnly);
+      test('sttPreference defaults to serverOnly', () {
+        check(settings.sttPreference).equals(SttPreference.serverOnly);
       });
 
       test('sttLanguageCode defaults to null', () {
@@ -74,6 +81,10 @@ void main() {
 
       test('ttsVoice defaults to null', () {
         check(settings.ttsVoice).isNull();
+      });
+
+      test('ttsVoiceName defaults to null', () {
+        check(settings.ttsVoiceName).isNull();
       });
 
       test('ttsSpeechRate defaults to 0.5', () {
@@ -88,8 +99,8 @@ void main() {
         check(settings.ttsVolume).equals(1.0);
       });
 
-      test('ttsEngine defaults to device', () {
-        check(settings.ttsEngine).equals(TtsEngine.device);
+      test('ttsEngine defaults to server', () {
+        check(settings.ttsEngine).equals(TtsEngine.server);
       });
 
       test('ttsServerVoiceId defaults to null', () {
@@ -101,9 +112,8 @@ void main() {
       });
 
       test('androidAssistantTrigger defaults to overlay', () {
-        check(
-          settings.androidAssistantTrigger,
-        ).equals(AndroidAssistantTrigger.overlay);
+        check(settings.androidAssistantTrigger)
+            .equals(AndroidAssistantTrigger.overlay);
       });
 
       test('voiceSilenceDuration defaults to 2000', () {
@@ -127,7 +137,6 @@ void main() {
         final modified = original.copyWith(
           reduceMotion: true,
           animationSpeed: 1.5,
-          hapticFeedback: false,
           disableHapticsWhileStreaming: true,
           highContrast: true,
           darkMode: false,
@@ -149,7 +158,6 @@ void main() {
 
         check(modified.reduceMotion).equals(true);
         check(modified.animationSpeed).equals(1.5);
-        check(modified.hapticFeedback).equals(false);
         check(modified.disableHapticsWhileStreaming).equals(true);
         check(modified.highContrast).equals(true);
         check(modified.darkMode).equals(false);
@@ -164,9 +172,8 @@ void main() {
         check(modified.ttsPitch).equals(1.2);
         check(modified.ttsVolume).equals(0.9);
         check(modified.ttsEngine).equals(TtsEngine.server);
-        check(
-          modified.androidAssistantTrigger,
-        ).equals(AndroidAssistantTrigger.newChat);
+        check(modified.androidAssistantTrigger)
+            .equals(AndroidAssistantTrigger.newChat);
         check(modified.voiceSilenceDuration).equals(1500);
         check(modified.temporaryChatByDefault).equals(true);
       });
@@ -175,17 +182,22 @@ void main() {
         const original = AppSettings();
         final modified = original.copyWith(
           defaultModel: 'gpt-4',
+          openRouterImageGenerationModel: 'openai/gpt-5-image-mini',
           voiceLocaleId: 'en_US',
           sttLanguageCode: 'pl',
           ttsVoice: 'voice1',
+          ttsVoiceName: 'Voice One',
           ttsServerVoiceId: 'server-voice-1',
           ttsServerVoiceName: 'Server Voice',
         );
 
         check(modified.defaultModel).equals('gpt-4');
+        check(modified.openRouterImageGenerationModel)
+            .equals('openai/gpt-5-image-mini');
         check(modified.voiceLocaleId).equals('en_US');
         check(modified.sttLanguageCode).equals('pl');
         check(modified.ttsVoice).equals('voice1');
+        check(modified.ttsVoiceName).equals('Voice One');
         check(modified.ttsServerVoiceId).equals('server-voice-1');
         check(modified.ttsServerVoiceName).equals('Server Voice');
       });
@@ -193,26 +205,32 @@ void main() {
       test('can set nullable fields back to null', () {
         final original = const AppSettings().copyWith(
           defaultModel: 'gpt-4',
+          openRouterImageGenerationModel: 'openai/gpt-5-image-mini',
           voiceLocaleId: 'en_US',
           sttLanguageCode: 'pl',
           ttsVoice: 'voice1',
+          ttsVoiceName: 'Voice One',
           ttsServerVoiceId: 'server-voice-1',
           ttsServerVoiceName: 'Server Voice',
         );
 
         final cleared = original.copyWith(
           defaultModel: null,
+          openRouterImageGenerationModel: null,
           voiceLocaleId: null,
           sttLanguageCode: null,
           ttsVoice: null,
+          ttsVoiceName: null,
           ttsServerVoiceId: null,
           ttsServerVoiceName: null,
         );
 
         check(cleared.defaultModel).isNull();
+        check(cleared.openRouterImageGenerationModel).isNull();
         check(cleared.voiceLocaleId).isNull();
         check(cleared.sttLanguageCode).isNull();
         check(cleared.ttsVoice).isNull();
+        check(cleared.ttsVoiceName).isNull();
         check(cleared.ttsServerVoiceId).isNull();
         check(cleared.ttsServerVoiceName).isNull();
       });
@@ -231,28 +249,9 @@ void main() {
         check(copy.sttLanguageCode).equals('pl');
         check(copy.darkMode).equals(false);
       });
-
-      test('does not mutate the original', () {
-        const original = AppSettings();
-        original.copyWith(reduceMotion: true, animationSpeed: 2.0);
-
-        check(original.reduceMotion).equals(false);
-        check(original.animationSpeed).equals(1.0);
-      });
     });
 
     group('equality', () {
-      test('two default instances are equal', () {
-        const a = AppSettings();
-        const b = AppSettings();
-        check(a).equals(b);
-      });
-
-      test('identical instance is equal', () {
-        const a = AppSettings();
-        check(a == a).equals(true);
-      });
-
       test('instances with same non-default values are equal', () {
         final a = const AppSettings().copyWith(
           darkMode: false,
@@ -281,6 +280,12 @@ void main() {
 
       test('different sttLanguageCode yields inequality', () {
         final a = const AppSettings().copyWith(sttLanguageCode: 'pl');
+        const b = AppSettings();
+        check(a).not((it) => it.equals(b));
+      });
+
+      test('different ttsVoiceName yields inequality', () {
+        final a = const AppSettings().copyWith(ttsVoiceName: 'Voice One');
         const b = AppSettings();
         check(a).not((it) => it.equals(b));
       });
@@ -316,12 +321,6 @@ void main() {
     });
 
     group('hashCode', () {
-      test('equal objects have the same hashCode', () {
-        const a = AppSettings();
-        const b = AppSettings();
-        check(a.hashCode).equals(b.hashCode);
-      });
-
       test('copies with same values have same hashCode', () {
         final a = const AppSettings().copyWith(
           darkMode: false,
@@ -340,6 +339,220 @@ void main() {
         check(a).equals(b);
         check(a.hashCode).equals(b.hashCode);
       });
+    });
+  });
+
+  group('SettingsService.normalizeVoiceLocaleId', () {
+    test('uses null for native automatic language detection', () {
+      check(SettingsService.normalizeVoiceLocaleId(null)).isNull();
+      check(SettingsService.normalizeVoiceLocaleId('')).isNull();
+      check(SettingsService.normalizeVoiceLocaleId('auto')).isNull();
+    });
+
+    test('uses a distinct sentinel for the Android system language', () {
+      check(SettingsService.normalizeVoiceLocaleId('system'))
+          .equals(SettingsService.voiceLocaleSystemDefault);
+      check(SettingsService.normalizeVoiceLocaleId('default'))
+          .equals(SettingsService.voiceLocaleSystemDefault);
+      check(
+        SettingsService.normalizeVoiceLocaleId(
+          SettingsService.voiceLocaleSystemDefault,
+        ),
+      ).equals(SettingsService.voiceLocaleSystemDefault);
+    });
+
+    test('preserves and canonicalizes full locale tags', () {
+      check(SettingsService.normalizeVoiceLocaleId('PL_pl')).equals('pl-PL');
+      check(SettingsService.normalizeVoiceLocaleId('zh_hant_tw'))
+          .equals('zh-Hant-TW');
+      check(SettingsService.normalizeVoiceLocaleId('es-419')).equals('es-419');
+    });
+
+    test('rejects invalid custom locale tags', () {
+      check(SettingsService.normalizeVoiceLocaleId('p')).isNull();
+      check(SettingsService.normalizeVoiceLocaleId('pl--PL')).isNull();
+      check(SettingsService.normalizeVoiceLocaleId('Polish language')).isNull();
+    });
+
+    test('is independent from the server STT language normalization', () {
+      check(SettingsService.normalizeVoiceLocaleId('pl-PL')).equals('pl-PL');
+      check(SettingsService.normalizeSttLanguageCode('pl-PL')).equals('pl');
+    });
+  });
+
+  group('SettingsService voice locale persistence', () {
+    setUp(() async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      PreferencesStore.debugOverride(await FlutterKeyValueStore.load());
+    });
+
+    tearDown(PreferencesStore.debugReset);
+
+    test(
+      'round-trips explicit and system selections and clears auto',
+      () async {
+        await SettingsService.setVoiceLocaleId('pl_PL');
+        check(await SettingsService.getVoiceLocaleId()).equals('pl-PL');
+        check(PreferencesStore.getString(PreferenceKeys.voiceLocaleId))
+            .equals('pl-PL');
+
+        await SettingsService.setVoiceLocaleId('system');
+        check(await SettingsService.getVoiceLocaleId())
+            .equals(SettingsService.voiceLocaleSystemDefault);
+
+        await SettingsService.setVoiceLocaleId(null);
+        check(await SettingsService.getVoiceLocaleId()).isNull();
+        check(PreferencesStore.containsKey(PreferenceKeys.voiceLocaleId))
+            .isFalse();
+      },
+    );
+  });
+
+  group('SettingsService OpenRouter image model persistence', () {
+    setUp(() async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      PreferencesStore.debugOverride(await FlutterKeyValueStore.load());
+    });
+
+    tearDown(PreferencesStore.debugReset);
+
+    test('trims, round-trips, and clears the model id', () async {
+      await SettingsService.setOpenRouterImageGenerationModel(
+        '  openai/gpt-5-image-mini  ',
+      );
+      check(
+        (await SettingsService.loadSettings()).openRouterImageGenerationModel,
+      ).equals('openai/gpt-5-image-mini');
+
+      await SettingsService.setOpenRouterImageGenerationModel('   ');
+      check(
+        PreferencesStore.containsKey(
+          PreferenceKeys.openRouterImageGenerationModel,
+        ),
+      ).isFalse();
+    });
+  });
+
+  group('AppSettingsNotifier OpenRouter image model startup writes', () {
+    setUp(() {
+      PreferencesStore.debugReset();
+      SharedPreferences.setMockInitialValues(<String, Object>{
+        PreferenceKeys.openRouterImageGenerationModel: 'openai/gpt-5-image',
+      });
+    });
+
+    tearDown(PreferencesStore.debugReset);
+
+    test('waits for hydration before applying a new model id', () async {
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+
+      check(container.read(appSettingsProvider).openRouterImageGenerationModel)
+          .isNull();
+
+      await container
+          .read(appSettingsProvider.notifier)
+          .setOpenRouterImageGenerationModel('openai/gpt-5-image-mini');
+
+      check(container.read(appSettingsProvider).openRouterImageGenerationModel)
+          .equals('openai/gpt-5-image-mini');
+      check(
+        PreferencesStore.getString(
+          PreferenceKeys.openRouterImageGenerationModel,
+        ),
+      ).equals('openai/gpt-5-image-mini');
+    });
+  });
+
+  group('AppSettingsNotifier web search preferences', () {
+    setUp(() {
+      PreferencesStore.debugReset();
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+    });
+
+    tearDown(PreferencesStore.debugReset);
+
+    test('persist across reloads, and Auto region clears the code', () async {
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      final notifier = container.read(appSettingsProvider.notifier);
+
+      await notifier.setWebSearchEngine(WebSearchEngineChoice.brave);
+      await notifier.setWebSearchSafeSearch(SafeSearch.strict);
+      await notifier.setWebSearchRegion('de-de');
+
+      final reloaded = await SettingsService.loadSettings();
+      check(reloaded.webSearchEngine).equals(WebSearchEngineChoice.brave);
+      check(reloaded.webSearchSafeSearch).equals(SafeSearch.strict);
+      check(reloaded.webSearchRegion).equals('de-de');
+
+      await notifier.setWebSearchRegion(kWebSearchRegionAuto);
+      check(PreferencesStore.containsKey(PreferenceKeys.webSearchRegion))
+          .isFalse();
+      check((await SettingsService.loadSettings()).webSearchRegion).isNull();
+    });
+  });
+
+  group('AppSettingsNotifier advanced features preference', () {
+    setUp(() {
+      PreferencesStore.debugReset();
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+    });
+
+    tearDown(PreferencesStore.debugReset);
+
+    test('starts off, survives a restart even when enabled before hydration, '
+        'and reset turns it off', () async {
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      check(container.read(appSettingsProvider).advancedFeaturesEnabled)
+          .isFalse();
+
+      await container
+          .read(appSettingsProvider.notifier)
+          .setAdvancedFeaturesEnabled(true);
+      check(container.read(appSettingsProvider).advancedFeaturesEnabled)
+          .isTrue();
+
+      final restarted = ProviderContainer();
+      addTearDown(restarted.dispose);
+      check(restarted.read(appSettingsProvider).advancedFeaturesEnabled)
+          .isTrue();
+
+      await restarted.read(appSettingsProvider.notifier).resetToDefaults();
+      final afterReset = ProviderContainer();
+      addTearDown(afterReset.dispose);
+      check(afterReset.read(appSettingsProvider).advancedFeaturesEnabled)
+          .isFalse();
+    });
+  });
+
+  group('AppSettingsNotifier Voice provider', () {
+    setUp(() {
+      PreferencesStore.debugReset();
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+    });
+
+    tearDown(PreferencesStore.debugReset);
+
+    test('survives a restart, and reset clears it for good', () async {
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      await container
+          .read(appSettingsProvider.notifier)
+          .setDirectVoiceProvider(
+            const DirectVoiceProviderSettings(profileId: 'voice'),
+          );
+
+      final restarted = ProviderContainer();
+      addTearDown(restarted.dispose);
+      check(restarted.read(appSettingsProvider).directVoiceProvider?.profileId)
+          .equals('voice');
+
+      await restarted.read(appSettingsProvider.notifier).resetToDefaults();
+      final afterReset = ProviderContainer();
+      addTearDown(afterReset.dispose);
+      check(afterReset.read(appSettingsProvider).directVoiceProvider).isNull();
     });
   });
 
@@ -372,33 +585,6 @@ void main() {
     });
   });
 
-  group('Enum values', () {
-    test('SttPreference has expected values', () {
-      check(SttPreference.values).length.equals(2);
-      check(SttPreference.values).contains(SttPreference.deviceOnly);
-      check(SttPreference.values).contains(SttPreference.serverOnly);
-    });
-
-    test('TtsEngine has expected values', () {
-      check(TtsEngine.values).length.equals(2);
-      check(TtsEngine.values).contains(TtsEngine.device);
-      check(TtsEngine.values).contains(TtsEngine.server);
-    });
-
-    test('AndroidAssistantTrigger has expected values', () {
-      check(AndroidAssistantTrigger.values).length.equals(3);
-      check(
-        AndroidAssistantTrigger.values,
-      ).contains(AndroidAssistantTrigger.overlay);
-      check(
-        AndroidAssistantTrigger.values,
-      ).contains(AndroidAssistantTrigger.newChat);
-      check(
-        AndroidAssistantTrigger.values,
-      ).contains(AndroidAssistantTrigger.voiceCall);
-    });
-  });
-
   group('Pinned models', () {
     test(
       'sanitizes blanks and duplicates while preserving first-seen order',
@@ -427,9 +613,8 @@ void main() {
     });
 
     test('voiceCall storageValue is "voice_call"', () {
-      check(
-        AndroidAssistantTrigger.voiceCall.storageValue,
-      ).equals('voice_call');
+      check(AndroidAssistantTrigger.voiceCall.storageValue)
+          .equals('voice_call');
     });
   });
 }

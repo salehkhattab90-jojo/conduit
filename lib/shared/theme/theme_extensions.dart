@@ -1,9 +1,32 @@
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
+
 import 'tweakcn_themes.dart';
 import 'color_tokens.dart';
+
+/// Orders a palette's page and card colors for grouped settings surfaces: the darker
+/// (tinted) color becomes the page and the lighter one the cards.
+///
+/// Palettes disagree on which token is tinted, so an unconditional swap
+/// would invert palettes that already put white cards on a tinted page.
+/// Some palettes (T3 Chat light, Claude) give the page and card the same
+/// color; the popover color then supplies the cards so grouped sections stay
+/// visible.
+(Color, Color) resolveGroupedSheetColors({
+  required Color page,
+  required Color card,
+  Color? popover,
+}) {
+  final (darker, lighter) = page.computeLuminance() <= card.computeLuminance()
+      ? (page, card)
+      : (card, page);
+  if (darker.toARGB32() != lighter.toARGB32() || popover == null) {
+    return (darker, lighter);
+  }
+  return resolveGroupedSheetColors(page: darker, card: popover);
+}
 
 /// Extended theme data for consistent styling across the app
 @immutable
@@ -59,9 +82,27 @@ class ConduitThemeExtension extends ThemeExtension<ConduitThemeExtension> {
       Color.lerp(surfaces.border, surfaces.ring, isDark ? 0.4 : 0.2)!;
   Color get inputBorderFocused => surfaces.ring;
   Color get inputText => tokens.neutralOnSurface;
-  Color get inputPlaceholder =>
-      isDark ? tokens.neutralTone60 : tokens.neutralTone60;
+  Color get inputPlaceholder => textSecondary.withValues(alpha: 0.5);
   Color get inputError => tokens.statusError60;
+
+  /// Page and card colors for grouped settings screens (inset-grouped lists
+  /// on iOS, grouped cards on Android, and the native UIKit sheets). The
+  /// darker palette color becomes the page so cards always read as lifted.
+  (Color, Color) get _groupedColors => resolveGroupedSheetColors(
+    page: surfaces.background,
+    card: surfaces.card,
+    popover: surfaces.popover,
+  );
+  Color get groupedBackground => _groupedColors.$1;
+  Color get groupedSurface => _groupedColors.$2;
+
+  /// Grouped card fill for sections on the plain page (the sidebar, not a
+  /// grouped settings page). Where the grouped card matches the page
+  /// (Conduit light: both white), the grouped page tone keeps its edges.
+  Color get groupedSurfaceOnPage =>
+      groupedSurface.toARGB32() == surfaces.background.toARGB32()
+      ? groupedBackground
+      : groupedSurface;
 
   Color get cardBackground => surfaces.card;
   Color get cardBorder => surfaces.border;
@@ -79,8 +120,7 @@ class ConduitThemeExtension extends ThemeExtension<ConduitThemeExtension> {
   Color get buttonSecondary => tokens.neutralTone20;
   Color get buttonSecondaryText => tokens.neutralOnSurface;
   Color get buttonDisabled => tokens.neutralTone40;
-  Color get buttonDisabledText =>
-      isDark ? tokens.neutralTone80 : tokens.neutralTone60;
+  Color get buttonDisabledText => tokens.neutralTone60;
 
   StatusPalette get statusPalette => StatusPalette(
     success: StatusColors(
@@ -298,6 +338,32 @@ extension ConduitThemeContext on BuildContext {
       shapes: shapes,
     );
   }
+}
+
+/// Platform convention used by adaptive controls and navigation chrome.
+extension ConduitPlatformContext on BuildContext {
+  bool get usesCupertinoChrome => switch (Theme.of(this).platform) {
+    TargetPlatform.iOS || TargetPlatform.macOS => true,
+    _ => false,
+  };
+}
+
+/// Motion preferences shared by interactive and continuously updating UI.
+///
+/// MediaQuery is authoritative when a subtree overrides the platform setting
+/// (including widget tests). The platform value keeps the fallback correct for
+/// contexts mounted without a MediaQuery ancestor.
+extension ConduitMotionContext on BuildContext {
+  bool get reduceMotion {
+    final accessibilityFeatures =
+        WidgetsBinding.instance.platformDispatcher.accessibilityFeatures;
+    return (MediaQuery.maybeDisableAnimationsOf(this) ??
+            accessibilityFeatures.disableAnimations) ||
+        accessibilityFeatures.reduceMotion;
+  }
+
+  Duration motionDuration(Duration duration) =>
+      reduceMotion ? Duration.zero : duration;
 }
 
 extension ConduitColorTokensContext on BuildContext {
@@ -645,6 +711,33 @@ class SidebarThemeExtension extends ThemeExtension<SidebarThemeExtension> {
   final Color accent;
   final Color accentForeground;
   final Color border;
+
+  /// Fill for decorative tiles under sidebar text (note cards, badges,
+  /// empty-state tiles). shadcn's `sidebar-accent` is a hover fill meant for
+  /// `sidebar-accent-foreground`; where it would sink regular sidebar text
+  /// (Catppuccin's saturated sky blue) the tile uses a neutral lift of the
+  /// sidebar instead, matching how those presets render at rest.
+  ///
+  /// Legibility is checked at [tintMaxOpacity], the densest fill a caller
+  /// draws (the folder count badge), under full-opacity sidebar text.
+  Color get tint {
+    bool legible(Color fill) =>
+        contrastRatio(
+          foreground,
+          Color.alphaBlend(fill.withValues(alpha: tintMaxOpacity), background),
+        ) >=
+        4.5;
+    if (legible(accent)) return accent;
+    for (final amount in const [0.12, 0.08, 0.04]) {
+      final lift = Color.lerp(background, foreground, amount)!;
+      if (legible(lift)) return lift;
+    }
+    return background;
+  }
+
+  /// Highest opacity at which callers may draw [tint] under sidebar text.
+  static const double tintMaxOpacity = 0.7;
+
   final Color ring;
 
   @override
@@ -1078,10 +1171,9 @@ class _AppTypographyScale {
     required Color primary,
     required Color secondary,
     required Color tertiary,
-    required String fontFamily,
   }) {
     TextStyle withColor(TextStyle style, Color color) {
-      return style.copyWith(color: color, fontFamily: fontFamily);
+      return style.copyWith(color: color);
     }
 
     return TextTheme(
@@ -1111,11 +1203,13 @@ bool _usesAppleTypographyRamp(TargetPlatform platform) {
   };
 }
 
-/// Typography scale that follows the current platform convention:
-/// Cupertino/HIG on Apple platforms and Material 3 elsewhere.
+/// Product typography shared by every platform.
+///
+/// Content and product UI use one stable hierarchy on every platform.
 class AppTypography {
-  static const String fontFamily = 'Geist Sans';
-  static const String monospaceFontFamily = 'Geist Mono';
+  static const String? fontFamily = null;
+  static String get monospaceFontFamily =>
+      _usesAppleTypographyRamp(defaultTargetPlatform) ? 'Menlo' : 'monospace';
 
   // These semantic spacing values are used in a few custom layouts.
   static const double letterSpacingTight = 0.0;
@@ -1123,16 +1217,14 @@ class AppTypography {
   static const double letterSpacingWide = 0.0;
   static const double letterSpacingExtraWide = 0.0;
 
-  static _AppTypographyScale get _scale =>
+  static _AppTypographyScale get _scale => _appleScale;
+
+  static _AppTypographyScale get _platformMetricScale =>
       _usesAppleTypographyRamp(defaultTargetPlatform)
       ? _appleScale
       : _materialScale;
 
-  static bool get usesAppleRamp =>
-      _usesAppleTypographyRamp(defaultTargetPlatform);
-
-  static TextStyle _primaryFont(TextStyle style) =>
-      style.copyWith(fontFamily: fontFamily);
+  static TextStyle _primaryFont(TextStyle style) => style;
 
   static TextStyle _monospaceFont(TextStyle style) =>
       style.copyWith(fontFamily: monospaceFontFamily);
@@ -1196,6 +1288,9 @@ class AppTypography {
 
   static TextStyle get standard => bodyMediumStyle;
 
+  static TextStyle get inputHintStyle =>
+      bodyMediumStyle.copyWith(fontWeight: FontWeight.w300);
+
   static TextStyle get large => bodyLargeStyle;
 
   static TextStyle get sidebarTitleStyle => bodyLargeStyle;
@@ -1212,17 +1307,22 @@ class AppTypography {
 
   static TextStyle get massive => displaySmallStyle;
 
-  static double get inputVerticalPadding => _scale.inputVerticalPadding;
+  static double get inputVerticalPadding =>
+      _platformMetricScale.inputVerticalPadding;
   static double get compactInputVerticalPadding =>
-      _scale.compactInputVerticalPadding;
+      _platformMetricScale.compactInputVerticalPadding;
   static double get borderlessInputVerticalPadding =>
-      _scale.borderlessInputVerticalPadding;
-  static double get chipHorizontalPadding => _scale.chipHorizontalPadding;
-  static double get chipVerticalPadding => _scale.chipVerticalPadding;
-  static double get badgeHorizontalPadding => _scale.badgeHorizontalPadding;
-  static double get badgeVerticalPadding => _scale.badgeVerticalPadding;
-  static double get badgeLargeSize => _scale.badgeLargeSize;
-  static double get badgeSmallSize => _scale.badgeSmallSize;
+      _platformMetricScale.borderlessInputVerticalPadding;
+  static double get chipHorizontalPadding =>
+      _platformMetricScale.chipHorizontalPadding;
+  static double get chipVerticalPadding =>
+      _platformMetricScale.chipVerticalPadding;
+  static double get badgeHorizontalPadding =>
+      _platformMetricScale.badgeHorizontalPadding;
+  static double get badgeVerticalPadding =>
+      _platformMetricScale.badgeVerticalPadding;
+  static double get badgeLargeSize => _platformMetricScale.badgeLargeSize;
+  static double get badgeSmallSize => _platformMetricScale.badgeSmallSize;
 
   static TextTheme textTheme({
     required Color primary,
@@ -1232,8 +1332,35 @@ class AppTypography {
     primary: primary,
     secondary: secondary,
     tertiary: tertiary,
-    fontFamily: fontFamily,
   );
+
+  /// Material typography reserved for genuine Material navigation chrome.
+  static TextTheme materialChromeTextTheme({
+    required Color primary,
+    required Color secondary,
+    required Color tertiary,
+  }) => _materialScale.textTheme(
+    primary: primary,
+    secondary: secondary,
+    tertiary: tertiary,
+  );
+
+  static TextStyle get materialChromeLabelSmallStyle =>
+      _primaryFont(_materialScale.labelSmallStyle);
+
+  /// Apple typography reserved for genuine Cupertino navigation chrome.
+  static TextTheme cupertinoChromeTextTheme({
+    required Color primary,
+    required Color secondary,
+    required Color tertiary,
+  }) => _appleScale.textTheme(
+    primary: primary,
+    secondary: secondary,
+    tertiary: tertiary,
+  );
+
+  static TextStyle get cupertinoChromeMicroStyle =>
+      _primaryFont(_appleScale.microStyle);
 
   static const _AppTypographyScale _materialScale = _AppTypographyScale(
     displayLargeStyle: TextStyle(
@@ -1331,7 +1458,6 @@ class AppTypography {
       fontWeight: FontWeight.w400,
       letterSpacing: 0,
       height: 1.4,
-      fontFamily: monospaceFontFamily,
     ),
     microStyle: TextStyle(
       fontSize: 11,
@@ -1446,7 +1572,6 @@ class AppTypography {
       fontWeight: FontWeight.w400,
       letterSpacing: 0,
       height: 1.38,
-      fontFamily: monospaceFontFamily,
     ),
     microStyle: TextStyle(
       fontSize: 11,
@@ -1502,7 +1627,7 @@ class IconSize {
   static const double bottomSheet = 24.0;
   static const double dialog = 24.0;
   static const double snackbar = 20.0;
-  static const double tabBar = 24.0;
+  static const double tabBar = 20.0;
   static const double appBar = 24.0;
   static const double listItem = 20.0;
   static const double formField = 20.0;

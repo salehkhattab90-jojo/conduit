@@ -1,16 +1,28 @@
 import 'dart:async';
+import 'dart:io';
 
-import 'package:conduit/core/models/conversation.dart';
-import 'package:conduit/core/models/folder.dart';
-import 'package:conduit/core/models/server_config.dart';
-import 'package:conduit/core/database/database_provider.dart';
-import 'package:conduit/core/providers/app_providers.dart';
+import 'package:checks/checks.dart';
+import 'package:conduit_core/models/conversation.dart';
+import 'package:conduit_core/models/folder.dart';
+import 'package:conduit_core/models/knowledge_base.dart';
+import 'package:conduit_core/models/model.dart';
+import 'package:conduit_core/models/server_config.dart';
+import 'package:conduit_core/database/chat_database_repository.dart';
+import 'package:conduit_core/database/database_provider.dart';
+import 'package:conduit_core/providers/app_providers.dart';
 import 'package:conduit/core/providers/app_startup_providers.dart';
-import 'package:conduit/core/services/api_service.dart';
-import 'package:conduit/core/services/connectivity_service.dart';
-import 'package:conduit/core/services/worker_manager.dart';
-import 'package:conduit/features/chat/providers/chat_providers.dart';
-import 'package:conduit/features/auth/providers/unified_auth_providers.dart';
+import 'package:conduit_core/auth/api_auth_interceptor.dart' show ApiAuthSnapshot;
+import 'package:conduit_core/services/api_service.dart';
+import 'package:conduit_core/services/connectivity_service.dart';
+import 'package:conduit/core/services/media_upload_controller.dart';
+import 'package:conduit_core/services/worker_manager.dart';
+import 'package:conduit_core/features/chat/providers/chat_providers.dart';
+import 'package:conduit_core/features/chat/providers/context_attachments_provider.dart';
+import 'package:conduit_core/features/chat/providers/knowledge_cache_provider.dart';
+import 'package:conduit/features/chat/services/file_attachment_service.dart';
+import 'package:conduit/features/navigation/providers/conversation_selection_provider.dart';
+import 'package:conduit_core/features/auth/providers/unified_auth_providers.dart';
+import 'package:conduit_core/features/direct_connections/providers/direct_connection_providers.dart';
 import 'package:flutter_riverpod/misc.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -20,6 +32,55 @@ Future<void> _flushMicrotasks([int count = 1]) async {
   for (var i = 0; i < count; i++) {
     await Future<void>.delayed(Duration.zero);
   }
+}
+
+Future<void> _waitForFileDeletion(File file) async {
+  final deadline = DateTime.now().add(const Duration(seconds: 1));
+  while (await file.exists() && DateTime.now().isBefore(deadline)) {
+    await Future<void>.delayed(const Duration(milliseconds: 5));
+  }
+}
+
+const _testServer = ServerConfig(
+  id: 'test-server',
+  name: 'Test Server',
+  url: 'https://example.com',
+);
+
+typedef _AuthOwnerSignal = ({String? token, AuthNavigationState navigation});
+
+final _authOwnerSignalProvider =
+    NotifierProvider<_AuthOwnerSignalNotifier, _AuthOwnerSignal>(
+      _AuthOwnerSignalNotifier.new,
+    );
+
+final class _AuthOwnerSignalNotifier extends Notifier<_AuthOwnerSignal> {
+  @override
+  _AuthOwnerSignal build() =>
+      (token: 'test-token', navigation: AuthNavigationState.authenticated);
+
+  void signOut() {
+    state = (token: null, navigation: AuthNavigationState.needsLogin);
+  }
+
+  void signIn({String token = 'replacement-token'}) {
+    state = (token: token, navigation: AuthNavigationState.authenticated);
+  }
+
+  void beginSameSessionRevalidation() {
+    state = (token: state.token, navigation: AuthNavigationState.loading);
+  }
+}
+
+class _OpenDatabaseAccess extends OpenWebUiDatabaseAccessNotifier {
+  @override
+  OpenWebUiDatabaseAccessPhase build() => OpenWebUiDatabaseAccessPhase.open;
+}
+
+class _CertifiedDatabaseServer
+    extends OpenWebUiCertifiedDatabaseServerNotifier {
+  @override
+  String? build() => _testServer.id;
 }
 
 Future<ProviderContainer> _createAuthenticatedWarmupContainer({
@@ -37,6 +98,11 @@ Future<ProviderContainer> _createAuthenticatedWarmupContainer({
           ),
       isOnlineProvider.overrideWithValue(true),
       authTokenProvider3.overrideWithValue('test-token'),
+      openWebUiDatabaseAccessProvider.overrideWith(_OpenDatabaseAccess.new),
+      openWebUiCertifiedDatabaseServerProvider.overrideWith(
+        _CertifiedDatabaseServer.new,
+      ),
+      activeServerProvider.overrideWith((ref) async => _testServer),
       // No active server DB in these warmup-focused tests: keep the sync
       // engine / remap-route consumer inert so building AppStartupFlow does
       // not reach the (unimplemented) hiveBoxesProvider via appDatabase.
@@ -51,6 +117,7 @@ Future<ProviderContainer> _createAuthenticatedWarmupContainer({
     ],
   );
   addTearDown(container.dispose);
+  await container.read(activeServerProvider.future);
   await container.read(conversationsProvider.future);
   return container;
 }
@@ -62,9 +129,9 @@ typedef _WarmupNotifiers = ({
 
 _WarmupNotifiers _readWarmupNotifiers(ProviderContainer container) {
   return (
-    conversations:
-        container.read(conversationsProvider.notifier)
-            as _RecordingWarmupConversations,
+    conversations: container.read(
+      conversationsProvider.notifier,
+    ) as _RecordingWarmupConversations,
     folders: container.read(foldersProvider.notifier) as _TrackingWarmupFolders,
   );
 }
@@ -110,6 +177,363 @@ void main() {
     expect(runCalls, 1);
   });
 
+  test('auth owner loss clears attachments through owned cleanup', () async {
+    final stagingDirectory = Directory(
+      '${Directory.systemTemp.path}/conduit-native-paste',
+    );
+    await stagingDirectory.create();
+    final image = File(
+      '${stagingDirectory.path}/'
+      '123e4567-e89b-12d3-a456-426614174110-paste.png',
+    );
+    await image.writeAsBytes([1]);
+    addTearDown(() async {
+      if (await image.exists()) await image.delete();
+    });
+
+    final container = ProviderContainer(
+      overrides: [
+        authTokenProvider3.overrideWith(
+          (ref) => ref.watch(_authOwnerSignalProvider).token,
+        ),
+        authNavigationStateProvider.overrideWith(
+          (ref) => ref.watch(_authOwnerSignalProvider).navigation,
+        ),
+        isAuthLoadingProvider2.overrideWithValue(false),
+        openWebUiAccountStorageIsolationProvider.overrideWith(
+          _NoopAccountStorageIsolation.new,
+        ),
+        selectedModelProvider.overrideWith(_NullSelectedModel.new),
+        apiServiceProvider.overrideWithValue(null),
+        appDatabaseProvider.overrideWithValue(null),
+      ],
+    );
+    addTearDown(container.dispose);
+    container.read(attachedFilesProvider.notifier).addFiles([
+      LocalAttachment(file: image, displayName: 'paste.png'),
+    ]);
+    container
+        .read(contextAttachmentsProvider.notifier)
+        .addWeb(
+          displayName: 'Departing account context',
+          content: 'private',
+          url: 'https://example.com/private',
+        );
+    container.read(userScopedProviderCleanupProvider);
+
+    container.read(_authOwnerSignalProvider.notifier).signOut();
+    await _flushMicrotasks(2);
+    check(container.read(authTokenProvider3)).isNull();
+    check(container.read(authNavigationStateProvider))
+        .equals(AuthNavigationState.needsLogin);
+
+    for (var attempt = 0; attempt < 50; attempt++) {
+      if (container.read(attachedFilesProvider).isEmpty &&
+          !await image.exists()) {
+        break;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+
+    check(container.read(attachedFilesProvider)).isEmpty();
+    check(container.read(contextAttachmentsProvider)).isEmpty();
+    check(await image.exists()).isFalse();
+    check(
+      container
+          .read(mediaUploadControllerProvider)
+          .debugTrackedPathGenerationCount,
+    ).equals(0);
+  });
+
+  test('auth owner loss clears every knowledge cache scope', () async {
+    KnowledgeCacheManager().clear();
+    addTearDown(() => KnowledgeCacheManager().clear());
+    final api = _KnowledgeCleanupApi();
+    final container = ProviderContainer(
+      overrides: [
+        authTokenProvider3.overrideWith(
+          (ref) => ref.watch(_authOwnerSignalProvider).token,
+        ),
+        authNavigationStateProvider.overrideWith(
+          (ref) => ref.watch(_authOwnerSignalProvider).navigation,
+        ),
+        isAuthLoadingProvider2.overrideWithValue(false),
+        openWebUiAccountStorageIsolationProvider.overrideWith(
+          _NoopAccountStorageIsolation.new,
+        ),
+        selectedModelProvider.overrideWith(_NullSelectedModel.new),
+        apiServiceProvider.overrideWithValue(api),
+        appDatabaseProvider.overrideWithValue(null),
+      ],
+    );
+    addTearDown(container.dispose);
+    container.read(userScopedProviderCleanupProvider);
+    await container.read(knowledgeCacheProvider.notifier).ensureBases();
+    check(KnowledgeCacheManager().stats()['scopes']).equals(1);
+
+    container.read(_authOwnerSignalProvider.notifier).signOut();
+    for (var attempt = 0; attempt < 50; attempt++) {
+      if (KnowledgeCacheManager().stats()['scopes'] == 0) break;
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+
+    check(container.read(knowledgeCacheProvider).bases).isEmpty();
+    check(KnowledgeCacheManager().stats()['scopes']).equals(0);
+  });
+
+  test(
+    'switching accounts mid-selection does not leave the chat loading',
+    () async {
+      final summary = withChatStorageProvenance(
+        _conversation('pending-chat'),
+        ChatStorageKind.directLocal,
+      );
+      final container = ProviderContainer(
+        overrides: [
+          authTokenProvider3.overrideWithValue('test-token'),
+          authNavigationStateProvider.overrideWithValue(
+            AuthNavigationState.authenticated,
+          ),
+          isAuthLoadingProvider2.overrideWithValue(false),
+          settledActiveAccountIdProvider.overrideWith(_SettledAccount.new),
+          openWebUiAccountStorageIsolationProvider.overrideWith(
+            _NoopAccountStorageIsolation.new,
+          ),
+          selectedModelProvider.overrideWith(_NullSelectedModel.new),
+          apiServiceProvider.overrideWithValue(null),
+          appDatabaseProvider.overrideWithValue(null),
+          loadConversationProvider(
+            conversationScopedId(summary),
+          ).overrideWith((ref) => Completer<Conversation>().future),
+        ],
+      );
+      addTearDown(container.dispose);
+      container.read(userScopedProviderCleanupProvider);
+
+      final selection = container
+          .read(conversationSelectionProvider.notifier)
+          .select(summary);
+      await _flushMicrotasks(2);
+      check(container.read(isLoadingConversationProvider)).isTrue();
+
+      (container.read(settledActiveAccountIdProvider.notifier)
+              as _SettledAccount)
+          .settle('b');
+      check(
+        (await selection).disposition,
+      ).equals(ConversationSelectionDisposition.canceled);
+
+      check(container.read(isLoadingConversationProvider)).isFalse();
+    },
+  );
+
+  test(
+    'same-token reauthentication retires only departing attachment owners',
+    () async {
+      final stagingDirectory = Directory(
+        '${Directory.systemTemp.path}/conduit-native-paste',
+      );
+      await stagingDirectory.create();
+      final oldImage = File(
+        '${stagingDirectory.path}/'
+        '123e4567-e89b-12d3-a456-426614174111-old.png',
+      );
+      final replacementImage = File(
+        '${stagingDirectory.path}/'
+        '123e4567-e89b-12d3-a456-426614174112-new.png',
+      );
+      await oldImage.writeAsBytes([1]);
+      await replacementImage.writeAsBytes([2]);
+      addTearDown(() async {
+        if (await oldImage.exists()) await oldImage.delete();
+        if (await replacementImage.exists()) await replacementImage.delete();
+      });
+
+      final container = ProviderContainer(
+        overrides: [
+          authTokenProvider3.overrideWith(
+            (ref) => ref.watch(_authOwnerSignalProvider).token,
+          ),
+          authNavigationStateProvider.overrideWith(
+            (ref) => ref.watch(_authOwnerSignalProvider).navigation,
+          ),
+          isAuthLoadingProvider2.overrideWithValue(false),
+          openWebUiAccountStorageIsolationProvider.overrideWith(
+            _NoopAccountStorageIsolation.new,
+          ),
+          selectedModelProvider.overrideWith(_NullSelectedModel.new),
+          apiServiceProvider.overrideWithValue(null),
+          appDatabaseProvider.overrideWithValue(null),
+        ],
+      );
+      addTearDown(container.dispose);
+      container.read(attachedFilesProvider.notifier).addFiles([
+        LocalAttachment(file: oldImage, displayName: 'old.png'),
+      ]);
+      container.read(userScopedProviderCleanupProvider);
+
+      final authOwner = container.read(_authOwnerSignalProvider.notifier);
+      authOwner.signOut();
+      await _flushMicrotasks();
+      check(container.read(authTokenProvider3)).isNull();
+      check(container.read(authNavigationStateProvider))
+          .equals(AuthNavigationState.needsLogin);
+      authOwner.signIn(token: 'test-token');
+      container.read(attachedFilesProvider.notifier).addFiles([
+        LocalAttachment(file: replacementImage, displayName: 'new.png'),
+      ]);
+
+      for (var attempt = 0; attempt < 50; attempt++) {
+        final attachments = container.read(attachedFilesProvider);
+        if (attachments.length == 1 &&
+            attachments.single.file.path == replacementImage.path &&
+            !await oldImage.exists()) {
+          break;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+
+      final attachments = container.read(attachedFilesProvider);
+      check(attachments).length.equals(1);
+      check(attachments.single.file.path).equals(replacementImage.path);
+      check(await oldImage.exists()).isFalse();
+      check(await replacementImage.exists()).isTrue();
+    },
+  );
+
+  test(
+    'same-token navigation revalidation preserves composer attachments',
+    () async {
+      final stagingDirectory = Directory(
+        '${Directory.systemTemp.path}/conduit-native-paste',
+      );
+      await stagingDirectory.create();
+      final image = File(
+        '${stagingDirectory.path}/'
+        '123e4567-e89b-12d3-a456-426614174116-revalidation.png',
+      );
+      await image.writeAsBytes([1]);
+      addTearDown(() async {
+        if (await image.exists()) await image.delete();
+      });
+
+      final container = ProviderContainer(
+        overrides: [
+          authTokenProvider3.overrideWith(
+            (ref) => ref.watch(_authOwnerSignalProvider).token,
+          ),
+          authNavigationStateProvider.overrideWith(
+            (ref) => ref.watch(_authOwnerSignalProvider).navigation,
+          ),
+          isAuthLoadingProvider2.overrideWith(
+            (ref) =>
+                ref.watch(_authOwnerSignalProvider).navigation ==
+                AuthNavigationState.loading,
+          ),
+          openWebUiAccountStorageIsolationProvider.overrideWith(
+            _NoopAccountStorageIsolation.new,
+          ),
+          selectedModelProvider.overrideWith(_NullSelectedModel.new),
+          apiServiceProvider.overrideWithValue(null),
+          appDatabaseProvider.overrideWithValue(null),
+        ],
+      );
+      addTearDown(container.dispose);
+      container.read(attachedFilesProvider.notifier).addFiles([
+        LocalAttachment(file: image, displayName: 'revalidation.png'),
+      ]);
+      container.read(userScopedProviderCleanupProvider);
+
+      check(container.read(isAuthLoadingProvider2)).isFalse();
+
+      container
+          .read(_authOwnerSignalProvider.notifier)
+          .beginSameSessionRevalidation();
+      check(container.read(isAuthLoadingProvider2)).isTrue();
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+
+      check(container.read(authTokenProvider3)).equals('test-token');
+      check(container.read(attachedFilesProvider)).length.equals(1);
+      check(await image.readAsBytes()).deepEquals([1]);
+    },
+  );
+
+  test(
+    'reauthentication during slow attachment cleanup preserves new providers',
+    () async {
+      final stagingDirectory = Directory(
+        '${Directory.systemTemp.path}/conduit-native-paste',
+      );
+      await stagingDirectory.create();
+      final oldImage = File(
+        '${stagingDirectory.path}/'
+        '123e4567-e89b-12d3-a456-426614174117-old.png',
+      );
+      await oldImage.writeAsBytes([1]);
+      addTearDown(() async {
+        if (await oldImage.exists()) await oldImage.delete();
+      });
+      final cleanupStarted = Completer<void>();
+      final releaseCleanup = Completer<void>();
+
+      final container = ProviderContainer(
+        overrides: [
+          authTokenProvider3.overrideWith(
+            (ref) => ref.watch(_authOwnerSignalProvider).token,
+          ),
+          authNavigationStateProvider.overrideWith(
+            (ref) => ref.watch(_authOwnerSignalProvider).navigation,
+          ),
+          isAuthLoadingProvider2.overrideWithValue(false),
+          openWebUiAccountStorageIsolationProvider.overrideWith(
+            _NoopAccountStorageIsolation.new,
+          ),
+          selectedModelProvider.overrideWith(_NullSelectedModel.new),
+          apiServiceProvider.overrideWithValue(null),
+          appDatabaseProvider.overrideWithValue(null),
+          terminalAttachmentCleanupProvider.overrideWithValue((
+            filePath, {
+            required beforeDeleteAdmission,
+            required canDelete,
+          }) async {
+            if (!cleanupStarted.isCompleted) cleanupStarted.complete();
+            await releaseCleanup.future;
+            await beforeDeleteAdmission();
+            if (!canDelete()) return true;
+            final file = File(filePath);
+            if (await file.exists()) await file.delete();
+            return true;
+          }),
+        ],
+      );
+      addTearDown(container.dispose);
+      container.read(attachedFilesProvider.notifier).addFiles([
+        LocalAttachment(file: oldImage, displayName: 'old.png'),
+      ]);
+      container.read(userScopedProviderCleanupProvider);
+
+      final authOwner = container.read(_authOwnerSignalProvider.notifier);
+      authOwner.signOut();
+      await _flushMicrotasks(2);
+      check(container.read(authTokenProvider3)).isNull();
+      check(container.read(authNavigationStateProvider))
+          .equals(AuthNavigationState.needsLogin);
+      await cleanupStarted.future.timeout(const Duration(seconds: 1));
+      authOwner.signIn();
+      final replacementConversation = _conversation('replacement-chat');
+      container
+          .read(activeConversationProvider.notifier)
+          .set(replacementConversation);
+      releaseCleanup.complete();
+      await _waitForFileDeletion(oldImage);
+
+      check(container.read(authTokenProvider3)).equals('replacement-token');
+      check(container.read(activeConversationProvider))
+          .identicalTo(replacementConversation);
+      check(await oldImage.exists()).isFalse();
+    },
+  );
+
   test(
     'forced warmup refreshes populated conversations while warming folders',
     () async {
@@ -130,39 +554,36 @@ void main() {
     },
   );
 
-  test(
-    'forced warmup queued during an in-flight warmup reruns after folders finish',
-    () async {
-      final conversations = _RecordingWarmupConversations();
-      final folders = _BlockingWarmupFolders();
-      final container = await _createAuthenticatedWarmupContainer(
-        conversationsOverride: conversationsProvider.overrideWith(
-          () => conversations,
-        ),
-        foldersOverride: foldersProvider.overrideWith(() => folders),
-      );
+  test('forced warmup queued during an in-flight warmup reruns after folders finish', () async {
+    final conversations = _RecordingWarmupConversations();
+    final folders = _BlockingWarmupFolders();
+    final container = await _createAuthenticatedWarmupContainer(
+      conversationsOverride: conversationsProvider.overrideWith(
+        () => conversations,
+      ),
+      foldersOverride: foldersProvider.overrideWith(() => folders),
+    );
 
-      container
-          .read(appStartupFlowProvider.notifier)
-          .scheduleConversationWarmup();
-      await _flushMicrotasks(2);
+    container
+        .read(appStartupFlowProvider.notifier)
+        .scheduleConversationWarmup();
+    await _flushMicrotasks(2);
 
-      expect(folders.warmIfNeededCalls, 1);
-      expect(conversations.refreshCalls, 0);
+    expect(folders.warmIfNeededCalls, 1);
+    expect(conversations.refreshCalls, 0);
 
-      container
-          .read(appStartupFlowProvider.notifier)
-          .scheduleConversationWarmup(force: true);
-      await _flushMicrotasks();
+    container
+        .read(appStartupFlowProvider.notifier)
+        .scheduleConversationWarmup(force: true);
+    await _flushMicrotasks();
 
-      expect(conversations.refreshCalls, 0);
+    expect(conversations.refreshCalls, 0);
 
-      folders.completeFirstWarmup();
-      await _flushMicrotasks(3);
+    folders.completeFirstWarmup();
+    await _flushMicrotasks(3);
 
-      _expectForcedWarmup(conversations, folders, warmIfNeededCalls: 2);
-    },
-  );
+    _expectForcedWarmup(conversations, folders, warmIfNeededCalls: 2);
+  });
 
   test(
     'already-authenticated startup runs post-auth warmup on start',
@@ -216,64 +637,122 @@ void main() {
     },
   );
 
+  test('already-authenticated startup retries when api service becomes ready after the initial wait', () async {
+    ApiService? currentApi;
+    final container = await _createAuthenticatedWarmupContainer(
+      apiOverride: apiServiceProvider.overrideWith((ref) => currentApi),
+    );
+
+    container
+        .read(appStartupFlowProvider.notifier)
+        .activateForTesting(apiWaitTimeout: const Duration(milliseconds: 40));
+
+    final notifiers = _readWarmupNotifiers(container);
+
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+    expect(notifiers.conversations.refreshCalls, 0);
+    expect(notifiers.folders.warmIfNeededCalls, 0);
+
+    currentApi = _StubApiService();
+    container.invalidate(apiServiceProvider);
+
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+    await _flushMicrotasks();
+
+    _expectForcedWarmup(
+      notifiers.conversations,
+      notifiers.folders,
+      warmIfNeededCalls: 1,
+    );
+  });
+
+  test('post-auth startup cancels delayed model preload after leaving authenticated flow', () async {
+    var navState = AuthNavigationState.authenticated;
+    var defaultModelLoads = 0;
+    final container = await _createAuthenticatedWarmupContainer(
+      authNavigationOverride: authNavigationStateProvider.overrideWith(
+        (ref) => navState,
+      ),
+      extraOverrides: [
+        defaultModelProvider.overrideWith((ref) async {
+          defaultModelLoads += 1;
+          return null;
+        }),
+      ],
+    );
+
+    container.read(appStartupFlowProvider.notifier).activateForTesting();
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+
+    navState = AuthNavigationState.needsLogin;
+    container.invalidate(authNavigationStateProvider);
+
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+
+    expect(defaultModelLoads, 0);
+  });
+
   test(
-    'already-authenticated startup retries when api service becomes ready after the initial wait',
+    'post-auth startup retains auto-selection before preload resolves',
     () async {
-      ApiService? currentApi;
+      final defaultModelStarted = Completer<void>();
+      final releaseDefaultModel = Completer<Model?>();
+      var autoSelectionStarts = 0;
       final container = await _createAuthenticatedWarmupContainer(
-        apiOverride: apiServiceProvider.overrideWith((ref) => currentApi),
-      );
-
-      container
-          .read(appStartupFlowProvider.notifier)
-          .activateForTesting(apiWaitTimeout: const Duration(milliseconds: 40));
-
-      final notifiers = _readWarmupNotifiers(container);
-
-      await Future<void>.delayed(const Duration(milliseconds: 80));
-      expect(notifiers.conversations.refreshCalls, 0);
-      expect(notifiers.folders.warmIfNeededCalls, 0);
-
-      currentApi = _StubApiService();
-      container.invalidate(apiServiceProvider);
-
-      await Future<void>.delayed(const Duration(milliseconds: 80));
-      await _flushMicrotasks();
-
-      _expectForcedWarmup(
-        notifiers.conversations,
-        notifiers.folders,
-        warmIfNeededCalls: 1,
-      );
-    },
-  );
-
-  test(
-    'post-auth startup cancels delayed model preload after leaving authenticated flow',
-    () async {
-      var navState = AuthNavigationState.authenticated;
-      var defaultModelLoads = 0;
-      final container = await _createAuthenticatedWarmupContainer(
-        authNavigationOverride: authNavigationStateProvider.overrideWith(
-          (ref) => navState,
-        ),
         extraOverrides: [
-          defaultModelProvider.overrideWith((ref) async {
-            defaultModelLoads += 1;
-            return null;
+          defaultModelProvider.overrideWith((ref) {
+            defaultModelStarted.complete();
+            return releaseDefaultModel.future;
+          }),
+          defaultModelAutoSelectionProvider.overrideWith((ref) {
+            autoSelectionStarts += 1;
+            ref.watch(defaultModelProvider);
           }),
         ],
       );
 
       container.read(appStartupFlowProvider.notifier).activateForTesting();
-      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      await defaultModelStarted.future.timeout(const Duration(seconds: 1));
+      expect(autoSelectionStarts, 1);
+      releaseDefaultModel.complete(null);
+      await _flushMicrotasks(4);
+    },
+  );
+
+  test(
+    'direct completion relay is owned only by an authenticated session',
+    () async {
+      var navState = AuthNavigationState.authenticated;
+      var relayStarts = 0;
+      var relayDisposals = 0;
+      final container = await _createAuthenticatedWarmupContainer(
+        authNavigationOverride: authNavigationStateProvider.overrideWith(
+          (ref) => navState,
+        ),
+        extraOverrides: [
+          openWebUiDirectCompletionSocketRelayProvider.overrideWith((ref) {
+            relayStarts += 1;
+            ref.onDispose(() => relayDisposals += 1);
+          }),
+        ],
+      );
+
+      container.read(appStartupFlowProvider.notifier).activateForTesting();
+      await _flushMicrotasks(4);
+      expect(relayStarts, 1);
+      expect(relayDisposals, 0);
 
       navState = AuthNavigationState.needsLogin;
       container.invalidate(authNavigationStateProvider);
+      await _flushMicrotasks(2);
+      expect(relayDisposals, 1);
 
-      await Future<void>.delayed(const Duration(milliseconds: 250));
-
-      expect(defaultModelLoads, 0);
+      navState = AuthNavigationState.authenticated;
+      container.invalidate(authNavigationStateProvider);
+      await _flushMicrotasks(4);
+      expect(relayStarts, 2);
+      expect(relayDisposals, 1);
     },
   );
 
@@ -299,9 +778,8 @@ void main() {
     final binding = TestWidgetsFlutterBinding.ensureInitialized();
     final api = _StubApiService(
       conversations: {
-        'active-chat': _conversation(
-          'active-chat',
-        ).copyWith(title: 'Server copy'),
+        'active-chat': _conversation('active-chat')
+            .copyWith(title: 'Server copy'),
       },
     );
     final container = await _createAuthenticatedWarmupContainer(
@@ -358,9 +836,8 @@ void main() {
     final getConversationGate = Completer<void>();
     final api = _StubApiService(
       conversations: {
-        'active-chat': _conversation(
-          'active-chat',
-        ).copyWith(title: 'Server copy'),
+        'active-chat': _conversation('active-chat')
+            .copyWith(title: 'Server copy'),
       },
       getConversationGate: getConversationGate,
     );
@@ -392,9 +869,8 @@ void main() {
       final binding = TestWidgetsFlutterBinding.ensureInitialized();
       final api = _StubApiService(
         conversations: {
-          'active-chat': _conversation(
-            'active-chat',
-          ).copyWith(title: 'Server copy'),
+          'active-chat': _conversation('active-chat')
+              .copyWith(title: 'Server copy'),
         },
       );
       final container = await _createAuthenticatedWarmupContainer(
@@ -420,6 +896,24 @@ void main() {
 
 abstract class _TrackingWarmupFolders extends Folders {
   int warmIfNeededCalls = 0;
+}
+
+final class _NoopAccountStorageIsolation
+    extends OpenWebUiAccountStorageIsolation {
+  @override
+  void build() {}
+}
+
+final class _NullSelectedModel extends SelectedModel {
+  @override
+  Model? build() => null;
+}
+
+final class _SettledAccount extends SettledActiveAccountId {
+  @override
+  String? build() => 'a';
+
+  void settle(String accountId) => state = accountId;
 }
 
 class _RecordingWarmupConversations extends Conversations {
@@ -487,20 +981,28 @@ class _FakeConnectivityService extends Fake implements ConnectivityService {
   int get lastLatencyMs => 0;
 }
 
+class _KnowledgeCleanupApi extends ApiService {
+  _KnowledgeCleanupApi()
+    : super(serverConfig: _testServer, workerManager: WorkerManager());
+
+  @override
+  Future<List<KnowledgeBase>> getKnowledgeBases() async => <KnowledgeBase>[
+    KnowledgeBase(
+      id: 'private-kb',
+      name: 'Private',
+      createdAt: DateTime.utc(2026, 1, 1),
+      updatedAt: DateTime.utc(2026, 1, 2),
+    ),
+  ];
+}
+
 class _StubApiService extends ApiService {
   _StubApiService({
     Map<String, Conversation>? conversations,
     this.getConversationGate,
     this.getConversationError,
   }) : _conversations = conversations ?? const <String, Conversation>{},
-       super(
-         serverConfig: const ServerConfig(
-           id: 'test-server',
-           name: 'Test Server',
-           url: 'https://example.com',
-         ),
-         workerManager: WorkerManager(),
-       );
+       super(serverConfig: _testServer, workerManager: WorkerManager());
 
   final Map<String, Conversation> _conversations;
   final Completer<void>? getConversationGate;
@@ -508,7 +1010,7 @@ class _StubApiService extends ApiService {
   final List<String> requestedConversationIds = <String>[];
 
   @override
-  Future<Conversation> getConversation(String id) async {
+  Future<Conversation> getConversation(String id, {ApiAuthSnapshot? authSnapshot}) async {
     requestedConversationIds.add(id);
     final gate = getConversationGate;
     if (gate != null) {

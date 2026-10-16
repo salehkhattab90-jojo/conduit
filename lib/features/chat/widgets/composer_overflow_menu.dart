@@ -1,22 +1,34 @@
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:conduit/core/services/haptic_service.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'dart:io' show Platform;
 
 import '../../../shared/theme/theme_extensions.dart';
-import '../../../shared/widgets/sheet_handle.dart';
 import '../../../shared/widgets/conduit_components.dart';
-import '../../../shared/widgets/modal_safe_area.dart';
+import '../../../shared/widgets/horizontal_gesture_ownership.dart';
 import '../../../shared/widgets/model_avatar.dart';
-import '../../../core/models/toggle_filter.dart';
-import '../../../core/models/thinking_mode.dart';
-import '../../../core/providers/app_providers.dart';
-import '../../tools/providers/tools_providers.dart';
+import '../../../shared/widgets/horizontal_overflow_fade.dart';
+
+import 'package:conduit_core/models/toggle_filter.dart';
+import 'package:conduit_core/models/tool.dart';
+import 'package:conduit_core/providers/app_providers.dart';
+import 'package:conduit_core/features/tools/providers/tools_providers.dart';
+
 import '../../terminal/providers/terminal_providers.dart';
-import '../providers/chat_providers.dart';
+
+import 'package:conduit_core/features/direct_connections/direct_connections.dart';
+import 'package:conduit_core/features/direct_connections/providers/direct_mcp_providers.dart';
+
+import 'package:conduit_core/features/chat/providers/chat_providers.dart';
+import 'package:conduit_core/features/integrations/personal_connection_settings.dart';
+import 'package:conduit_core/features/integrations/providers/personal_connections_providers.dart';
+
+import '../../integrations/views/personal_connection_messages.dart';
+
 import 'composer_overflow_items.dart';
+
 import 'package:conduit/l10n/app_localizations.dart';
 
 /// A reusable toggle tile widget used in the composer overflow sheet.
@@ -29,6 +41,8 @@ class ToggleTile extends StatelessWidget {
     required this.selected,
     required this.onToggle,
     required this.theme,
+    this.isAction = false,
+    this.enabled = true,
   });
 
   final Widget glyph;
@@ -38,66 +52,101 @@ class ToggleTile extends StatelessWidget {
   final VoidCallback onToggle;
   final ConduitThemeExtension theme;
 
+  /// A command row that opens something: announced as a button, never as a
+  /// toggle, and marked with a chevron instead of a checkmark.
+  final bool isAction;
+
+  /// A row that only explains itself, such as an option the server cannot
+  /// offer, stays visible but cannot be tapped.
+  final bool enabled;
+
   @override
   Widget build(BuildContext context) {
+    // A flat menu row: plain glyph, regular-weight title, and a
+    // checkmark only while the option is on.
+    void handleTap() {
+      ConduitHaptics.selectionClick();
+      onToggle();
+    }
+
+    // The labelled node replaces the InkWell's, so it must carry the tap.
     return Semantics(
       button: true,
-      toggled: selected,
+      enabled: enabled,
+      toggled: isAction ? null : selected,
       label: title,
       hint: (subtitle?.isEmpty ?? true) ? null : subtitle,
-      child: ConduitCard(
-        padding: const EdgeInsets.all(Spacing.md),
-        onTap: () {
-          ConduitHaptics.selectionClick();
-          onToggle();
-        },
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            glyph,
-            const SizedBox(width: Spacing.md),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+      excludeSemantics: true,
+      onTap: enabled ? handleTap : null,
+      child: Opacity(
+        opacity: enabled ? 1.0 : Alpha.disabled,
+        child: Material(
+          color: Colors.transparent,
+          borderRadius: BorderRadius.circular(AppBorderRadius.md),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: enabled ? handleTap : null,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: Spacing.xs,
+                vertical: Spacing.xs + Spacing.xxs,
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  Text(
-                    title,
-                    style: AppTypography.bodyMediumStyle.copyWith(
-                      color: theme.sidebarForeground,
-                      fontWeight: FontWeight.w600,
+                  glyph,
+                  const SizedBox(width: Spacing.sm + Spacing.xs),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          title,
+                          style: AppTypography.bodyMediumStyle.copyWith(
+                            color: theme.textPrimary,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        if (subtitle != null && subtitle!.isNotEmpty)
+                          Text(
+                            subtitle!,
+                            // A command or an option that is off explains
+                            // itself, so it gets room to finish the sentence.
+                            maxLines: isAction || !enabled ? 2 : 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: AppTypography.labelSmallStyle.copyWith(
+                              color: theme.textSecondary,
+                            ),
+                          ),
+                      ],
                     ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
                   ),
-                  if (subtitle != null && subtitle!.isNotEmpty) ...[
-                    const SizedBox(height: Spacing.xs),
-                    Text(
-                      subtitle!,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: AppTypography.bodySmallStyle.copyWith(
-                        color: theme.sidebarForeground.withValues(alpha: 0.75),
-                      ),
-                    ),
-                  ],
+                  const SizedBox(width: Spacing.sm),
+                  SizedBox(
+                    width: IconSize.small,
+                    child: isAction
+                        ? Icon(
+                            Platform.isIOS
+                                ? CupertinoIcons.chevron_forward
+                                : Icons.chevron_right,
+                            color: theme.textSecondary,
+                            size: IconSize.small,
+                          )
+                        : selected
+                        ? Icon(
+                            Platform.isIOS
+                                ? CupertinoIcons.checkmark_alt
+                                : Icons.check_rounded,
+                            color: theme.textPrimary,
+                            size: IconSize.small,
+                          )
+                        : null,
+                  ),
                 ],
               ),
             ),
-            const SizedBox(width: Spacing.sm),
-            IgnorePointer(
-              child: Platform.isIOS
-                  ? CupertinoSwitch(
-                      value: selected,
-                      onChanged: (_) {},
-                      activeTrackColor: theme.buttonPrimary,
-                    )
-                  : Switch(
-                      value: selected,
-                      onChanged: (_) {},
-                      activeThumbColor: theme.buttonPrimary,
-                    ),
-            ),
-          ],
+          ),
         ),
       ),
     );
@@ -126,36 +175,60 @@ List<Widget> withHorizontalSpacing(List<Widget> children, double gap) {
   return spaced;
 }
 
-/// Bottom sheet for attachment and overflow options in the chat composer.
-class ComposerOverflowSheet extends ConsumerStatefulWidget {
-  const ComposerOverflowSheet({
+/// Keyboard-height attachment and overflow panel for the chat composer.
+///
+/// The panel intentionally follows the compact interaction used by messaging
+/// apps: attachment actions stay in a horizontally scrolling strip while
+/// secondary toggles and tools scroll vertically below it.
+class ComposerAttachmentKeyboard extends ConsumerStatefulWidget {
+  const ComposerAttachmentKeyboard({
     super.key,
+    this.localAttachmentsOnly = false,
+    this.height = 300,
+    this.onDismiss,
     this.onFileAttachment,
     this.onServerFileAttachment,
     this.onImageAttachment,
     this.onCameraCapture,
     this.onWebAttachment,
+    this.onMcpContent,
+    this.onToolSettings,
+    this.onCompareModels,
+    this.compareModelsHasMessage = true,
   });
 
+  /// Restricts the sheet to device-local attachment actions supplied by the
+  /// caller. Used by backends such as Hermes that cannot resolve OpenWebUI
+  /// server files, web pages, feature toggles, tools, integrations, or filters.
+  final bool localAttachmentsOnly;
+  final double height;
+  final VoidCallback? onDismiss;
   final VoidCallback? onFileAttachment;
   final VoidCallback? onServerFileAttachment;
   final VoidCallback? onImageAttachment;
   final VoidCallback? onCameraCapture;
   final VoidCallback? onWebAttachment;
+  final VoidCallback? onMcpContent;
+
+  /// Opens the personal tool settings sheet. Null hides the Advanced command.
+  final VoidCallback? onToolSettings;
+
+  /// Starts a model comparison from the composer's message. Null hides the
+  /// Advanced command.
+  final VoidCallback? onCompareModels;
+
+  /// Whether the composer holds a message to compare. Until it does, the
+  /// command stays visible but off and says why.
+  final bool compareModelsHasMessage;
 
   @override
-  ConsumerState<ComposerOverflowSheet> createState() =>
-      _ComposerOverflowSheetState();
+  ConsumerState<ComposerAttachmentKeyboard> createState() =>
+      _ComposerAttachmentKeyboardState();
 }
 
-class _ComposerOverflowSheetState extends ConsumerState<ComposerOverflowSheet> {
+class _ComposerAttachmentKeyboardState
+    extends ConsumerState<ComposerAttachmentKeyboard> {
   Future<Map<String, dynamic>?>? _userSettingsFuture;
-
-  @override
-  void initState() {
-    super.initState();
-    _userSettingsFuture = _loadUserSettings();
-  }
 
   Future<Map<String, dynamic>?> _loadUserSettings() async {
     final api = ref.read(apiServiceProvider);
@@ -174,16 +247,47 @@ class _ComposerOverflowSheetState extends ConsumerState<ComposerOverflowSheet> {
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context)!;
     final theme = context.conduitTheme;
-    final attachmentItems = buildComposerOverflowAttachmentItems(
-      l10n: l10n,
-      attachmentAvailability: ComposerOverflowAttachmentAvailability(
-        file: widget.onFileAttachment != null,
-        serverFile: widget.onServerFileAttachment != null,
-        photo: widget.onImageAttachment != null,
-        camera: widget.onCameraCapture != null,
-        web: widget.onWebAttachment != null,
-      ),
-    );
+    final selectedModel = ref.watch(selectedModelProvider);
+    final directBinding = selectedModel == null
+        ? null
+        : ref.watch(directModelRegistryProvider).resolve(selectedModel);
+    final directMode = directBinding != null;
+    final directToolsAvailable = directBindingSupportsLocalMcp(directBinding);
+    final restrictedMode = directMode || widget.localAttachmentsOnly;
+    // Direct and local-only backends have no OpenWebUI integrations to
+    // discover. Resolve the request lazily because direct provenance is only
+    // available once providers can be read during build.
+    final userSettingsFuture = restrictedMode
+        ? null
+        : (_userSettingsFuture ??= _loadUserSettings());
+    final attachmentItems =
+        buildComposerOverflowAttachmentItems(
+          l10n: l10n,
+          attachmentAvailability: ComposerOverflowAttachmentAvailability(
+            file: widget.onFileAttachment != null,
+            serverFile:
+                !restrictedMode && widget.onServerFileAttachment != null,
+            photo: widget.onImageAttachment != null,
+            camera: widget.onCameraCapture != null,
+            web: !restrictedMode && widget.onWebAttachment != null,
+            mcpContent: directMode && widget.onMcpContent != null,
+          ),
+        ).where((item) {
+          if (widget.localAttachmentsOnly) {
+            return item.enabled &&
+                (item.id == ComposerOverflowActionIds.file ||
+                    item.id == ComposerOverflowActionIds.photo ||
+                    item.id == ComposerOverflowActionIds.camera);
+          }
+          if (!directMode) {
+            return true;
+          }
+          return item.enabled &&
+              (item.id == ComposerOverflowActionIds.file ||
+                  item.id == ComposerOverflowActionIds.photo ||
+                  item.id == ComposerOverflowActionIds.camera ||
+                  item.id == ComposerOverflowActionIds.mcpContent);
+        });
 
     final attachments = attachmentItems
         .map(
@@ -192,10 +296,18 @@ class _ComposerOverflowSheetState extends ConsumerState<ComposerOverflowSheet> {
         )
         .toList();
 
-    final webSearchAvailable = ref.watch(webSearchAvailableProvider);
-    final webSearchEnabled = ref.watch(webSearchEnabledProvider);
-    final imageGenAvailable = ref.watch(imageGenerationAvailableProvider);
-    final imageGenEnabled = ref.watch(imageGenerationEnabledProvider);
+    // Trusted direct providers can expose Conduit-managed server tools even
+    // though they cannot use OpenWebUI-managed tools.
+    final webSearchAvailable =
+        !widget.localAttachmentsOnly && ref.watch(webSearchAvailableProvider);
+    final webSearchEnabled =
+        !widget.localAttachmentsOnly && ref.watch(webSearchEnabledProvider);
+    final imageGenAvailable =
+        !widget.localAttachmentsOnly &&
+        ref.watch(imageGenerationAvailableProvider);
+    final imageGenEnabled =
+        !widget.localAttachmentsOnly &&
+        ref.watch(imageGenerationEnabledProvider);
     final featureTiles =
         buildComposerOverflowFeatureItems(
           l10n: l10n,
@@ -203,6 +315,10 @@ class _ComposerOverflowSheetState extends ConsumerState<ComposerOverflowSheet> {
           webSearchEnabled: webSearchEnabled,
           imageGenerationAvailable: imageGenAvailable,
           imageGenerationEnabled: imageGenEnabled,
+          // Only an Open WebUI server runs the interpreter.
+          codeInterpreter: restrictedMode
+              ? null
+              : ref.watch(codeInterpreterOfferProvider),
         ).map((item) {
           return _buildOverflowItemTile(
             item: item,
@@ -216,170 +332,226 @@ class _ComposerOverflowSheetState extends ConsumerState<ComposerOverflowSheet> {
           );
         }).toList();
 
-    final thinkingTile = _buildThinkingTile(l10n);
-    if (thinkingTile != null) featureTiles.add(thinkingTile);
-
-    final selectedToolIds = ref.watch(selectedToolIdsProvider);
-    final selectedTerminalId = ref.watch(selectedTerminalIdProvider);
-    final availableTerminalServersAsync = ref.watch(
-      terminalAvailableServersProvider,
-    );
-    final toolsAsync = ref.watch(toolsListProvider);
-    final toolsSection = toolsAsync.when(
-      data: (tools) {
-        final toolItems = buildComposerOverflowToolItems(
-          availableTools: tools,
-          selectedToolIds: selectedToolIds,
-        );
-        if (toolItems.isEmpty) return _buildInfoCard(l10n.noToolsAvailable);
-        final tiles = toolItems.map((item) {
-          return _buildOverflowItemTile(
-            item: item,
-            onChanged: (selected) {
-              setComposerOverflowSelection(
-                ref,
-                actionId: item.id,
-                selected: selected,
+    final selectedToolIds = widget.localAttachmentsOnly
+        ? const <String>[]
+        : ref.watch(selectedToolIdsProvider);
+    final selectedTerminalId = restrictedMode
+        ? null
+        : ref.watch(selectedTerminalIdProvider);
+    final clearedConnections = restrictedMode
+        ? const <String>[]
+        : ref.watch(personalSelectionNoticeProvider);
+    final availableTerminalServersAsync = restrictedMode
+        ? null
+        : ref.watch(terminalAvailableServersProvider);
+    final toolsAsync = widget.localAttachmentsOnly
+        ? null
+        : directMode
+        ? directToolsAvailable
+              ? ref.watch(directMcpToolsProvider)
+              : const AsyncData<List<Tool>>([])
+        : ref.watch(toolsListProvider);
+    final toolsSection = widget.localAttachmentsOnly
+        ? const SizedBox.shrink()
+        : toolsAsync!.when(
+            data: (tools) {
+              final toolItems = buildComposerOverflowToolItems(
+                availableTools: tools,
+                selectedToolIds: selectedToolIds,
               );
+              if (toolItems.isEmpty) {
+                return _buildInfoCard(l10n.noToolsAvailable);
+              }
+              final tiles = toolItems.map((item) {
+                return _buildOverflowItemTile(
+                  item: item,
+                  onChanged: (selected) {
+                    setComposerOverflowSelection(
+                      ref,
+                      actionId: item.id,
+                      selected: selected,
+                    );
+                  },
+                );
+              }).toList();
+              return Column(children: withVerticalSpacing(tiles, Spacing.xxs));
+            },
+            loading: () => directMode
+                ? const SizedBox.shrink()
+                : const Center(
+                    child: ConduitLoadingIndicator(
+                      size: IconSize.lg,
+                      isCompact: true,
+                    ),
+                  ),
+            error: (_, _) => _buildInfoCard(l10n.failedToLoadTools),
+          );
+    final integrationsSection = restrictedMode
+        ? const SizedBox.shrink()
+        : FutureBuilder<Map<String, dynamic>?>(
+            future: userSettingsFuture,
+            builder: (context, snapshot) {
+              final settings = snapshot.data;
+              final directToolServers = effectivePersonalServerList(
+                settings,
+                PersonalConnectionKind.toolServer.settingsKey,
+              );
+              final directToolTiles = <Widget>[];
+              for (var index = 0; index < directToolServers.length; index++) {
+                final server = directToolServers[index];
+                if (!_isServerEnabled(server)) {
+                  continue;
+                }
+
+                final selectionId = personalToolServerSelectionId(
+                  directToolServers,
+                  index,
+                );
+                final isSelected = selectedToolIds.contains(selectionId);
+                directToolTiles.add(
+                  _buildToggleTile(
+                    icon: Platform.isIOS
+                        ? CupertinoIcons.square_stack_3d_down_right
+                        : Icons.hub_outlined,
+                    title: _serverTitle(
+                      server,
+                      fallbackPrefix: l10n.toolServer,
+                    ),
+                    subtitle: _serverSubtitle(server),
+                    value: isSelected,
+                    onChanged: (_) {
+                      final current = List<String>.from(
+                        ref.read(selectedToolIdsProvider),
+                      );
+                      if (isSelected) {
+                        current.remove(selectionId);
+                      } else {
+                        current.add(selectionId);
+                      }
+                      ref.read(selectedToolIdsProvider.notifier).set(current);
+                    },
+                  ),
+                );
+              }
+
+              final terminalTiles = availableTerminalServersAsync!.maybeWhen(
+                data: (servers) {
+                  return servers
+                      .map((server) {
+                        final isSelected =
+                            selectedTerminalId == server.selectionId;
+                        return _buildToggleTile(
+                          icon: Platform.isIOS
+                              ? CupertinoIcons.chevron_left_slash_chevron_right
+                              : Icons.terminal_rounded,
+                          title: server.displayName,
+                          subtitle: server.subtitle,
+                          value: isSelected,
+                          onChanged: (_) async {
+                            await ref
+                                .read(terminalSelectionControllerProvider)
+                                .toggle(server);
+                          },
+                        );
+                      })
+                      .toList(growable: false);
+                },
+                orElse: () => const <Widget>[],
+              );
+
+              if (directToolTiles.isEmpty && terminalTiles.isEmpty) {
+                return const SizedBox.shrink();
+              }
+
+              final children = <Widget>[];
+              if (directToolTiles.isNotEmpty) {
+                children
+                  ..add(_buildSectionLabel(l10n.toolServers))
+                  ..add(
+                    Column(
+                      children: withVerticalSpacing(
+                        directToolTiles,
+                        Spacing.xxs,
+                      ),
+                    ),
+                  );
+              }
+              if (terminalTiles.isNotEmpty) {
+                if (children.isNotEmpty) {
+                  children.add(const SizedBox(height: Spacing.sm));
+                }
+                children
+                  ..add(_buildSectionLabel(l10n.terminal))
+                  ..add(
+                    Column(
+                      children: withVerticalSpacing(terminalTiles, Spacing.xxs),
+                    ),
+                  );
+              }
+
+              return Column(children: children);
             },
           );
-        }).toList();
-        return Column(children: withVerticalSpacing(tiles, Spacing.xxs));
-      },
-      loading: () => Center(
-        child: SizedBox(
-          width: 24,
-          height: 24,
-          child: CircularProgressIndicator(strokeWidth: BorderWidth.thin),
-        ),
-      ),
-      error: (_, _) => _buildInfoCard(l10n.failedToLoadTools),
-    );
-    final integrationsSection = FutureBuilder<Map<String, dynamic>?>(
-      future: _userSettingsFuture,
-      builder: (context, snapshot) {
-        final settings = snapshot.data;
-        final directToolServers = _extractConfiguredServers(
-          settings,
-          'toolServers',
-        );
-        final directToolTiles = <Widget>[];
-        for (var index = 0; index < directToolServers.length; index++) {
-          final server = directToolServers[index];
-          if (!_isServerEnabled(server)) {
-            continue;
-          }
-
-          final selectionId = _directServerSelectionId(server, index);
-          final isSelected = selectedToolIds.contains(selectionId);
-          directToolTiles.add(
-            _buildToggleTile(
-              icon: Platform.isIOS
-                  ? CupertinoIcons.square_stack_3d_down_right
-                  : Icons.hub_outlined,
-              title: _serverTitle(server, fallbackPrefix: l10n.toolServer),
-              subtitle: _serverSubtitle(server),
-              value: isSelected,
-              onChanged: (_) {
-                final current = List<String>.from(
-                  ref.read(selectedToolIdsProvider),
-                );
-                if (isSelected) {
-                  current.remove(selectionId);
-                } else {
-                  current.add(selectionId);
-                }
-                ref.read(selectedToolIdsProvider.notifier).set(current);
-              },
-            ),
-          );
-        }
-
-        final terminalTiles = availableTerminalServersAsync.maybeWhen(
-          data: (servers) {
-            return servers
-                .map((server) {
-                  final isSelected = selectedTerminalId == server.selectionId;
-                  return _buildToggleTile(
-                    icon: Platform.isIOS
-                        ? CupertinoIcons.chevron_left_slash_chevron_right
-                        : Icons.terminal_rounded,
-                    title: server.displayName,
-                    subtitle: server.subtitle,
-                    value: isSelected,
-                    onChanged: (_) async {
-                      await ref
-                          .read(terminalSelectionControllerProvider)
-                          .toggle(server);
-                    },
-                  );
-                })
-                .toList(growable: false);
-          },
-          orElse: () => const <Widget>[],
-        );
-
-        if (directToolTiles.isEmpty && terminalTiles.isEmpty) {
-          return const SizedBox.shrink();
-        }
-
-        final children = <Widget>[];
-        if (directToolTiles.isNotEmpty) {
-          children
-            ..add(_buildSectionLabel(l10n.toolServers))
-            ..add(
-              Column(
-                children: withVerticalSpacing(directToolTiles, Spacing.xxs),
-              ),
-            );
-        }
-        if (terminalTiles.isNotEmpty) {
-          if (children.isNotEmpty) {
-            children.add(const SizedBox(height: Spacing.sm));
-          }
-          children
-            ..add(_buildSectionLabel(l10n.terminal))
-            ..add(
-              Column(children: withVerticalSpacing(terminalTiles, Spacing.xxs)),
-            );
-        }
-
-        return Column(children: children);
-      },
-    );
 
     final listItems = <Widget>[
-      const SheetHandle(),
-      const SizedBox(height: Spacing.sm),
-      Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: withHorizontalSpacing(
-                attachments
-                    .map((attachment) => Expanded(child: attachment))
-                    .toList(),
-                Spacing.sm,
+      SizedBox(
+        height: MediaQuery.textScalerOf(context).scale(_attachmentTileHeight),
+        child: HorizontalOverflowFade(
+          child: HorizontalScrollGestureBoundary(
+            child: ListView.separated(
+              key: const ValueKey('composer-attachment-action-strip'),
+              scrollDirection: Axis.horizontal,
+              physics: const BouncingScrollPhysics(),
+              padding: const EdgeInsets.symmetric(horizontal: Spacing.md),
+              itemCount: attachments.length,
+              separatorBuilder: (_, _) => const SizedBox(width: Spacing.sm),
+              // Tiles widen to fit longer localized labels.
+              itemBuilder: (_, index) => ConstrainedBox(
+                constraints: const BoxConstraints(
+                  minWidth: _attachmentTileWidth,
+                  maxWidth: _attachmentTileMaxWidth,
+                ),
+                child: IntrinsicWidth(child: attachments[index]),
               ),
             ),
           ),
-        ],
+        ),
       ),
       if (featureTiles.isNotEmpty) ...[
         const SizedBox(height: Spacing.sm),
-        ...withVerticalSpacing(featureTiles, Spacing.xxs),
+        ...featureTiles,
       ],
-      const SizedBox(height: Spacing.sm),
-      _buildSectionLabel(l10n.tools),
-      toolsSection,
-      integrationsSection,
+      if (!restrictedMode && widget.onCompareModels != null)
+        ..._buildCompareModelsTiles(l10n),
+      if (!widget.localAttachmentsOnly) ...[
+        const SizedBox(height: Spacing.sm),
+        _buildSectionLabel(l10n.tools),
+        toolsSection,
+        if (!restrictedMode && widget.onToolSettings != null)
+          ..._buildToolSettingsTiles(l10n),
+      ],
+      if (clearedConnections.isNotEmpty) ...[
+        const SizedBox(height: Spacing.sm),
+        _buildInfoCard(
+          l10n.personalConnectionsSelectionCleared(
+            personalSelectionNoticeText(l10n, clearedConnections),
+          ),
+        ),
+        Align(
+          alignment: AlignmentDirectional.centerEnd,
+          child: TextButton(
+            key: const Key('personal-selection-notice-dismiss'),
+            onPressed: () =>
+                ref.read(personalSelectionNoticeProvider.notifier).clear(),
+            child: Text(l10n.ok),
+          ),
+        ),
+      ],
+      if (!restrictedMode) ...[integrationsSection],
     ];
 
-    final selectedModel = ref.watch(selectedModelProvider);
     final toggleFilters = selectedModel?.filters ?? const <ToggleFilter>[];
-    if (toggleFilters.isNotEmpty) {
+    if (!restrictedMode && toggleFilters.isNotEmpty) {
       final selectedFilterIds = ref.watch(selectedFilterIdsProvider);
       final filterTiles = toggleFilters.map((filter) {
         final isSelected = selectedFilterIds.contains(filter.id);
@@ -396,53 +568,106 @@ class _ComposerOverflowSheetState extends ConsumerState<ComposerOverflowSheet> {
         ..add(Column(children: withVerticalSpacing(filterTiles, Spacing.xxs)));
     }
 
-    listItems.add(const SizedBox(height: Spacing.sm));
+    listItems.add(const SizedBox(height: Spacing.md));
 
-    return Stack(
-      children: [
-        Positioned.fill(
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () => Navigator.of(context).maybePop(),
-            child: const SizedBox.shrink(),
+    return Material(
+      key: const ValueKey('composer-attachment-keyboard'),
+      color: theme.surfaceBackground,
+      child: Container(
+        height: widget.height,
+        decoration: BoxDecoration(
+          border: Border(
+            top: BorderSide(color: theme.dividerColor, width: BorderWidth.thin),
           ),
-        ),
-        DraggableScrollableSheet(
-          expand: false,
-          initialChildSize: 0.28,
-          minChildSize: 0.28,
-          maxChildSize: 0.92,
-          snap: true,
-          snapSizes: const [0.28, 0.92],
-          builder: (_, scrollController) => Container(
-            decoration: BoxDecoration(
-              color: theme.surfaceBackground,
-              borderRadius: const BorderRadius.vertical(
-                top: Radius.circular(AppBorderRadius.bottomSheet),
+          boxShadow: [
+            BoxShadow(
+              color: theme.cardShadow.withValues(
+                alpha: Theme.of(context).brightness == Brightness.dark
+                    ? 0.22
+                    : 0.10,
               ),
-              border: Border.all(
-                color: theme.dividerColor,
-                width: BorderWidth.thin,
-              ),
-              boxShadow: ConduitShadows.modal(context),
+              blurRadius: 18,
+              spreadRadius: -10,
+              offset: const Offset(0, -8),
             ),
-            child: ModalSheetSafeArea(
-              padding: const EdgeInsets.fromLTRB(
-                Spacing.md,
-                Spacing.xs,
-                Spacing.md,
-                0,
-              ),
-              child: ListView.builder(
-                controller: scrollController,
-                itemCount: listItems.length,
-                itemBuilder: (_, i) => listItems[i],
-              ),
+          ],
+        ),
+        child: SafeArea(
+          top: false,
+          child: ListView.builder(
+            key: const ValueKey('composer-attachment-panel-scroll'),
+            padding: const EdgeInsets.only(top: Spacing.md),
+            itemCount: listItems.length,
+            itemBuilder: (_, i) => Padding(
+              padding: i == 0
+                  ? EdgeInsets.zero
+                  : const EdgeInsets.symmetric(horizontal: Spacing.md),
+              child: listItems[i],
             ),
           ),
         ),
-      ],
+      ),
     );
+  }
+
+  /// The Advanced "Tool settings" command, built from the same item the
+  /// native iOS panel renders so both surfaces offer the identical action.
+  List<Widget> _buildToolSettingsTiles(AppLocalizations l10n) {
+    final theme = context.conduitTheme;
+    return [
+      for (final item in buildComposerOverflowToolSettingsItems(
+        l10n: l10n,
+        available: true,
+      ))
+        Padding(
+          padding: const EdgeInsets.only(top: Spacing.xxs),
+          child: ToggleTile(
+            glyph: _buildIconGlyph(
+              icon: item.iconFor(useCupertino: Platform.isIOS),
+              selected: false,
+              theme: theme,
+            ),
+            title: item.label,
+            subtitle: item.subtitle,
+            selected: false,
+            isAction: true,
+            // The composer's handler captures the owner before it dismisses
+            // this panel, so it runs synchronously from the tap.
+            onToggle: widget.onToolSettings!,
+            theme: theme,
+          ),
+        ),
+    ];
+  }
+
+  /// The Advanced "Compare models" command, built from the same item the
+  /// native iOS panel renders so both surfaces offer the identical action.
+  List<Widget> _buildCompareModelsTiles(AppLocalizations l10n) {
+    final theme = context.conduitTheme;
+    return [
+      for (final item in buildComposerOverflowComparisonItems(
+        l10n: l10n,
+        available: true,
+        hasMessage: widget.compareModelsHasMessage,
+      ))
+        Padding(
+          padding: const EdgeInsets.only(top: Spacing.xxs),
+          child: ToggleTile(
+            glyph: _buildIconGlyph(
+              icon: item.iconFor(useCupertino: Platform.isIOS),
+              selected: false,
+              theme: theme,
+            ),
+            title: item.label,
+            subtitle: item.subtitle,
+            selected: false,
+            isAction: true,
+            enabled: item.enabled,
+            onToggle: widget.onCompareModels!,
+            theme: theme,
+          ),
+        ),
+    ];
   }
 
   Widget _buildSectionLabel(String text) {
@@ -450,7 +675,7 @@ class _ComposerOverflowSheetState extends ConsumerState<ComposerOverflowSheet> {
       padding: const EdgeInsets.only(bottom: Spacing.xxs),
       child: Text(
         text,
-        style: AppTypography.labelStyle.copyWith(
+        style: AppTypography.labelSmallStyle.copyWith(
           color: context.conduitTheme.textSecondary.withValues(
             alpha: Alpha.strong,
           ),
@@ -473,24 +698,6 @@ class _ComposerOverflowSheetState extends ConsumerState<ComposerOverflowSheet> {
     );
   }
 
-  List _extractConfiguredServers(Map<String, dynamic>? settings, String key) {
-    if (settings == null) {
-      return const [];
-    }
-
-    final rootValue = settings[key];
-    if (rootValue is List) {
-      return rootValue;
-    }
-
-    final uiValue = settings['ui'];
-    if (uiValue is Map && uiValue[key] is List) {
-      return uiValue[key] as List;
-    }
-
-    return const [];
-  }
-
   bool _isServerEnabled(dynamic server) {
     if (server is! Map) {
       return false;
@@ -507,14 +714,6 @@ class _ComposerOverflowSheetState extends ConsumerState<ComposerOverflowSheet> {
     }
 
     return true;
-  }
-
-  String _directServerSelectionId(dynamic server, int index) {
-    final serverId = server is Map ? server['id']?.toString().trim() : null;
-    final suffix = serverId != null && serverId.isNotEmpty
-        ? serverId
-        : index.toString();
-    return 'direct_server:$suffix';
   }
 
   String _serverTitle(dynamic server, {required String fallbackPrefix}) {
@@ -569,68 +768,75 @@ class _ComposerOverflowSheetState extends ConsumerState<ComposerOverflowSheet> {
         return widget.onCameraCapture;
       case ComposerOverflowActionIds.web:
         return widget.onWebAttachment;
+      case ComposerOverflowActionIds.mcpContent:
+        return widget.onMcpContent;
       default:
         return null;
     }
   }
 
+  static const double _attachmentTileWidth = 78;
+  static const double _attachmentTileMaxWidth = 160;
+  static const double _attachmentTileHeight = 58;
+
+  /// Attach tile: a filled rounded square holding its icon and
+  /// label, so a row of them reads as one control group.
   Widget _buildAction({
     required ComposerOverflowItem item,
     VoidCallback? onTap,
   }) {
     final theme = context.conduitTheme;
     final bool enabled = onTap != null;
-    final Color iconColor = enabled ? theme.buttonPrimary : theme.iconDisabled;
-    final Color textColor = enabled
-        ? theme.sidebarForeground
-        : theme.sidebarForeground.withValues(alpha: Alpha.disabled);
+    final Color foreground = enabled ? theme.textPrimary : theme.iconDisabled;
+    final VoidCallback? handleTap = onTap == null
+        ? null
+        : () {
+            ConduitHaptics.lightImpact();
+            widget.onDismiss?.call();
+            Future.microtask(onTap);
+          };
 
-    return Opacity(
-      opacity: enabled ? 1.0 : Alpha.disabled,
-      child: ConduitCard(
-        padding: const EdgeInsets.symmetric(
-          horizontal: Spacing.xs,
-          vertical: Spacing.sm,
-        ),
-        onTap: onTap == null
-            ? null
-            : () {
-                ConduitHaptics.lightImpact();
-                Navigator.of(context).pop();
-                Future.microtask(onTap);
-              },
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                color: enabled
-                    ? iconColor.withValues(alpha: 0.1)
-                    : theme.surfaceContainer.withValues(alpha: 0.60),
-                borderRadius: BorderRadius.circular(AppBorderRadius.small),
-                border: Border.all(
-                  color: enabled
-                      ? iconColor.withValues(alpha: 0.2)
-                      : Colors.transparent,
-                  width: BorderWidth.thin,
-                ),
-              ),
-              alignment: Alignment.center,
-              child: Icon(
-                item.iconFor(useCupertino: Platform.isIOS),
-                color: iconColor,
-                size: IconSize.medium,
+    // The labelled node replaces the InkWell's, so it must carry the tap.
+    return Semantics(
+      button: true,
+      enabled: enabled,
+      label: item.label,
+      excludeSemantics: true,
+      onTap: handleTap,
+      child: Opacity(
+        opacity: enabled ? 1.0 : Alpha.disabled,
+        child: Material(
+          color: theme.surfaceContainer,
+          borderRadius: BorderRadius.circular(AppBorderRadius.md + 2),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: handleTap,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: Spacing.sm),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    item.iconFor(useCupertino: Platform.isIOS),
+                    color: foreground,
+                    size: IconSize.message,
+                  ),
+                  const SizedBox(height: Spacing.xxs),
+                  Text(
+                    item.label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: AppTypography.labelSmallStyle.copyWith(
+                      color: foreground,
+                      height: 1.1,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
               ),
             ),
-            const SizedBox(height: Spacing.xs),
-            Text(
-              item.label,
-              textAlign: TextAlign.center,
-              style: AppTypography.labelMediumStyle.copyWith(color: textColor),
-            ),
-          ],
+          ),
         ),
       ),
     );
@@ -643,6 +849,7 @@ class _ComposerOverflowSheetState extends ConsumerState<ComposerOverflowSheet> {
     required bool value,
     required ValueChanged<bool> onChanged,
     String? iconUrl,
+    bool enabled = true,
   }) {
     final theme = context.conduitTheme;
     final glyph = iconUrl != null && iconUrl.isNotEmpty
@@ -655,6 +862,7 @@ class _ComposerOverflowSheetState extends ConsumerState<ComposerOverflowSheet> {
       selected: value,
       onToggle: () => onChanged(!value),
       theme: theme,
+      enabled: enabled,
     );
   }
 
@@ -668,107 +876,7 @@ class _ComposerOverflowSheetState extends ConsumerState<ComposerOverflowSheet> {
       subtitle: item.subtitle,
       value: item.selected,
       onChanged: onChanged,
-    );
-  }
-
-  /// 3-state thinking control (On / Auto / Off), shown only for models that
-  /// expose the `thinking` capability. Tapping cycles the mode; the trailing
-  /// chip shows the current state. Mirrors the OpenWebUI web pill.
-  Widget? _buildThinkingTile(AppLocalizations l10n) {
-    final selectedModel = ref.watch(selectedModelProvider);
-    final thinkingCapable = selectedModel?.capabilities?['thinking'] == true;
-    if (!thinkingCapable) return null;
-
-    final theme = context.conduitTheme;
-    final mode = ref.watch(thinkingModeProvider);
-    final modeLabel = switch (mode) {
-      ThinkingMode.on => l10n.thinkingOn,
-      ThinkingMode.auto => l10n.thinkingAuto,
-      ThinkingMode.off => l10n.thinkingOff,
-    };
-    final active = mode != ThinkingMode.off;
-
-    return Semantics(
-      button: true,
-      label: '${l10n.thinkingTitle}: $modeLabel',
-      child: ConduitCard(
-        padding: const EdgeInsets.all(Spacing.md),
-        onTap: () {
-          ConduitHaptics.selectionClick();
-          final next = switch (mode) {
-            ThinkingMode.on => ThinkingMode.auto,
-            ThinkingMode.auto => ThinkingMode.off,
-            ThinkingMode.off => ThinkingMode.on,
-          };
-          ref.read(thinkingModeProvider.notifier).set(next);
-        },
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            _buildIconGlyph(
-              icon: Platform.isIOS
-                  ? CupertinoIcons.lightbulb
-                  : Icons.lightbulb_outline,
-              selected: active,
-              theme: theme,
-            ),
-            const SizedBox(width: Spacing.md),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    l10n.thinkingTitle,
-                    style: AppTypography.bodyMediumStyle.copyWith(
-                      color: theme.sidebarForeground,
-                      fontWeight: FontWeight.w600,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: Spacing.xs),
-                  Text(
-                    l10n.thinkingSubtitle,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: AppTypography.bodySmallStyle.copyWith(
-                      color: theme.sidebarForeground.withValues(alpha: 0.75),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: Spacing.sm),
-            Container(
-              padding: const EdgeInsets.symmetric(
-                horizontal: Spacing.sm,
-                vertical: Spacing.xs,
-              ),
-              decoration: BoxDecoration(
-                color: active
-                    ? theme.buttonPrimary.withValues(alpha: 0.12)
-                    : theme.surfaceContainer.withValues(alpha: 0.6),
-                borderRadius: BorderRadius.circular(AppBorderRadius.small),
-                border: Border.all(
-                  color: active
-                      ? theme.buttonPrimary.withValues(alpha: 0.3)
-                      : theme.dividerColor,
-                  width: BorderWidth.thin,
-                ),
-              ),
-              child: Text(
-                modeLabel,
-                style: AppTypography.labelMediumStyle.copyWith(
-                  color: active
-                      ? theme.buttonPrimary
-                      : theme.sidebarForeground.withValues(alpha: 0.75),
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
+      enabled: item.enabled,
     );
   }
 
@@ -797,21 +905,7 @@ class _ComposerOverflowSheetState extends ConsumerState<ComposerOverflowSheet> {
     required bool selected,
     required ConduitThemeExtension theme,
   }) {
-    final color = selected ? theme.buttonPrimary : theme.iconPrimary;
-    return Container(
-      width: 40,
-      height: 40,
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(AppBorderRadius.small),
-        border: Border.all(
-          color: color.withValues(alpha: 0.2),
-          width: BorderWidth.thin,
-        ),
-      ),
-      alignment: Alignment.center,
-      child: Icon(icon, color: color, size: IconSize.medium),
-    );
+    return Icon(icon, color: theme.iconPrimary, size: IconSize.message);
   }
 
   Widget _buildFilterGlyph({
@@ -819,27 +913,17 @@ class _ComposerOverflowSheetState extends ConsumerState<ComposerOverflowSheet> {
     required bool selected,
     required ConduitThemeExtension theme,
   }) {
-    final color = selected ? theme.buttonPrimary : theme.iconPrimary;
-    final fallback = Icon(
+    if (iconUrl != null && iconUrl.isNotEmpty) {
+      return ModelAvatar(
+        size: IconSize.message,
+        imageUrl: iconUrl,
+        label: null,
+      );
+    }
+    return Icon(
       Platform.isIOS ? CupertinoIcons.sparkles : Icons.auto_awesome,
-      color: color,
-      size: IconSize.medium,
-    );
-    return Container(
-      width: 40,
-      height: 40,
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(AppBorderRadius.small),
-        border: Border.all(
-          color: color.withValues(alpha: 0.2),
-          width: BorderWidth.thin,
-        ),
-      ),
-      alignment: Alignment.center,
-      child: iconUrl != null && iconUrl.isNotEmpty
-          ? ModelAvatar(size: 40, imageUrl: iconUrl, label: null)
-          : fallback,
+      color: theme.iconPrimary,
+      size: IconSize.message,
     );
   }
 }

@@ -1,10 +1,12 @@
 import 'package:flutter/widgets.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:riverpod/riverpod.dart';
 
-import '../../../core/models/chat_message.dart';
+import 'package:conduit_core/models/chat_message.dart';
 
-typedef AssistantResponseBuilder =
-    Widget Function(BuildContext context, AssistantResponseContext response);
+typedef AssistantResponseBuilder = Widget Function(
+  BuildContext context,
+  AssistantResponseContext response,
+);
 
 class AssistantResponseContext {
   const AssistantResponseContext({

@@ -1,6 +1,6 @@
 # Conduit fork → rebuild on upstream Conduit v4.2.0 — plan
 
-**Status:** approved by the owner 2026-10-16 with the recommended answers to R-1…R-12; in progress.
+**Status:** approved by the owner 2026-10-16 with the recommended answers to R-1…R-12; implemented on `saas-base` (rebuild on upstream v4.2.0, joined to the old history). Device E2E (§7.3) pending. Every fork hook in an upstream file is listed in `docs/FORK-INVENTORY.md`.
 **Replaces** the earlier in-place patch plan (Track A, `a13f04b7`), which assumed
 the app had to keep working on Open WebUI 0.9.2. The owner confirmed (2026-10-16)
 that nobody uses the app yet, so backward compatibility is not a requirement and
@@ -125,7 +125,7 @@ upstream v4.2.0 ──► main                (fast-forward; main is an ancestor
 | Flutter ≥ 3.47 / Dart ≥ 3.13 (upstream `pubspec.yaml:6-8`) | 3.44.2 / 3.12.2 at `/Users/smk/Dev/SDK/flutter`, shared with other checkouts | install **3.47.7** (current stable, Dart 3.13.5) as a **second** SDK next to it (R-7); use it by absolute path in the rebuild worktree |
 | submodules `third_party/katex`, `third_party/mermaid` (required by `pub get`) | not initialised | `git submodule update --init --depth 1` in the worktree; `openwebui-src`, `hermes-src` stay reference-only |
 | Android: AGP 9.2.1, Gradle 9.4.1, Kotlin 2.4.0, compileSdk 37, NDK 29.0.14206865, JDK 17+ | NDK 29.0.14206865 ✓, JDK 17.0.19 ✓, platforms up to 36.1 | install platform `android-37` |
-| iOS: Xcode with SPM enabled, iOS 16+ | Xcode licence not accepted | owner runs `sudo xcodebuild -license` once |
+| iOS: Xcode with SPM enabled, iOS 16+ | Xcode licence not accepted | owner runs `sudo xcodebuild -license` once. Until then, host-side gates run with a PATH shim that points `xcrun`/`clang`/… at the Command Line Tools SDK (the `objective_c` native-asset hook needs `xcrun`, and the hook runner passes only `PATH`); iOS builds wait for the licence |
 | Node (markdown web-safety check) | v22.23.1 ✓ | — |
 
 ## 6. Phases (after approval)

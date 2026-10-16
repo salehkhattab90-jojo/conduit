@@ -1,38 +1,172 @@
+import 'package:conduit/features/workspace/providers/workspace_capabilities_provider.dart';
+
 import 'dart:async';
 import 'dart:io' show File, Platform;
 
-import 'package:adaptive_platform_ui/adaptive_platform_ui.dart';
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart';
+import 'package:conduit/shared/widgets/platform_ui/platform_ui.dart';
+import 'package:dio/dio.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:conduit/core/services/haptic_service.dart';
+import 'package:fleather/fleather.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
+import 'package:share_plus/share_plus.dart';
 
 import 'package:conduit/l10n/app_localizations.dart';
-import '../../../core/database/app_database.dart';
-import '../../../core/database/database_provider.dart';
-import '../../../core/models/note.dart';
-import '../../../core/providers/app_providers.dart';
+
+import 'package:conduit_core/auth/api_auth_interceptor.dart';
+
+import 'package:conduit_core/database/app_database.dart';
+
+import 'package:conduit_core/database/database_provider.dart';
+
+import 'package:conduit_core/models/note.dart';
+
+import 'package:conduit_core/providers/app_providers.dart';
+
 import '../../../core/services/ios_native_dropdown_bridge.dart';
-import '../../../core/widgets/error_boundary.dart';
+
+import 'package:conduit_core/sync/sync_engine.dart';
+
+import 'package:conduit_core/features/notes/services/deleted_note_draft_recovery.dart';
+import 'package:conduit_core/features/notes/services/note_ai_actions.dart';
+import 'package:conduit_core/features/notes/services/note_attachments_controller.dart';
+import 'package:conduit_core/features/notes/services/note_dictation.dart';
+import 'package:conduit_core/features/notes/utils/note_access.dart';
+import 'package:conduit_core/features/sharing/providers/principal_lookup.dart';
+import 'package:conduit_core/features/workspace/models/workspace_common.dart'
+    show WorkspacePrincipalType;
+import 'package:conduit_core/features/notes/utils/note_persistence.dart';
+
+import '../utils/note_context_actions.dart';
+
+import 'package:conduit_core/utils/debug_logger.dart';
+
 import '../../../shared/theme/conduit_input_styles.dart';
 import '../../../shared/theme/theme_extensions.dart';
 import '../../../shared/utils/adaptive_glass.dart';
 import '../../../shared/widgets/adaptive_route_shell.dart';
 import '../../../shared/widgets/adaptive_toolbar_components.dart';
 import '../../../shared/widgets/chrome_gradient_fade.dart';
-import '../../../shared/widgets/responsive_drawer_layout.dart';
+import '../../../shared/widgets/conduit_components.dart';
+import '../../../shared/widgets/horizontal_gesture_ownership.dart';
+import '../../../shared/widgets/sidebar_layout_contract.dart';
 import '../../../shared/widgets/conduit_loading.dart';
 import '../../../shared/widgets/middle_ellipsis_text.dart';
 import '../../../shared/widgets/themed_dialogs.dart';
 import '../../../shared/widgets/themed_sheets.dart';
+
+import 'package:conduit_core/features/auth/providers/unified_auth_providers.dart';
+
 import '../../chat/services/voice_input_service.dart';
 import '../providers/notes_providers.dart';
+import '../services/note_audio_upload_service.dart';
+import '../utils/note_document_codec.dart';
 import '../widgets/audio_player_dialog.dart';
 import '../widgets/audio_recording_overlay.dart';
 import '../widgets/note_file_attachment.dart';
+import '../widgets/note_floating_actions.dart';
+
+/// Builds the rich-note editor theme from Conduit's semantic color tokens.
+///
+/// Fleather's fallback block styles derive their colors from a separate
+/// [DefaultTextStyle]. Every block type must therefore be mapped explicitly so
+/// headings and lists remain readable in both brightness modes.
+FleatherThemeData buildNoteEditorFleatherTheme(BuildContext context) {
+  final theme = context.conduitTheme;
+  final fallback = FleatherThemeData.fallback(context);
+  final base = AppTypography.bodyLargeStyle.copyWith(
+    color: theme.textPrimary,
+    height: 1.8,
+  );
+
+  TextStyle blockStyle(TextStyle source, {Color? color}) {
+    return base
+        .merge(source)
+        .copyWith(
+          color: color ?? theme.textPrimary,
+          fontFamily: AppTypography.fontFamily,
+        );
+  }
+
+  TextBlockTheme themedBlock(
+    TextBlockTheme source, {
+    TextStyle? style,
+    BoxDecoration? decoration,
+  }) {
+    return TextBlockTheme(
+      style: style ?? blockStyle(source.style),
+      spacing: source.spacing,
+      lineSpacing: source.lineSpacing,
+      decoration: decoration ?? source.decoration,
+    );
+  }
+
+  TextStyle inlineCodeStyle(TextStyle? source) {
+    return (source ?? fallback.inlineCode.style).copyWith(
+      color: theme.codeText,
+      fontFamily: AppTypography.monospaceFontFamily,
+    );
+  }
+
+  return fallback.copyWith(
+    paragraph: TextBlockTheme(
+      style: base,
+      spacing: const VerticalSpacing(top: 0, bottom: 6),
+    ),
+    heading1: themedBlock(fallback.heading1),
+    heading2: themedBlock(fallback.heading2),
+    heading3: themedBlock(fallback.heading3),
+    heading4: themedBlock(fallback.heading4),
+    heading5: themedBlock(fallback.heading5),
+    heading6: themedBlock(fallback.heading6),
+    lists: themedBlock(fallback.lists, style: base),
+    quote: themedBlock(
+      fallback.quote,
+      style: blockStyle(fallback.quote.style, color: theme.textSecondary),
+      decoration: BoxDecoration(
+        border: BorderDirectional(
+          start: BorderSide(width: 4, color: theme.dividerColor),
+        ),
+      ),
+    ),
+    code: themedBlock(
+      fallback.code,
+      style: fallback.code.style.copyWith(
+        color: theme.codeText,
+        fontFamily: AppTypography.monospaceFontFamily,
+      ),
+      decoration: BoxDecoration(
+        color: theme.codeBackground,
+        border: Border.all(color: theme.codeBorder),
+        borderRadius:
+            fallback.code.decoration?.borderRadius ?? BorderRadius.circular(2),
+      ),
+    ),
+    inlineCode: InlineCodeThemeData(
+      style: inlineCodeStyle(fallback.inlineCode.style),
+      heading1: inlineCodeStyle(fallback.inlineCode.heading1),
+      heading2: inlineCodeStyle(fallback.inlineCode.heading2),
+      heading3: inlineCodeStyle(fallback.inlineCode.heading3),
+      backgroundColor: theme.codeBackground,
+      radius: fallback.inlineCode.radius,
+    ),
+    horizontalRuleThemeData: HorizontalRuleThemeData(
+      height: fallback.horizontalRule.height,
+      thickness: fallback.horizontalRule.thickness,
+      color: theme.dividerColor,
+    ),
+    bold: const TextStyle(fontWeight: FontWeight.bold),
+    italic: const TextStyle(fontStyle: FontStyle.italic),
+    link: TextStyle(
+      color: theme.buttonPrimary,
+      decoration: TextDecoration.underline,
+    ),
+  );
+}
 
 /// Page for editing a note with OpenWebUI-style layout.
 class NoteEditorPage extends ConsumerStatefulWidget {
@@ -46,7 +180,8 @@ class NoteEditorPage extends ConsumerStatefulWidget {
 
 class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
   final TextEditingController _titleController = TextEditingController();
-  final TextEditingController _contentController = TextEditingController();
+  FleatherController? _contentController;
+  StreamSubscription<ParchmentChange>? _contentChangesSubscription;
   final FocusNode _titleFocusNode = FocusNode(debugLabel: 'note_title');
   final FocusNode _contentFocusNode = FocusNode(debugLabel: 'note_content');
   final ScrollController _scrollController = ScrollController();
@@ -58,58 +193,265 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
   bool _isGeneratingTitle = false;
   bool _isEnhancing = false;
   bool _isRecording = false;
-  bool _isUploadingAudio = false;
   Note? _note;
+
+  // The session the page opened under. A retained provider can rebuild for
+  // another account while this page is alive, so loads, saves and destructive
+  // actions are judged against these rather than against whatever is current
+  // when they run.
+  late final Object? _openApi;
+  late final AppDatabase? _openDb;
+  late final Object _openAuthEpoch;
+  late final String? _openUserId;
+
+  /// A save was refused because edit access is gone. The typed text stays in
+  /// the editor, which turns read-only, until the user saves it as their own
+  /// note or discards it.
+  bool _writeRefused = false;
+
+  /// The server refused to show the note (403), which is not a missing note.
+  bool _loadForbidden = false;
+
+  /// The owner of a note shared read-only with this account, looked up by id
+  /// when the note itself does not name them. [_ownerLookupFor] is the owner
+  /// id asked about, so each owner is looked up once.
+  String? _ownerLookupFor;
+  String? _resolvedOwnerName;
+
+  /// The account changed after the page opened, so nothing it loads or saves
+  /// belongs to the page any more.
+  bool _sessionChanged = false;
+
+  late final ProviderContainer _container;
+  late final NoteAttachmentsController _attachments;
+  late final DeletedNoteDraftRecovery _recovery;
 
   // Voice input
   VoiceInputService? _voiceService;
   StreamSubscription<String>? _voiceSub;
-  String _voiceBaseText = '';
+  // The in-progress dictation run: each (cumulative) transcript update
+  // replaces the previous one without disturbing the rest of the document.
+  NoteDictationRun? _dictationRun;
+  // The listening run this editor started. The voice service is shared with
+  // the chat composer and holds one run at a time, so the editor stops it only
+  // while its own run is still the current one. Compared with `==`: reading a
+  // controller's `stream` twice gives two wrappers that are equal (same
+  // controller) but not identical, and each run has its own controller.
+  Stream<String>? _dictationStream;
+
+  // Markdown snapshot of the last saved/loaded document, used to detect real
+  // edits. Compared against the re-encoded current document so opening a note
+  // never registers as a spurious change from non-semantic markdown
+  // normalisation.
+  String _savedMarkdown = '';
 
   static final _whitespacePattern = RegExp(r'\s+');
-  static final _boldPattern = RegExp(r'\*\*(.+?)\*\*');
-  static final _italicPattern = RegExp(r'\*(.+?)\*');
   int _cachedWordCount = 0;
 
+  // Cached Fleather theme. Derived from the app theme via the inherited
+  // context, so it is (re)computed in didChangeDependencies rather than on
+  // every build — the editor and toolbar both consume it each frame.
+  FleatherThemeData? _fleatherTheme;
+
+  /// Plain text of the current document (empty when no note is loaded).
+  String get _contentPlainText =>
+      _contentController?.document.toPlainText().trimRight() ?? '';
+
+  /// Markdown encoding of the current document.
+  String get _contentMarkdown {
+    final controller = _contentController;
+    return controller == null ? '' : markdownFromDocument(controller.document);
+  }
+
   void _updateWordCount() {
-    final text = _contentController.text.trim();
+    final text = _contentPlainText.trim();
     _cachedWordCount = text.isEmpty ? 0 : text.split(_whitespacePattern).length;
   }
 
-  int get _charCount => _contentController.text.length;
+  int get _charCount => _contentPlainText.length;
 
   @override
   void initState() {
     super.initState();
+    _container = ProviderScope.containerOf(context, listen: false);
+    _openApi = ref.read(apiServiceProvider);
+    _openDb = ref.read(appDatabaseProvider);
+    _openAuthEpoch = ref.read(openWebUiAuthSessionEpochProvider);
+    _openUserId = ref.read(currentUserProvider2)?.id;
+    _attachments = NoteAttachmentsController(
+      container: _container,
+      store: createNoteAudioUploadStore(),
+      noteId: widget.noteId,
+      currentNote: () => _note,
+      resolvedTitle: _resolvedTitle,
+      onNoteUpdated: (note) {
+        if (mounted) setState(() => _note = note);
+      },
+      onChanged: () {
+        if (mounted) setState(() {});
+      },
+      onNotice: _onAudioNotice,
+    )..start();
+    _recovery = DeletedNoteDraftRecovery(
+      container: _container,
+      noteId: widget.noteId,
+      attachments: _attachments,
+      currentNote: () => _note,
+      readDraft: () =>
+          (title: _titleController.text, markdown: _contentMarkdown),
+      untitledTitle: () => AppLocalizations.of(context)!.untitled,
+      isOpen: () => mounted,
+      hasUnsavedChanges: () => _hasChanges,
+      cancelPendingSave: () => _saveDebounce?.cancel(),
+      scheduleSaveAfter: (delay, action) {
+        _saveDebounce?.cancel();
+        _saveDebounce = Timer(delay, action);
+      },
+      saveSoon: _debounceSave,
+      onRecovered:
+          ({
+            required note,
+            required savedMarkdown,
+            required changedDuringRecovery,
+          }) {
+            setState(() {
+              _note = note;
+              _savedMarkdown = savedMarkdown;
+              _hasChanges = changedDuringRecovery;
+            });
+          },
+      onFailure: () => _showError(AppLocalizations.of(context)!.errorMessage),
+    )..start();
     _loadNote();
     _titleController.addListener(_onContentChanged);
-    _contentController.addListener(_onContentChanged);
+    // The content controller is created once the note is loaded; its listener
+    // is wired up in [_installContentDocument].
     // Rebuild when title focus changes to show/hide the generate title button
     _titleFocusNode.addListener(_onTitleFocusChanged);
+    // Rebuild to show/hide the formatting toolbar as the editor gains/loses
+    // focus.
+    _contentFocusNode.addListener(_onContentFocusChanged);
   }
 
   void _onTitleFocusChanged() {
     if (mounted) setState(() {});
   }
 
+  void _onContentFocusChanged() {
+    if (!mounted) return;
+    // When the editor loses focus (e.g. the user taps away or starts
+    // navigating elsewhere), flush any pending edit immediately instead of
+    // waiting out the debounce, so a quick format-then-leave isn't dropped.
+    if (!_contentFocusNode.hasFocus && _hasChanges) {
+      _saveDebounce?.cancel();
+      unawaited(_autoSave());
+    }
+    setState(() {});
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _fleatherTheme = _buildFleatherTheme(context);
+  }
+
+  /// Replaces the content editor's controller with one backed by [document],
+  /// disposing the previous controller. Used on initial load and whenever the
+  /// whole document is swapped (e.g. AI enhancement).
+  ///
+  /// Does not touch [_savedMarkdown]: callers that load already-persisted
+  /// content reset the baseline themselves, while callers that introduce new
+  /// content (enhancement) leave it so the change is detected and auto-saved.
+  void _installContentDocument(ParchmentDocument document) {
+    final previous = _contentController;
+    final controller = FleatherController(document: document);
+    _contentChangesSubscription?.cancel();
+    _contentChangesSubscription = document.changes.listen(
+      (_) => _onContentChanged(),
+    );
+    _contentController = controller;
+    previous?.dispose();
+  }
+
   @override
   void dispose() {
     _saveDebounce?.cancel();
     _voiceSub?.cancel();
-    _voiceService?.stopListening();
+    _recovery.dispose();
+    _attachments.dispose();
+    // The service is the app-wide provider instance shared with the chat
+    // composer: never dispose it here, and only stop it when this editor's
+    // own dictation run is still the active listener.
+    if (_isRecording && _ownsDictationRun) _voiceService?.stopListening();
     _titleController.dispose();
-    _contentController.dispose();
+    _contentChangesSubscription?.cancel();
+    _contentController?.dispose();
     _titleFocusNode.removeListener(_onTitleFocusChanged);
     _titleFocusNode.dispose();
+    _contentFocusNode.removeListener(_onContentFocusChanged);
     _contentFocusNode.dispose();
     _scrollController.dispose();
     super.dispose();
   }
 
-  bool _isCurrentNoteSession({required Object? api, required Object? db}) {
-    if (!identical(ref.read(apiServiceProvider), api)) return false;
-    final currentDb = ref.read(appDatabaseProvider);
-    return db == null ? currentDb == null : identical(currentDb, db);
+  bool _isCurrentNoteSession({
+    required Object? api,
+    required Object? db,
+    Object? authEpoch,
+  }) => isCurrentNoteEditorSession(
+    ref,
+    api: api,
+    db: db as AppDatabase?,
+    authEpoch: authEpoch,
+  );
+
+  /// Whether the page is still in the session it opened under. Unlike
+  /// [_isCurrentNoteSession] it takes nothing from the moment of the call, so
+  /// an account switched in between cannot pass for the one that opened it.
+  bool get _isOpenSessionCurrent => _isCurrentNoteSession(
+    api: _openApi,
+    db: _openDb,
+    authEpoch: _openAuthEpoch,
+  );
+
+  /// Editing is off unless the note is known to be writable by the account
+  /// that opened it, or a save was refused.
+  bool get _readOnly =>
+      _writeRefused ||
+      _note == null ||
+      noteWriteAccess(_note!, accountId: _openUserId) !=
+          NoteWriteAccess.allowed;
+
+  String _resolvedTitle() {
+    final title = _titleController.text.trim();
+    return title.isEmpty ? AppLocalizations.of(context)!.untitled : title;
+  }
+
+  void _onAudioNotice(NoteAudioNotice notice) {
+    if (!mounted) return;
+    final l10n = AppLocalizations.of(context)!;
+    switch (notice) {
+      case NoteAudioNotice.recordingSaved:
+        ConduitHaptics.mediumImpact();
+        AdaptiveSnackBar.show(
+          context,
+          message: l10n.audioRecordingSaved,
+          type: AdaptiveSnackBarType.success,
+          duration: const Duration(seconds: 2),
+        );
+      case NoteAudioNotice.uploadFailed:
+        _showError(l10n.failedToUploadAudio);
+      case NoteAudioNotice.removed:
+        ConduitHaptics.lightImpact();
+        AdaptiveSnackBar.show(
+          context,
+          message: l10n.fileRemoved,
+          type: AdaptiveSnackBarType.success,
+          duration: const Duration(seconds: 2),
+        );
+      case NoteAudioNotice.error:
+        _showError(l10n.errorMessage);
+    }
   }
 
   Future<void> _loadNote() async {
@@ -119,6 +461,15 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
       final note = await _readNoteById(widget.noteId);
 
       if (mounted) {
+        // The provider may have rebuilt for another account while loading; its
+        // note is not this page's to show.
+        if (!_isOpenSessionCurrent) {
+          setState(() {
+            _isLoading = false;
+            _sessionChanged = true;
+          });
+          return;
+        }
         if (note == null) {
           setState(() => _isLoading = false);
           return;
@@ -126,14 +477,24 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
         setState(() {
           _note = note;
           _titleController.text = note.title;
-          _contentController.text = note.markdownContent;
+          _installContentDocument(documentFromMarkdown(note.markdownContent));
+          _savedMarkdown = _contentMarkdown;
           _updateWordCount();
           _isLoading = false;
           _hasChanges = false;
         });
+        unawaited(_attachments.loadPending());
       }
     } catch (e) {
       if (mounted) {
+        // A refusal is not a deleted note: say so, and show nothing else.
+        if (e is DioException && e.response?.statusCode == 403) {
+          setState(() {
+            _isLoading = false;
+            _loadForbidden = true;
+          });
+          return;
+        }
         setState(() => _isLoading = false);
         _showError(e.toString());
       }
@@ -142,21 +503,26 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
 
   Future<Note?> _readNoteById(String noteId) {
     final provider = noteByIdProvider(noteId);
+    // An invalidated provider keeps its previous value or error while it
+    // recomputes (e.g. right after this note was saved), so only a state that
+    // is no longer loading is the result for this opening.
     final current = ref.read(provider);
-    if (current.hasValue) {
-      return Future<Note?>.value(current.value);
-    }
-    if (current.hasError) {
-      return Future<Note?>.error(
-        current.error ?? StateError('Failed to load note'),
-      );
+    if (!current.isLoading) {
+      if (current.hasValue) {
+        return Future<Note?>.value(current.value);
+      }
+      if (current.hasError) {
+        return Future<Note?>.error(
+          current.error ?? StateError('Failed to load note'),
+        );
+      }
     }
 
     final completer = Completer<Note?>();
     ProviderSubscription<AsyncValue<Note?>>? subscription;
 
     void completeFromState(AsyncValue<Note?> state) {
-      if (completer.isCompleted) return;
+      if (completer.isCompleted || state.isLoading) return;
       if (state.hasValue) {
         completer.complete(state.value);
       } else if (state.hasError) {
@@ -176,52 +542,79 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
   }
 
   void _onContentChanged() {
-    if (!mounted || _isLoading) return;
+    if (!mounted || _isLoading || _note == null || _readOnly) return;
 
-    // Check if content actually changed from the saved note
-    final titleChanged = _note != null && _titleController.text != _note!.title;
-    final contentChanged =
-        _note != null && _contentController.text != _note!.markdownContent;
-    final hasRealChanges = titleChanged || contentChanged;
-
-    if (hasRealChanges != _hasChanges) {
-      setState(() => _hasChanges = hasRealChanges);
+    // Optimistically flag the note dirty so the unsaved indicator reacts
+    // immediately. The authoritative comparison — which re-encodes the document
+    // to markdown — is deferred to the debounced auto-save so we never run a
+    // full delta->markdown traversal on every keystroke.
+    if (!_hasChanges) {
+      setState(() => _hasChanges = true);
     }
-
-    if (hasRealChanges) {
-      _debounceSave();
-    }
+    _debounceSave();
     _updateWordCount();
   }
 
   void _debounceSave() {
     _saveDebounce?.cancel();
-    _saveDebounce = Timer(const Duration(milliseconds: 800), _autoSave);
+    _saveDebounce = Timer(
+      const Duration(milliseconds: 800),
+      _recovery.pendingRetry ?? _autoSave,
+    );
+  }
+
+  /// Handles a back-navigation attempt. Reached only when [canPop] was false,
+  /// i.e. there is a pending edit: flush it while still mounted (so the durable
+  /// write doesn't race teardown), then pop programmatically.
+  Future<void> _onEditorPopInvoked(bool didPop, Object? result) async {
+    if (didPop) return;
+    _saveDebounce?.cancel();
+    await _autoSave();
+    // Keep the editor open if persistence failed. In particular, a remotely
+    // deleted note needs its recovery retry to remain mounted rather than
+    // silently discarding the draft during navigation.
+    if (mounted) {
+      if (_hasChanges) {
+        _recovery.pendingRetry?.call();
+      } else if (Navigator.of(context).canPop()) {
+        Navigator.of(context).pop(result);
+      }
+    }
   }
 
   Future<void> _autoSave() async {
-    if (_note == null || !_hasChanges) return;
+    final note = _note;
+    if (note == null) return;
+
+    // Authoritative dirty check: compare the re-encoded markdown against the
+    // snapshot taken on load/save so markdown normalisation on open never
+    // registers as an edit, and a no-op edit never hits the server.
+    final titleChanged = _titleController.text != note.title;
+    final contentChanged = _contentMarkdown != _savedMarkdown;
+    if (!titleChanged && !contentChanged) {
+      if (mounted && _hasChanges) {
+        setState(() => _hasChanges = false);
+      }
+      return;
+    }
     await _saveNote(showFeedback: false);
   }
 
-  /// Builds the note `data` PATCH for an update: only the fields the editor
-  /// actually changes — `content`, plus `files` when [files] is provided. It
+  /// Builds the note `data` PATCH for an update: `content` when
+  /// [includeContent] is true, plus `files` when [files] is provided. It
   /// deliberately does NOT spread the (possibly stale) in-memory `_note.data`:
   /// `durableUpdateNote` merges this patch onto the CURRENT DB row, which
   /// preserves server-managed fields like `versions` (a pull may have added
   /// entries while the editor was open — spreading the editor's stale copy here
   /// would revert them on the next save).
   Map<String, dynamic> _composeUpdatedNoteData({
-    required String markdown,
     List<Map<String, dynamic>>? files,
+    bool includeContent = true,
   }) {
-    final data = <String, dynamic>{
-      'content': <String, dynamic>{
-        'json': null,
-        'html': _markdownToHtml(markdown),
-        'md': markdown,
-      },
-    };
+    final data = <String, dynamic>{};
+    if (includeContent) {
+      data.addAll(noteContentData(_contentMarkdown));
+    }
     if (files != null) {
       data['files'] = files;
     }
@@ -242,36 +635,43 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
     required AppDatabase? db,
     required String title,
     required Map<String, dynamic> data,
+    Object? authEpoch,
+    ApiAuthSnapshot? authSnapshot,
+    CancelToken? cancelToken,
   }) async {
-    if (!_isCurrentNoteSession(api: api, db: db)) return null;
-    if (db != null) {
-      return durableUpdateNote(
-        ref,
-        db,
-        id: widget.noteId,
-        title: title,
-        data: data,
-      );
-    }
-    // Session confirmed current, so the live API equals the captured one.
-    final currentApi = ref.read(apiServiceProvider);
-    if (currentApi == null) return null;
-    final note = Note.fromJson(
-      await currentApi.updateNote(widget.noteId, title: title, data: data),
+    return persistNoteUpdate(
+      ref,
+      noteId: widget.noteId,
+      writeId: _note?.id,
+      api: api,
+      db: db,
+      title: title,
+      data: data,
+      authEpoch: authEpoch,
+      // The account that opened the page, not whoever is active at Save.
+      accountId: _openUserId,
+      authSnapshot: authSnapshot,
+      cancelToken: cancelToken,
+      isStillOpen: () => mounted,
     );
-    if (mounted && _isCurrentNoteSession(api: api, db: db)) {
-      ref.read(notesListProvider.notifier).updateNote(note, sourceDb: db);
-    }
-    return note;
   }
 
   Future<void> _saveNote({bool showFeedback = true}) async {
-    if (_note == null) return;
+    if (_note == null || _readOnly) return;
+
+    // An account switched since the page opened must not receive this edit,
+    // and the text stays where it is rather than being retried under it.
+    if (!_isOpenSessionCurrent) {
+      _saveDebounce?.cancel();
+      setState(() => _sessionChanged = true);
+      _showError(AppLocalizations.of(context)!.noteSessionChangedNotice);
+      return;
+    }
 
     setState(() => _isSaving = true);
 
-    final api = ref.read(apiServiceProvider);
-    final db = ref.read(appDatabaseProvider);
+    final api = _openApi;
+    final db = _openDb;
     if (api == null && db == null) {
       setState(() => _isSaving = false);
       return;
@@ -279,11 +679,11 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
 
     try {
       final title = _titleController.text.trim();
-      final content = _contentController.text;
 
       // Preserve existing note data (versions, attached files) — only the
       // content changes here.
-      final data = _composeUpdatedNoteData(markdown: content);
+      final savedMarkdown = _contentMarkdown;
+      final data = _composeUpdatedNoteData();
 
       final resolvedTitle = title.isEmpty
           ? AppLocalizations.of(context)!.untitled
@@ -293,17 +693,22 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
         db: db,
         title: resolvedTitle,
         data: data,
+        authEpoch: _openAuthEpoch,
       );
 
       if (mounted) {
-        if (!_isCurrentNoteSession(api: api, db: db)) {
-          setState(() => _isSaving = false);
+        if (!_isOpenSessionCurrent) {
+          setState(() {
+            _isSaving = false;
+            _sessionChanged = true;
+          });
           return;
         }
 
         if (updatedNote != null) {
           setState(() {
             _note = updatedNote;
+            _savedMarkdown = savedMarkdown;
             _isSaving = false;
             _hasChanges = false;
           });
@@ -315,52 +720,22 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
           setState(() => _isSaving = false);
         }
       }
+    } on NoteWriteDeniedException {
+      // Access went away since the note loaded. Keep the draft on screen,
+      // stop autosaving it, and leave the choice to the user.
+      _saveDebounce?.cancel();
+      if (mounted) {
+        setState(() {
+          _isSaving = false;
+          _writeRefused = true;
+        });
+      }
     } catch (e) {
       if (mounted) {
         setState(() => _isSaving = false);
         _showError(e.toString());
       }
     }
-  }
-
-  String _markdownToHtml(String markdown) {
-    final paragraphs = markdown.split('\n\n');
-    final html = paragraphs
-        .map((p) {
-          if (p.trim().isEmpty) return '';
-          if (p.startsWith('# ')) {
-            return '<h1>${_escapeHtml(p.substring(2))}</h1>';
-          }
-          if (p.startsWith('## ')) {
-            return '<h2>${_escapeHtml(p.substring(3))}</h2>';
-          }
-          if (p.startsWith('### ')) {
-            return '<h3>${_escapeHtml(p.substring(4))}</h3>';
-          }
-          // Escape entire paragraph first to prevent XSS, then apply
-          // markdown formatting replacements on the escaped text.
-          var text = _escapeHtml(p);
-          text = text.replaceAllMapped(
-            _boldPattern,
-            (m) => '<strong>${m.group(1)!}</strong>',
-          );
-          text = text.replaceAllMapped(
-            _italicPattern,
-            (m) => '<em>${m.group(1)!}</em>',
-          );
-          return '<p>$text</p>';
-        })
-        .join('\n');
-    return html;
-  }
-
-  String _escapeHtml(String text) {
-    return text
-        .replaceAll('&', '&amp;')
-        .replaceAll('<', '&lt;')
-        .replaceAll('>', '&gt;')
-        .replaceAll('"', '&quot;')
-        .replaceAll("'", '&#39;');
   }
 
   void _showError(String message) {
@@ -373,33 +748,58 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
   }
 
   Future<void> _deleteNote() async {
-    if (_note == null) return;
+    final note = _note;
+    if (note == null) return;
 
     final l10n = AppLocalizations.of(context)!;
     final confirmed = await ThemedDialogs.confirm(
       context,
       title: l10n.deleteNoteTitle,
       message: l10n.deleteNoteMessage(
-        _note!.title.isEmpty ? l10n.untitled : _note!.title,
+        note.title.isEmpty ? l10n.untitled : note.title,
       ),
       confirmText: l10n.delete,
       isDestructive: true,
     );
 
-    if (confirmed && mounted) {
+    // The dialog outlives the tap; an account switched while it was open must
+    // not delete the note under another identity.
+    if (confirmed && mounted && _isOpenSessionCurrent) {
       ConduitHaptics.mediumImpact();
       final success = await ref
           .read(noteDeleterProvider.notifier)
-          .deleteNote(widget.noteId);
+          .deleteNote(note.id);
       if (success && mounted) {
         context.go('/chat');
       }
     }
   }
 
+  /// Opens the note's access sheet. The editor's own opening session must
+  /// still be the active one; the sheet then captures the same session again
+  /// for the share operation itself.
+  Future<void> _shareNote() async {
+    final note = _note;
+    if (note == null || _readOnly) return;
+    if (!_isOpenSessionCurrent) {
+      _showError(AppLocalizations.of(context)!.noteSessionChangedNotice);
+      return;
+    }
+    final saved = await shareNote(context, ref, note);
+    if (saved == null || !mounted || !_isOpenSessionCurrent) return;
+    // The server's answer carries the account's write access, which a save can
+    // change; the editor follows it.
+    setState(() {
+      _note = _note?.copyWith(
+        writeAccess: saved.writeAccess ?? _note?.writeAccess,
+        accessGrants: saved.rawGrants,
+      );
+    });
+  }
+
   Future<void> _togglePin() async {
     final note = _note;
-    if (note == null) {
+    if (note == null || !_isOpenSessionCurrent) {
       return;
     }
 
@@ -414,48 +814,29 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
     ConduitHaptics.selectionClick();
   }
 
-  // Get the selected model ID for AI operations
-  String? _getSelectedModelId() {
-    final selectedModel = ref.read(selectedModelProvider);
-    return selectedModel?.id;
-  }
-
   // AI title generation
   Future<void> _generateTitle() async {
-    if (_note == null || _isGeneratingTitle) return;
-    final content = _contentController.text.trim();
-    if (content.isEmpty) {
-      _showError(AppLocalizations.of(context)!.noContentToGenerateTitle);
-      return;
-    }
-
-    final modelId = _getSelectedModelId();
-    if (modelId == null) {
-      _showError(AppLocalizations.of(context)!.noModelSelected);
-      return;
-    }
+    if (_note == null || _isGeneratingTitle || _readOnly) return;
+    final l10n = AppLocalizations.of(context)!;
 
     setState(() => _isGeneratingTitle = true);
     ConduitHaptics.lightImpact();
-
-    final api = ref.read(apiServiceProvider);
-    if (api == null) {
-      setState(() => _isGeneratingTitle = false);
-      return;
-    }
-
     try {
-      final generatedTitle = await api.generateNoteTitle(
-        content,
-        modelId: modelId,
-      );
-      if (mounted && generatedTitle != null && generatedTitle.isNotEmpty) {
-        _titleController.text = generatedTitle;
-        ConduitHaptics.mediumImpact();
-      }
-    } catch (e) {
-      if (mounted) {
-        _showError(AppLocalizations.of(context)!.failedToGenerateTitle);
+      final result = await generateNoteTitle(_container, _contentMarkdown);
+      if (!mounted) return;
+      switch (result.outcome) {
+        case NoteAiOutcome.done:
+          _titleController.text = result.text!;
+          ConduitHaptics.mediumImpact();
+        case NoteAiOutcome.noContent:
+          _showError(l10n.noContentToGenerateTitle);
+        case NoteAiOutcome.noModel:
+          _showError(l10n.noModelSelected);
+        case NoteAiOutcome.failed:
+          _showError(l10n.failedToGenerateTitle);
+        case NoteAiOutcome.unavailable:
+        case NoteAiOutcome.empty:
+          break;
       }
     } finally {
       if (mounted) {
@@ -466,46 +847,40 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
 
   // AI content enhancement
   Future<void> _enhanceContent() async {
-    if (_note == null || _isEnhancing) return;
-    final content = _contentController.text.trim();
-    if (content.isEmpty) {
-      _showError(AppLocalizations.of(context)!.noContentToEnhance);
-      return;
-    }
-
-    final modelId = _getSelectedModelId();
-    if (modelId == null) {
-      _showError(AppLocalizations.of(context)!.noModelSelected);
-      return;
-    }
+    if (_note == null || _isEnhancing || _readOnly) return;
+    final l10n = AppLocalizations.of(context)!;
 
     setState(() => _isEnhancing = true);
     ConduitHaptics.lightImpact();
-
-    final api = ref.read(apiServiceProvider);
-    if (api == null) {
-      setState(() => _isEnhancing = false);
-      return;
-    }
-
     try {
-      final enhancedContent = await api.enhanceNoteContent(
-        content,
-        modelId: modelId,
-      );
-      if (mounted && enhancedContent != null && enhancedContent.isNotEmpty) {
-        _contentController.text = enhancedContent;
-        ConduitHaptics.mediumImpact();
-        AdaptiveSnackBar.show(
-          context,
-          message: AppLocalizations.of(context)!.noteEnhanced,
-          type: AdaptiveSnackBarType.success,
-          duration: const Duration(seconds: 2),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        _showError(AppLocalizations.of(context)!.failedToEnhanceNote);
+      final result = await enhanceNote(_container, _contentMarkdown);
+      if (!mounted) return;
+      switch (result.outcome) {
+        case NoteAiOutcome.done:
+          setState(() {
+            _installContentDocument(documentFromMarkdown(result.text!));
+          });
+          // _installContentDocument deliberately leaves _savedMarkdown
+          // untouched, so the enhanced content now differs from the saved
+          // baseline; re-run change detection to flag the enhancement for
+          // auto-save.
+          _onContentChanged();
+          ConduitHaptics.mediumImpact();
+          AdaptiveSnackBar.show(
+            context,
+            message: l10n.noteEnhanced,
+            type: AdaptiveSnackBarType.success,
+            duration: const Duration(seconds: 2),
+          );
+        case NoteAiOutcome.noContent:
+          _showError(l10n.noContentToEnhance);
+        case NoteAiOutcome.noModel:
+          _showError(l10n.noModelSelected);
+        case NoteAiOutcome.failed:
+          _showError(l10n.failedToEnhanceNote);
+        case NoteAiOutcome.unavailable:
+        case NoteAiOutcome.empty:
+          break;
       }
     } finally {
       if (mounted) {
@@ -524,7 +899,10 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
   }
 
   Future<void> _startDictation() async {
-    _voiceService ??= VoiceInputService(api: ref.read(apiServiceProvider));
+    if (_readOnly) return;
+    // Use the shared service, as the chat composer does, so dictation honours
+    // the user's speech-to-text preference (e.g. server-only) and locale.
+    _voiceService ??= ref.read(voiceInputServiceProvider);
 
     try {
       final ok = await _voiceService!.initialize();
@@ -535,11 +913,40 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
       }
 
       final stream = await _voiceService!.beginListening();
-      if (!mounted) return;
+      if (!mounted) {
+        // The editor closed while listening was starting. Capture is already
+        // running and dispose() saw no dictation to stop, so stop it here,
+        // unless another consumer has taken the service over since.
+        if (_voiceService?.textStream == stream) {
+          unawaited(_voiceService?.stopListening());
+        }
+        return;
+      }
+      _dictationStream = stream;
+
+      // Anchor the dictation run at the current selection. The trailing
+      // line-break of a Parchment document is not editable, so clamp before
+      // it.
+      final controller = _contentController;
+      if (controller == null) {
+        _dictationRun = null;
+      } else {
+        final selection = controller.selection;
+        final docEnd = (controller.document.length - 1).clamp(
+          0,
+          controller.document.length,
+        );
+        _dictationRun = selection.isValid
+            ? NoteDictationRun.at(
+                selectionBase: selection.baseOffset,
+                selectionExtent: selection.extentOffset,
+                textLength: docEnd,
+              )
+            : NoteDictationRun(anchor: docEnd);
+      }
 
       setState(() {
         _isRecording = true;
-        _voiceBaseText = _contentController.text;
       });
 
       ConduitHaptics.lightImpact();
@@ -548,20 +955,16 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
       _voiceSub = stream.listen(
         (text) {
           if (!mounted) return;
-          final updated = _voiceBaseText.isEmpty
-              ? text
-              : '${_voiceBaseText.trimRight()} $text';
-          _contentController.value = TextEditingValue(
-            text: updated,
-            selection: TextSelection.collapsed(offset: updated.length),
-          );
+          _applyDictationText(text);
         },
         onDone: () {
           if (!mounted) return;
+          _dictationStream = null;
           setState(() => _isRecording = false);
         },
         onError: (_) {
           if (!mounted) return;
+          _dictationStream = null;
           setState(() => _isRecording = false);
         },
       );
@@ -573,13 +976,36 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
     }
   }
 
+  /// Whether the voice service is still on the run this editor started.
+  bool get _ownsDictationRun =>
+      _dictationStream != null && _voiceService?.textStream == _dictationStream;
+
   Future<void> _stopDictation() async {
-    await _voiceService?.stopListening();
+    if (_ownsDictationRun) await _voiceService?.stopListening();
     _voiceSub?.cancel();
+    _dictationStream = null;
+    _dictationRun = null;
     if (mounted) {
       setState(() => _isRecording = false);
       ConduitHaptics.selectionClick();
     }
+  }
+
+  /// Applies the latest (cumulative) dictation [transcript] by replacing the
+  /// previously inserted run with the new text, leaving the rest of the
+  /// document -- and its formatting -- untouched.
+  void _applyDictationText(String transcript) {
+    final controller = _contentController;
+    final run = _dictationRun;
+    if (controller == null || run == null) return;
+
+    final edit = run.update(controller.document.toPlainText(), transcript);
+    controller.replaceText(
+      edit.start,
+      edit.deleteLength,
+      edit.insert,
+      selection: TextSelection.collapsed(offset: edit.caret),
+    );
   }
 
   /// Shows a bottom sheet to choose between dictation and audio recording.
@@ -638,18 +1064,14 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
         children: [
           // Dictation option
           AdaptiveListTile(
-            leading: Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                color: conduitTheme.buttonPrimary.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(AppBorderRadius.md),
-              ),
+            leading: SizedBox(
+              width: IconSize.xl,
+              height: IconSize.xl,
               child: Icon(
                 Platform.isIOS
                     ? CupertinoIcons.keyboard
                     : Icons.keyboard_voice_rounded,
-                color: conduitTheme.buttonPrimary,
+                color: conduitTheme.textPrimary,
                 size: IconSize.md,
               ),
             ),
@@ -674,16 +1096,12 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
           const SizedBox(height: Spacing.xs),
           // Audio recording option
           AdaptiveListTile(
-            leading: Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                color: Colors.red.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(AppBorderRadius.md),
-              ),
+            leading: SizedBox(
+              width: IconSize.xl,
+              height: IconSize.xl,
               child: Icon(
-                Platform.isIOS ? CupertinoIcons.mic_fill : Icons.mic_rounded,
-                color: Colors.red,
+                Platform.isIOS ? CupertinoIcons.mic : Icons.mic_none_rounded,
+                color: conduitTheme.textPrimary,
                 size: IconSize.md,
               ),
             ),
@@ -722,8 +1140,9 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
             child: AudioRecordingOverlay(
               onCancel: () => Navigator.pop(context),
               onConfirm: (file) async {
-                Navigator.pop(context);
-                await _uploadAudioFile(file);
+                final staged = await _attachments.stage(file);
+                if (staged && context.mounted) Navigator.pop(context);
+                return staged;
               },
             ),
           );
@@ -734,115 +1153,9 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
     );
   }
 
-  /// Uploads an audio file to the server and attaches it to the note.
-  Future<void> _uploadAudioFile(File audioFile) async {
-    final api = ref.read(apiServiceProvider);
-    final db = ref.read(appDatabaseProvider);
-    final l10n = AppLocalizations.of(context)!;
-
-    if (api == null || _note == null) {
-      _showError(l10n.failedToUploadAudio);
-      return;
-    }
-
-    setState(() => _isUploadingAudio = true);
-
-    try {
-      // Get file info
-      final fileSize = await audioFile.length();
-      final fileName = 'recording_${DateTime.now().millisecondsSinceEpoch}.m4a';
-
-      // Upload file to Open WebUI with proper content type
-      final fileId = await api.uploadFile(
-        audioFile.path,
-        fileName,
-        contentType: 'audio/mp4',
-      );
-
-      // Get current note files
-      final currentFiles = _note!.data.files ?? [];
-
-      // Generate a local item ID (for OpenWebUI compatibility)
-      final itemId = DateTime.now().millisecondsSinceEpoch.toString();
-
-      // Add the new file in OpenWebUI's expected format
-      // Must match the structure in NoteEditor.svelte uploadFileHandler
-      final updatedFiles = [
-        ...currentFiles,
-        {
-          'type': 'file',
-          'file': '',
-          'id': fileId,
-          'url': fileId,
-          'name': fileName,
-          'collection_name': '',
-          'status': 'uploaded',
-          'size': fileSize,
-          'error': '',
-          'itemId': itemId,
-        },
-      ];
-
-      // Update note with the file attachment
-      final data = _composeUpdatedNoteData(
-        markdown: _contentController.text,
-        files: updatedFiles,
-      );
-
-      final resolvedTitle = _titleController.text.isEmpty
-          ? l10n.untitled
-          : _titleController.text;
-      final updatedNote = await _persistNoteUpdate(
-        api: api,
-        db: db,
-        title: resolvedTitle,
-        data: data,
-      );
-
-      if (mounted) {
-        if (!_isCurrentNoteSession(api: api, db: db)) {
-          setState(() => _isUploadingAudio = false);
-          return;
-        }
-
-        if (updatedNote != null) {
-          setState(() {
-            _note = updatedNote;
-            _isUploadingAudio = false;
-            _hasChanges = false;
-          });
-
-          ConduitHaptics.mediumImpact();
-          AdaptiveSnackBar.show(
-            context,
-            message: l10n.audioRecordingSaved,
-            type: AdaptiveSnackBarType.success,
-            duration: const Duration(seconds: 2),
-          );
-        } else {
-          setState(() => _isUploadingAudio = false);
-        }
-      }
-
-      // Clean up temp file
-      try {
-        await audioFile.delete();
-      } catch (_) {
-        // Ignore cleanup errors
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() => _isUploadingAudio = false);
-        _showError(
-          AppLocalizations.of(context)!.audioUploadError(e.toString()),
-        );
-      }
-    }
-  }
-
   void _copyToClipboard() {
     final l10n = AppLocalizations.of(context)!;
-    final content = _contentController.text;
+    final content = _contentMarkdown;
     Clipboard.setData(ClipboardData(text: content));
     ConduitHaptics.selectionClick();
     AdaptiveSnackBar.show(
@@ -855,6 +1168,12 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
 
   @override
   Widget build(BuildContext context) {
+    // The Share action depends on this; watching rebuilds the menu when the
+    // account's permissions arrive or change.
+    ref.watch(workspaceCapabilitiesProvider);
+    // The read-only banner names the note's owner once the account's lookup
+    // exists; watching retries the lookup when it arrives.
+    ref.watch(workspacePrincipalLookupProvider);
     // Check if notes feature is enabled - redirect to chat if disabled
     final notesEnabled = ref.watch(notesFeatureEnabledProvider);
     if (!notesEnabled) {
@@ -868,7 +1187,14 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
       return const AdaptiveRouteShell(body: SizedBox.shrink());
     }
 
-    return ErrorBoundary(
+    return PopScope(
+      // Allow the back gesture/animation to proceed normally when there is
+      // nothing to save. When an edit is still pending (within the auto-save
+      // debounce), intercept the pop, flush the save while the widget is still
+      // mounted (so the durable write completes without racing teardown), then
+      // pop programmatically.
+      canPop: !_hasChanges,
+      onPopInvokedWithResult: _onEditorPopInvoked,
       child: AdaptiveRouteShell(
         backgroundColor: context.conduitTheme.surfaceBackground,
         extendBodyBehindAppBar: true,
@@ -882,12 +1208,15 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
               top: 0,
               child: ConduitChromeGradientFade.top(
                 contentHeight:
-                    MediaQuery.viewPaddingOf(context).top + kTextTabBarHeight,
+                    MediaQuery.viewPaddingOf(context).top +
+                    conduitAdaptiveToolbarHeightOf(context),
               ),
             ),
             if (!_isLoading && _note != null)
               Positioned(
-                top: MediaQuery.of(context).padding.top + kTextTabBarHeight,
+                top:
+                    MediaQuery.of(context).padding.top +
+                    conduitAdaptiveToolbarHeightOf(context),
                 left: 0,
                 right: 0,
                 child: Padding(
@@ -895,12 +1224,40 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
                   child: Center(child: _buildFloatingMetadataBar(context)),
                 ),
               ),
-            if (!_isLoading && _note != null)
+            if (!_isLoading &&
+                _note != null &&
+                !_readOnly &&
+                !_contentFocusNode.hasFocus)
               Positioned(
                 left: Spacing.md,
                 right: Spacing.md,
                 bottom: Spacing.md + MediaQuery.of(context).padding.bottom,
-                child: _buildFloatingActionsRow(context),
+                child: NoteFloatingActions(
+                  isRecording: _isRecording,
+                  isUploadingAudio: _attachments.isUploading,
+                  isEnhancing: _isEnhancing,
+                  onVoicePressed: _isRecording
+                      ? _toggleDictation
+                      : _showRecordingOptions,
+                  onEnhance: _enhanceContent,
+                  onGenerateTitle: _generateTitle,
+                ),
+              ),
+            // Formatting toolbar — shown above the keyboard while the content
+            // editor is focused (in place of the floating actions row). The
+            // scaffold uses resizeToAvoidBottomInset, so the body is already
+            // laid out above the keyboard; anchoring at bottom: 0 sits the
+            // toolbar directly on top of it (anchoring at viewInsets.bottom
+            // would double-count the inset and push it up to the stats row).
+            if (!_isLoading &&
+                _note != null &&
+                !_readOnly &&
+                _contentFocusNode.hasFocus)
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                child: _buildFormattingToolbar(context),
               ),
           ],
         ),
@@ -908,76 +1265,146 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
     );
   }
 
+  Widget _buildFormattingToolbar(BuildContext context) {
+    final theme = context.conduitTheme;
+    final controller = _contentController;
+    if (controller == null) return const SizedBox.shrink();
+    return Material(
+      color: theme.surfaceContainer,
+      child: SafeArea(
+        top: false,
+        child: Container(
+          decoration: BoxDecoration(
+            border: Border(
+              top: BorderSide(color: theme.cardBorder, width: BorderWidth.thin),
+            ),
+          ),
+          child: FleatherTheme(
+            data: _fleatherTheme ??= _buildFleatherTheme(context),
+            // Markdown is the canonical stored format, so hide every control
+            // whose result markdown can't represent — otherwise the user
+            // applies formatting that silently vanishes on save/reopen.
+            // Dropped: underline, text/background colour, alignment,
+            // indentation, and text direction. Kept: bold, italic,
+            // strikethrough, inline code, headings, lists (incl. checkboxes),
+            // code blocks, quotes, links, and horizontal rules.
+            child: FleatherToolbar.basic(
+              controller: controller,
+              hideUnderLineButton: true,
+              hideBackgroundColor: true,
+              hideForegroundColor: true,
+              hideAlignment: true,
+              hideIndentation: true,
+              hideDirection: true,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   AdaptiveAppBar _buildAdaptiveNoteEditorAppBar(BuildContext context) {
     final tintColor = context.conduitTheme.textPrimary;
+    final l10n = AppLocalizations.of(context)!;
     final maxTitleWidth = resolveConduitAdaptiveLeadingPillWidth(
       context,
       trailingActionCount: 1,
       maxWidth: kConduitAdaptiveToolbarMaxPillWidth,
     );
-    final leading = _buildNoteEditorLeading(
-      context,
-      maxTitleWidth: maxTitleWidth,
-    );
-    final actions = _buildNoteEditorToolbarActionWidgets(context);
-    final overlayStyle = Theme.of(context).appBarTheme.systemOverlayStyle;
-
-    return AdaptiveAppBar(
-      useNativeToolbar: false,
+    final menuItems = _buildNoteEditorToolbarMenuItems(l10n);
+    final actions = _buildNoteEditorToolbarActionWidgets(context, menuItems);
+    final nativeMenuAction = buildConduitNativeToolbarMenuAction<String>(
+      iosSymbol: 'ellipsis',
+      accessibilityLabel: MaterialLocalizations.of(context).moreButtonTooltip,
       tintColor: tintColor,
-      cupertinoNavigationBar: CupertinoNavigationBar(
-        automaticallyImplyLeading: false,
-        border: null,
-        backgroundColor: Colors.transparent,
-        automaticBackgroundVisibility: false,
-        brightness: Theme.of(context).brightness,
-        enableBackgroundFilterBlur: false,
-        leading: leading,
-        trailing: Row(mainAxisSize: MainAxisSize.min, children: actions),
+      items: menuItems,
+      onSelected: _handleEditorToolbarMenuSelection,
+    );
+    final useNativeActionGroup =
+        Platform.isIOS &&
+        conduitSupportsNativeGlass() &&
+        nativeMenuAction != null;
+
+    return buildConduitCenteredAdaptiveAppBar(
+      context: context,
+      tintColor: tintColor,
+      leading: ConduitAdaptiveAppBarIconButton(
+        icon: Platform.isIOS ? CupertinoIcons.line_horizontal_3 : Icons.menu,
+        iosSymbol: 'line.3.horizontal',
+        semanticLabel: AppLocalizations.of(context)!.sidebarButtonLabel,
+        onPressed: () =>
+            SidebarDrawerControllerScope.maybeOf(context)?.toggle(),
+        iconColor: tintColor,
       ),
-      appBar: AppBar(
-        automaticallyImplyLeading: false,
-        backgroundColor: Colors.transparent,
-        surfaceTintColor: Colors.transparent,
-        shadowColor: Colors.transparent,
-        elevation: Elevation.none,
-        scrolledUnderElevation: Elevation.none,
-        toolbarHeight: kTextTabBarHeight,
-        systemOverlayStyle: overlayStyle,
-        centerTitle: false,
-        titleSpacing: Spacing.sm,
-        leadingWidth: resolveConduitAdaptiveToolbarLeadingWidth(
-          pillWidth: maxTitleWidth,
-        ),
-        leading: leading,
-        actions: actions,
-      ),
+      title: _buildNoteEditorTitlePill(context, maxWidth: maxTitleWidth),
+      actions: actions,
+      cupertinoTrailing: useNativeActionGroup
+          ? ConduitNativeToolbarActionGroup(actions: [nativeMenuAction])
+          : Row(mainAxisSize: MainAxisSize.min, children: actions),
+      centerTitle: false,
     );
   }
 
-  Widget _buildNoteEditorLeading(
-    BuildContext context, {
-    required double maxTitleWidth,
-  }) {
-    return buildConduitAdaptiveToolbarLeadingRow(
-      children: [
-        ConduitAdaptiveAppBarIconButton(
-          icon: Platform.isIOS ? CupertinoIcons.line_horizontal_3 : Icons.menu,
-          onPressed: () => ResponsiveDrawerLayout.of(context)?.toggle(),
-          iconColor: context.conduitTheme.textPrimary,
+  List<AdaptivePopupMenuEntry> _buildNoteEditorToolbarMenuItems(
+    AppLocalizations l10n,
+  ) {
+    return [
+      if (!_readOnly)
+        AdaptivePopupMenuItem<String>(
+          value: 'generate',
+          label: l10n.generateTitle,
+          icon: conduitAdaptivePopupMenuIcon(
+            iosSymbol: 'sparkles',
+            materialIcon: Icons.auto_awesome,
+          ),
         ),
-        const SizedBox(width: kConduitAdaptiveToolbarLeadingGap),
-        _buildNoteEditorTitlePill(context, maxWidth: maxTitleWidth),
-      ],
-    );
+      AdaptivePopupMenuItem<String>(
+        value: 'copy',
+        label: l10n.copy,
+        icon: conduitAdaptivePopupMenuIcon(
+          iosSymbol: 'doc.on.doc',
+          materialIcon: Icons.copy_outlined,
+        ),
+      ),
+      if (_note != null && !_readOnly && canShareNote(ref, _note!))
+        AdaptivePopupMenuItem<String>(
+          value: 'share',
+          label: l10n.noteShare,
+          icon: conduitAdaptivePopupMenuIcon(
+            iosSymbol: 'person.2',
+            materialIcon: Icons.group_outlined,
+          ),
+        ),
+      AdaptivePopupMenuItem<String>(
+        value: 'pin',
+        label: _note?.isPinned == true ? l10n.unpin : l10n.pin,
+        icon: conduitAdaptivePopupMenuIcon(
+          iosSymbol: _note?.isPinned == true ? 'pin.slash' : 'pin',
+          materialIcon: Icons.push_pin_outlined,
+        ),
+      ),
+      // The delete endpoint takes the same people as an edit.
+      if (!_readOnly)
+        AdaptivePopupMenuItem<String>(
+          value: 'delete',
+          label: l10n.delete,
+          isDestructive: true,
+          icon: conduitAdaptivePopupMenuIcon(
+            iosSymbol: 'trash',
+            materialIcon: Icons.delete_outline,
+          ),
+        ),
+    ];
   }
 
-  List<Widget> _buildNoteEditorToolbarActionWidgets(BuildContext context) {
+  List<Widget> _buildNoteEditorToolbarActionWidgets(
+    BuildContext context,
+    List<AdaptivePopupMenuEntry> menuItems,
+  ) {
     return buildConduitAdaptiveToolbarActionWidgets([
-      _NoteEditorToolbarPopupButton(
-        l10n: AppLocalizations.of(context)!,
-        isPinned: _note?.isPinned == true,
+      ConduitAdaptiveToolbarOverflowButton<String>(
         tintColor: context.conduitTheme.textPrimary,
+        items: menuItems,
         onSelected: _handleEditorToolbarMenuSelection,
       ),
     ]);
@@ -996,6 +1423,10 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
       case 'pin':
         _togglePin();
         return;
+      case 'share':
+        ConduitHaptics.selectionClick();
+        unawaited(_shareNote());
+        return;
       case 'delete':
         ConduitHaptics.mediumImpact();
         _deleteNote();
@@ -1009,7 +1440,8 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
   }) {
     final conduitTheme = context.conduitTheme;
     final l10n = AppLocalizations.of(context)!;
-    final titleTextStyle = conduitAdaptiveToolbarPillTextStyle(context);
+    final titleTextStyle = conduitAdaptiveToolbarLeadingTitleTextStyle(context);
+    final controlExtent = conduitScaledControlExtent(context);
     final titleLabel = _isGeneratingTitle
         ? l10n.generatingTitle
         : (_titleController.text.isEmpty
@@ -1031,12 +1463,13 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
 
     return buildConduitAdaptiveToolbarPillSurface(
       width: targetWidth,
+      height: controlExtent,
       onPressed: _isGeneratingTitle
           ? null
           : () => _titleFocusNode.requestFocus(),
       semanticLabel: titleLabel,
       child: ConstrainedBox(
-        constraints: const BoxConstraints(minHeight: 44),
+        constraints: BoxConstraints(minHeight: controlExtent),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: horizontalInset),
           child: Row(
@@ -1076,6 +1509,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
                                 controller: _titleController,
                                 focusNode: _titleFocusNode,
                                 enabled: !_isGeneratingTitle,
+                                readOnly: _readOnly,
                                 style: titleTextStyle,
                                 placeholder: l10n.untitled,
                                 textAlign: TextAlign.center,
@@ -1092,6 +1526,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
                                       hintStyle: titleTextStyle.copyWith(
                                         color: conduitTheme.textSecondary
                                             .withValues(alpha: 0.6),
+                                        fontWeight: FontWeight.w300,
                                       ),
                                       contentPadding: EdgeInsets.zero,
                                       isDense: true,
@@ -1197,7 +1632,20 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
     );
 
     final theme = context.conduitTheme;
+    if (conduitSupportsNativeGlass()) {
+      return Stack(
+        key: const ValueKey<String>('note-metadata-native-glass'),
+        children: [
+          Positioned.fill(
+            child: AdaptiveGlassBackdrop(borderRadius: borderRadius),
+          ),
+          content,
+        ],
+      );
+    }
+
     return Container(
+      key: const ValueKey<String>('note-metadata-fallback-surface'),
       decoration: BoxDecoration(
         color: theme.surfaceContainerHighest,
         borderRadius: borderRadius,
@@ -1270,11 +1718,9 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
   }
 
   Widget _buildEditor(BuildContext context) {
-    final theme = context.conduitTheme;
-    final l10n = AppLocalizations.of(context)!;
     final topPadding = MediaQuery.of(context).padding.top;
-    // App bar height: kTextTabBarHeight + metadata bar (~40)
-    final appBarHeight = kTextTabBarHeight + 40;
+    // Adaptive app bar height + metadata bar (~40).
+    final appBarHeight = conduitAdaptiveToolbarHeightOf(context) + 40;
 
     // Get attached files
     final files = _note?.data.files ?? [];
@@ -1282,59 +1728,422 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
     return GestureDetector(
       onTap: () => _contentFocusNode.requestFocus(),
       behavior: HitTestBehavior.opaque,
-      child: SingleChildScrollView(
-        controller: _scrollController,
-        padding: EdgeInsets.fromLTRB(
-          Spacing.inputPadding,
-          topPadding + appBarHeight + Spacing.sm, // Space for floating app bar
-          Spacing.inputPadding,
-          120, // Extra padding for floating buttons
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // File attachments section (if any)
-            if (files.isNotEmpty) ...[
-              NoteFilesSection(
-                files: files,
-                onPlayFile: _playAudioFile,
-                onDeleteFile: _removeFile,
-              ),
-              const SizedBox(height: Spacing.lg),
+      child: RefreshIndicator.adaptive(
+        onRefresh: _refreshNote,
+        edgeOffset: topPadding + appBarHeight + Spacing.sm,
+        child: SingleChildScrollView(
+          controller: _scrollController,
+          // Always scrollable so pull-to-refresh works even when the note is
+          // short enough to fit on screen.
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: EdgeInsets.fromLTRB(
+            Spacing.inputPadding,
+            topPadding +
+                appBarHeight +
+                Spacing.sm, // Space for floating app bar
+            Spacing.inputPadding,
+            120, // Extra padding for floating buttons
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (_accessNotice(AppLocalizations.of(context)!)
+                  case final notice?)
+                _buildAccessNotice(context, notice),
+              // File attachments section (including durable pending audio).
+              if (files.isNotEmpty || _attachments.pending.isNotEmpty) ...[
+                _buildAttachmentsSection(context, files),
+                const SizedBox(height: Spacing.lg),
+              ],
+              // Content editor
+              _buildContentEditor(context),
             ],
-            // Content editor
-            AdaptiveTextField(
-              controller: _contentController,
-              focusNode: _contentFocusNode,
-              style: AppTypography.bodyLargeStyle.copyWith(
-                color: theme.textPrimary,
-                height: 1.8,
-              ),
-              placeholder: l10n.writeNote,
-              maxLines: null,
-              minLines: 20,
-              textCapitalization: TextCapitalization.sentences,
-              keyboardType: TextInputType.multiline,
-              padding: EdgeInsets.zero,
-              cupertinoDecoration: const BoxDecoration(),
-              decoration: context.conduitInputStyles
-                  .borderless(hint: l10n.writeNote)
-                  .copyWith(
-                    hintStyle: AppTypography.bodyLargeStyle.copyWith(
-                      color: theme.textSecondary.withValues(alpha: 0.35),
-                      height: 1.8,
-                    ),
-                    contentPadding: EdgeInsets.zero,
-                  ),
-            ),
-          ],
+          ),
         ),
       ),
     );
   }
 
+  Widget _buildAttachmentsSection(
+    BuildContext context,
+    List<Map<String, dynamic>> files,
+  ) {
+    final theme = context.conduitTheme;
+    final l10n = AppLocalizations.of(context)!;
+    final pendingUploads = _attachments.pending;
+    final total = files.length + pendingUploads.length;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: Spacing.xs, bottom: Spacing.xs),
+          child: Row(
+            children: [
+              Icon(
+                Platform.isIOS
+                    ? CupertinoIcons.paperclip
+                    : Icons.attach_file_rounded,
+                size: IconSize.sm,
+                color: theme.textSecondary,
+              ),
+              const SizedBox(width: Spacing.xs),
+              Text(
+                l10n.attachments,
+                style: AppTypography.labelStyle.copyWith(
+                  color: theme.textSecondary,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(width: Spacing.xs),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: Spacing.xs,
+                  vertical: 2,
+                ),
+                decoration: BoxDecoration(
+                  color: theme.surfaceContainerHighest.withValues(alpha: 0.5),
+                  borderRadius: BorderRadius.circular(AppBorderRadius.xs),
+                ),
+                child: Text(
+                  '$total',
+                  style: AppTypography.captionStyle.copyWith(
+                    color: theme.textSecondary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        ...pendingUploads.map(
+          (item) => _buildPendingAudioAttachment(context, item),
+        ),
+        ...files.map(
+          (file) => Padding(
+            padding: const EdgeInsets.only(bottom: Spacing.xs),
+            child: NoteFileAttachment(
+              file: file,
+              onTap: () => _playAudioFile(file),
+              onDelete: () => _removeFile(file),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPendingAudioAttachment(
+    BuildContext context,
+    PendingNoteAudioUpload item,
+  ) {
+    final theme = context.conduitTheme;
+    final l10n = AppLocalizations.of(context)!;
+    final inFlight = _attachments.isInFlight(item.id);
+    final failed = item.status == NoteAudioUploadStatus.failed && !inFlight;
+    final retryable = !inFlight;
+    final localFile = <String, dynamic>{
+      'type': 'audio',
+      'name': item.fileName,
+      'size': item.fileSize,
+      '_localPath': item.localPath,
+      '_localAudioUploadId': item.id,
+    };
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: Spacing.xs),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          NoteFileAttachment(
+            file: localFile,
+            showDelete: !inFlight && item.serverFileId == null,
+            onTap: inFlight ? null : () => _playAudioFile(localFile),
+            onDelete: () => _removeFile(localFile),
+          ),
+          Padding(
+            padding: const EdgeInsets.only(left: Spacing.sm),
+            child: Row(
+              children: [
+                if (failed)
+                  Icon(
+                    Platform.isIOS
+                        ? CupertinoIcons.exclamationmark_circle_fill
+                        : Icons.error_rounded,
+                    size: IconSize.sm,
+                    color: theme.error,
+                  )
+                else
+                  ConduitLoading.inline(
+                    size: IconSize.sm,
+                    color: theme.loadingIndicator,
+                    context: context,
+                  ),
+                const SizedBox(width: Spacing.xs),
+                Expanded(
+                  child: Text(
+                    failed
+                        ? l10n.failedToUploadAudio
+                        : l10n.processingRecording,
+                    style: AppTypography.captionStyle.copyWith(
+                      color: failed ? theme.error : theme.textSecondary,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                ConduitIconButton(
+                  icon: Platform.isIOS ? CupertinoIcons.share : Icons.ios_share,
+                  iconColor: theme.textSecondary,
+                  tooltip: l10n.shareSystemSheet,
+                  onPressed: inFlight ? null : () => _sharePendingAudio(item),
+                  isCompact: true,
+                ),
+                if (retryable)
+                  ConduitIconButton(
+                    icon: Platform.isIOS
+                        ? CupertinoIcons.arrow_clockwise
+                        : Icons.refresh_rounded,
+                    iconColor: theme.buttonPrimary,
+                    tooltip: l10n.retry,
+                    onPressed: () => unawaited(
+                      _attachments.retry(
+                        ids: <String>[item.id],
+                        showFeedback: true,
+                      ),
+                    ),
+                    isCompact: true,
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _sharePendingAudio(PendingNoteAudioUpload item) async {
+    final l10n = AppLocalizations.of(context)!;
+    final renderObject = context.findRenderObject();
+    final shareOrigin = renderObject is RenderBox && renderObject.hasSize
+        ? renderObject.localToGlobal(Offset.zero) & renderObject.size
+        : null;
+    try {
+      if (!await File(item.localPath).exists()) {
+        throw StateError('The saved recording file is missing');
+      }
+      if (!mounted) return;
+      await SharePlus.instance.share(
+        ShareParams(
+          files: <XFile>[
+            XFile(
+              item.localPath,
+              mimeType: noteAudioContentType(item.fileName),
+              name: item.fileName,
+            ),
+          ],
+          fileNameOverrides: <String>[item.fileName],
+          sharePositionOrigin: shareOrigin,
+        ),
+      );
+    } catch (error, stackTrace) {
+      DebugLogger.error(
+        'note-audio-share-failed',
+        scope: 'notes/audio',
+        error: error,
+        stackTrace: stackTrace,
+        data: {'id': item.id},
+      );
+      if (mounted) _showError(l10n.errorMessage);
+    }
+  }
+
+  /// Pull-to-refresh handler: syncs the note with the server, then reloads it
+  /// into the editor.
+  ///
+  /// Order matters. We first flush any pending local edit, then run a full sync
+  /// cycle (push the outbox + pull the server) before re-reading. Re-reading
+  /// without syncing would let the detail fetch return a server copy that is
+  /// behind a not-yet-synced local edit and clobber it with stale/empty content.
+  Future<void> _refreshNote() async {
+    final noteBeforeRefresh = _note;
+    final hadDraftChanges =
+        noteBeforeRefresh != null &&
+        (_titleController.text != noteBeforeRefresh.title ||
+            _contentMarkdown != _savedMarkdown);
+    if (_hasChanges) {
+      _saveDebounce?.cancel();
+      await _autoSave();
+    }
+    if (!mounted) return;
+
+    // Push local changes and pull remote ones so the local row reflects both
+    // sides. Mirrors the notes-list pull-to-refresh.
+    final api = _openApi;
+    final db = _openDb;
+    final authEpoch = _openAuthEpoch;
+    final userId = _openUserId;
+    if (db == null || !_isOpenSessionCurrent) return;
+    try {
+      final syncEngine = ref.read(syncEngineProvider.notifier);
+      await syncEngine.requestPull(reason: 'note-editor-refresh');
+      await syncEngine.reconcileNow();
+    } catch (_) {
+      // Best-effort; still reload from the (at least locally-current) row below.
+    }
+    if (!mounted ||
+        !_isCurrentNoteSession(api: api, db: db, authEpoch: authEpoch)) {
+      return;
+    }
+
+    // Re-read from the reconciled LOCAL row, not a fresh server fetch: the pull
+    // has already merged remote edits into it, and reading the row avoids a
+    // server copy that's behind a not-yet-pushed local edit clobbering it.
+    try {
+      // The note is already open in the current session, so an id-scoped read is
+      // safe here (avoids pulling auth providers into the editor just for the
+      // user id).
+      final currentNoteId = _note?.id ?? widget.noteId;
+      final resolvedNoteId = await db.notesDao.resolveNoteRemapTarget(
+        currentNoteId,
+      );
+      final note = await readLocalNote(db, resolvedNoteId);
+      if (!mounted ||
+          !_isCurrentNoteSession(api: api, db: db, authEpoch: authEpoch)) {
+        return;
+      }
+      if (note == null) {
+        // The user may have typed while the pull/reconcile/read was in flight.
+        // Recover those edits as a new local note because the reconciler has
+        // already removed the old row and an update could no longer persist.
+        if (hadDraftChanges || _hasChanges) {
+          if (!_hasChanges) setState(() => _hasChanges = true);
+          await _recovery.recover(
+            NoteRecoverySession(
+              api: api,
+              db: db,
+              authEpoch: authEpoch,
+              userId: userId,
+            ),
+          );
+          return;
+        }
+        ref.invalidate(noteByIdProvider(currentNoteId));
+        if (resolvedNoteId != currentNoteId) {
+          ref.invalidate(noteByIdProvider(resolvedNoteId));
+        }
+        setState(() {
+          _note = null;
+          _titleController.clear();
+          _installContentDocument(documentFromMarkdown(''));
+          _savedMarkdown = '';
+          _cachedWordCount = 0;
+          _hasChanges = false;
+        });
+        return;
+      }
+      // If the user typed while the sync/read was in flight, do NOT overwrite
+      // their in-progress edits: those keystroke(s) re-set `_hasChanges` and
+      // queued a fresh debounce. Bail out and leave the editor as-is so that
+      // debounce saves them — overwriting here would discard them silently.
+      // (No await between this check and the setState below, so nothing can
+      // sneak in.)
+      if (_hasChanges) return;
+      // Keep the detail cache consistent with what we just loaded.
+      ref.invalidate(noteByIdProvider(currentNoteId));
+      if (resolvedNoteId != currentNoteId) {
+        ref.invalidate(noteByIdProvider(resolvedNoteId));
+      }
+      setState(() {
+        _note = note;
+        _titleController.text = note.title;
+        _installContentDocument(documentFromMarkdown(note.markdownContent));
+        _savedMarkdown = _contentMarkdown;
+        _updateWordCount();
+      });
+    } catch (e) {
+      if (mounted) _showError(e.toString());
+    }
+  }
+
+  Widget _buildContentEditor(BuildContext context) {
+    final theme = context.conduitTheme;
+    final l10n = AppLocalizations.of(context)!;
+    final controller = _contentController;
+    if (controller == null) {
+      return const SizedBox.shrink();
+    }
+
+    final editor = HorizontalGestureExclusion(
+      child: FleatherEditor(
+        controller: controller,
+        focusNode: _contentFocusNode,
+        readOnly: _readOnly,
+        // Lives inside the page's SingleChildScrollView; the editor must not
+        // scroll independently so the whole note grows with the content. Give
+        // Fleather the parent controller so context-menu actions can reveal the
+        // selection without reading an unattached internal ScrollController.
+        scrollController: _scrollController,
+        scrollable: false,
+        expands: false,
+        padding: EdgeInsets.zero,
+        minHeight: 20 * 1.8 * AppTypography.bodyLarge,
+        textCapitalization: TextCapitalization.sentences,
+      ),
+    );
+
+    // Fleather has no built-in placeholder, so overlay a hint while the
+    // document is empty.
+    final showPlaceholder = _contentPlainText.isEmpty;
+    return FleatherTheme(
+      data: _fleatherTheme ??= _buildFleatherTheme(context),
+      child: Stack(
+        children: [
+          if (showPlaceholder)
+            Positioned(
+              left: 0,
+              top: 0,
+              right: 0,
+              child: IgnorePointer(
+                child: Text(
+                  l10n.writeNote,
+                  style: AppTypography.bodyLargeStyle.copyWith(
+                    color: theme.textSecondary.withValues(alpha: 0.35),
+                    height: 1.8,
+                  ),
+                ),
+              ),
+            ),
+          editor,
+        ],
+      ),
+    );
+  }
+
+  /// Builds a Fleather theme derived from the app's typography and colours so
+  /// the rich-text editor matches the rest of the note UI.
+  FleatherThemeData _buildFleatherTheme(BuildContext context) {
+    return buildNoteEditorFleatherTheme(context);
+  }
+
   /// Play an audio file attachment.
   Future<void> _playAudioFile(Map<String, dynamic> file) async {
+    final localPath = file['_localPath']?.toString();
+    if (localPath != null && localPath.isNotEmpty) {
+      final l10n = AppLocalizations.of(context)!;
+      if (!await File(localPath).exists()) {
+        if (mounted) _showError(l10n.fileNotFound);
+        return;
+      }
+      if (!mounted) return;
+      await AudioPlayerDialog.showLocal(
+        context,
+        filePath: localPath,
+        fileName: file['name']?.toString() ?? 'Audio Recording',
+      );
+      return;
+    }
+
     final fileId = file['id']?.toString();
     if (fileId == null) return;
 
@@ -1364,47 +2173,34 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
       isDestructive: true,
     );
 
-    if (confirmed != true || _note == null) return;
+    if (confirmed != true || _note == null || _readOnly) return;
 
-    final api = ref.read(apiServiceProvider);
-    final db = ref.read(appDatabaseProvider);
+    final localUploadId = file['_localAudioUploadId']?.toString();
+    if (localUploadId != null && localUploadId.isNotEmpty) {
+      await _attachments.removePending(localUploadId);
+      return;
+    }
+
+    final api = _openApi;
+    final db = _openDb;
     if (api == null && db == null) return;
+    if (!_isOpenSessionCurrent) {
+      _showError(l10n.noteSessionChangedNotice);
+      return;
+    }
 
     setState(() => _isSaving = true);
 
     try {
-      final fileId = file['id']?.toString();
-      final currentFiles = _note!.data.files ?? [];
-      final updatedFiles = currentFiles
-          .where((f) => f['id']?.toString() != fileId)
-          .toList();
-
-      final data = _composeUpdatedNoteData(
-        markdown: _contentController.text,
-        files: updatedFiles,
-      );
-
-      final resolvedTitle = _titleController.text.isEmpty
-          ? l10n.untitled
-          : _titleController.text;
-      final updatedNote = await _persistNoteUpdate(
-        api: api,
-        db: db,
-        title: resolvedTitle,
-        data: data,
+      final updatedNote = await _attachments.removeAttachedFile(
+        file['id']?.toString(),
       );
 
       if (mounted) {
-        if (!_isCurrentNoteSession(api: api, db: db)) {
-          setState(() => _isSaving = false);
-          return;
-        }
-
         if (updatedNote != null) {
           setState(() {
             _note = updatedNote;
             _isSaving = false;
-            _hasChanges = false;
           });
 
           ConduitHaptics.lightImpact();
@@ -1426,156 +2222,158 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
     }
   }
 
-  Widget _buildFloatingActionsRow(BuildContext context) {
-    final theme = context.conduitTheme;
-    final l10n = AppLocalizations.of(context)!;
-
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        // Voice/Recording button - shows menu if not recording, stops if recording
-        _buildFloatingButton(
-          context,
-          icon: _isRecording
-              ? (Platform.isIOS ? CupertinoIcons.stop_fill : Icons.stop_rounded)
-              : (Platform.isIOS ? CupertinoIcons.mic_fill : Icons.mic_rounded),
-          color: _isRecording ? theme.error : null,
-          isLoading: _isUploadingAudio,
-          tooltip: _isRecording ? l10n.stopRecording : l10n.voiceOptions,
-          onPressed: _isUploadingAudio
-              ? null
-              : (_isRecording ? _toggleDictation : _showRecordingOptions),
-        ),
-
-        // AI button
-        _buildFloatingButton(
-          context,
-          icon: Platform.isIOS
-              ? CupertinoIcons.sparkles
-              : Icons.auto_awesome_rounded,
-          isLoading: _isEnhancing,
-          tooltip: l10n.enhanceWithAI,
-          onPressed: _isEnhancing ? null : _enhanceContent,
-          showMenu: true,
-        ),
-      ],
-    );
+  /// Why the note cannot be edited, or null when it can.
+  String? _accessNotice(AppLocalizations l10n) {
+    final note = _note;
+    if (note == null) return null;
+    if (_writeRefused) return l10n.noteAccessRevokedNotice;
+    return switch (noteWriteAccess(note, accountId: _openUserId)) {
+      NoteWriteAccess.allowed => null,
+      NoteWriteAccess.denied => switch (_sharedOwnerName(note)) {
+        final String owner => l10n.libraryNoteSharedBy(owner),
+        null => l10n.noteReadOnlyNotice,
+      },
+      NoteWriteAccess.unknown => l10n.noteAccessUnverifiedNotice,
+    };
   }
 
-  Widget _buildFloatingButton(
-    BuildContext context, {
-    required IconData icon,
-    required String tooltip,
-    required VoidCallback? onPressed,
-    bool isLoading = false,
-    Color? color,
-    bool showMenu = false,
-  }) {
-    final l10n = AppLocalizations.of(context)!;
-    final button = _buildAdaptiveFloatingButton(
-      context,
-      icon: icon,
-      onPressed: onPressed,
-      isLoading: isLoading,
-      color: color,
-    );
-
-    if (showMenu) {
-      return AdaptiveTooltip(
-        message: tooltip,
-        child: Semantics(
-          button: true,
-          label: tooltip,
-          child: AdaptivePopupMenuButton.widget<String>(
-            items: [
-              AdaptivePopupMenuItem<String>(
-                label: l10n.enhanceNote,
-                value: 'enhance',
-                icon: Platform.isIOS
-                    ? 'wand.and.stars'
-                    : Icons.auto_fix_high_rounded,
-              ),
-              AdaptivePopupMenuItem<String>(
-                label: l10n.generateTitle,
-                value: 'title',
-                icon: Platform.isIOS ? 'textformat' : Icons.title_rounded,
-              ),
-            ],
-            onSelected: (_, entry) {
-              switch (entry.value) {
-                case 'enhance':
-                  _enhanceContent();
-                case 'title':
-                  _generateTitle();
-              }
-            },
-            buttonStyle: conduitSupportsNativeGlass()
-                ? PopupButtonStyle.glass
-                : PopupButtonStyle.plain,
-            child: IgnorePointer(child: button),
-          ),
-        ),
-      );
+  /// The name of whoever shared [note] with this account, when known. A note
+  /// that does not carry its owner's name has it looked up once, through the
+  /// lookup of the account the page opened under.
+  String? _sharedOwnerName(Note note) {
+    final named = noteSharedOwner(note, accountId: _openUserId)?.name?.trim();
+    if (named != null && named.isNotEmpty) return named;
+    final ownerId = note.userId;
+    if (ownerId == null || ownerId.isEmpty || ownerId == _openUserId) {
+      return null;
     }
-
-    return Semantics(
-      button: true,
-      label: tooltip,
-      enabled: onPressed != null,
-      child: AdaptiveTooltip(message: tooltip, child: button),
-    );
+    if (_ownerLookupFor == ownerId) return _resolvedOwnerName;
+    // Until the account's lookup exists (a cold start or a deep link), try
+    // again on a later build rather than marking the owner as looked up.
+    final lookup = ref.read(workspacePrincipalLookupProvider);
+    if (lookup == null || !_isOpenSessionCurrent) return null;
+    _ownerLookupFor = ownerId;
+    _resolvedOwnerName = null;
+    unawaited(() async {
+      await lookup.resolve([(type: WorkspacePrincipalType.user, id: ownerId)]);
+      // A name read for another account is never shown here.
+      if (!mounted ||
+          _ownerLookupFor != ownerId ||
+          !identical(ref.read(workspacePrincipalLookupProvider), lookup) ||
+          !_isOpenSessionCurrent) {
+        return;
+      }
+      final name = lookup
+          .cached(WorkspacePrincipalType.user, ownerId)
+          ?.name
+          .trim();
+      if (name != null && name.isNotEmpty) {
+        setState(() => _resolvedOwnerName = name);
+      }
+    }());
+    return null;
   }
 
-  Widget _buildAdaptiveFloatingButton(
-    BuildContext context, {
-    required IconData icon,
-    required VoidCallback? onPressed,
-    required bool isLoading,
-    Color? color,
-  }) {
-    final theme = context.conduitTheme;
-    final labelColor = theme.textPrimary;
-    final borderRadius = BorderRadius.circular(AppBorderRadius.floatingButton);
-    final usesOpaqueFallback = conduitUsesOpaqueGlassFallback();
-    final effectiveColor = usesOpaqueFallback && color == null
-        ? theme.surfaceContainerHighest
-        : color;
+  /// Saves what is on screen as a new note the user owns, through the same
+  /// recovery used when a note is deleted under an open editor.
+  Future<void> _saveDraftAsOwnNote() async {
+    final session = NoteRecoverySession(
+      api: _openApi,
+      db: _openDb,
+      authEpoch: _openAuthEpoch,
+      userId: _openUserId,
+    );
+    await _recovery.recover(session);
+    // The recovery rebinds the editor to the new note, which the user owns.
+    if (mounted && !_hasChanges) setState(() => _writeRefused = false);
+  }
 
-    return AdaptiveButton.child(
-      onPressed: onPressed,
-      enabled: onPressed != null,
-      color: effectiveColor,
-      style: usesOpaqueFallback
-          ? AdaptiveButtonStyle.filled
-          : color == null
-          ? AdaptiveButtonStyle.glass
-          : AdaptiveButtonStyle.prominentGlass,
-      size: AdaptiveButtonSize.large,
-      minSize: const Size(TouchTarget.button, TouchTarget.button),
-      padding: EdgeInsets.zero,
-      borderRadius: borderRadius,
-      useSmoothRectangleBorder: false,
-      child: SizedBox(
-        width: TouchTarget.button,
-        height: TouchTarget.button,
-        child: Center(
-          child: isLoading
-              ? SizedBox(
-                  width: IconSize.md,
-                  height: IconSize.md,
-                  child: CircularProgressIndicator(
-                    strokeWidth: BorderWidth.medium,
-                    valueColor: AlwaysStoppedAnimation(labelColor),
+  void _discardDraft() {
+    _saveDebounce?.cancel();
+    setState(() {
+      _hasChanges = false;
+      _titleController.text = _note?.title ?? '';
+      _installContentDocument(
+        documentFromMarkdown(_note?.markdownContent ?? ''),
+      );
+      _savedMarkdown = _contentMarkdown;
+      _updateWordCount();
+    });
+  }
+
+  Widget _buildAccessNotice(BuildContext context, String notice) {
+    final theme = context.conduitTheme;
+    final l10n = AppLocalizations.of(context)!;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: Spacing.md),
+      child: DecoratedBox(
+        key: const ValueKey<String>('note-access-notice'),
+        decoration: BoxDecoration(
+          color: theme.surfaceContainer,
+          borderRadius: BorderRadius.circular(AppBorderRadius.small),
+          border: Border.all(color: theme.cardBorder, width: BorderWidth.thin),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(Spacing.sm),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    Platform.isIOS ? CupertinoIcons.lock : Icons.lock_outline,
+                    size: IconSize.small,
+                    color: theme.iconSecondary,
                   ),
-                )
-              : Icon(
-                  icon,
-                  color: color == null ? labelColor : Colors.white,
-                  size: IconSize.lg,
+                  const SizedBox(width: Spacing.sm),
+                  Expanded(
+                    child: Text(
+                      notice,
+                      style: theme.bodySmall?.copyWith(
+                        color: theme.textSecondary,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              if (_writeRefused && _hasChanges) ...[
+                const SizedBox(height: Spacing.sm),
+                Wrap(
+                  spacing: Spacing.sm,
+                  children: [
+                    ConduitButton(
+                      key: const ValueKey<String>('note-save-as-own'),
+                      text: l10n.noteSaveAsOwnNote,
+                      isCompact: true,
+                      onPressed: _saveDraftAsOwnNote,
+                    ),
+                    ConduitButton(
+                      key: const ValueKey<String>('note-discard-draft'),
+                      text: l10n.noteDiscardChanges,
+                      isCompact: true,
+                      isSecondary: true,
+                      onPressed: _discardDraft,
+                    ),
+                  ],
                 ),
+              ],
+            ],
+          ),
         ),
       ),
     );
+  }
+
+  /// Notes open with `go`, so the editor is often the only page in its
+  /// navigator; popping it would leave nothing on screen.
+  void _leaveMissingNote() {
+    final navigator = Navigator.of(context);
+    if (navigator.canPop()) {
+      navigator.pop();
+    } else {
+      context.go('/chat');
+    }
   }
 
   Widget _buildNotFoundState(BuildContext context) {
@@ -1583,6 +2381,11 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
     final sidebarTheme = context.sidebarTheme;
     final l10n = AppLocalizations.of(context)!;
 
+    final headline = _loadForbidden
+        ? l10n.noteNoAccess
+        : _sessionChanged
+        ? l10n.noteSessionChangedNotice
+        : l10n.noteNotFound;
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(Spacing.xxl),
@@ -1593,7 +2396,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
               width: 80,
               height: 80,
               decoration: BoxDecoration(
-                color: sidebarTheme.accent.withValues(alpha: 0.5),
+                color: sidebarTheme.tint.withValues(alpha: 0.5),
                 borderRadius: BorderRadius.circular(AppBorderRadius.xl),
               ),
               child: Icon(
@@ -1606,7 +2409,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
             ),
             const SizedBox(height: Spacing.lg),
             Text(
-              l10n.noteNotFound,
+              headline,
               style: AppTypography.headlineSmallStyle.copyWith(
                 color: theme.textPrimary,
                 fontWeight: FontWeight.w600,
@@ -1615,7 +2418,7 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
             ),
             const SizedBox(height: Spacing.lg),
             AdaptiveButton.child(
-              onPressed: () => Navigator.of(context).pop(),
+              onPressed: _leaveMissingNote,
               color: sidebarTheme.primary,
               style: AdaptiveButtonStyle.bordered,
               borderRadius: BorderRadius.circular(AppBorderRadius.button),
@@ -1635,64 +2438,6 @@ class _NoteEditorPageState extends ConsumerState<NoteEditorPage> {
           ],
         ),
       ),
-    );
-  }
-}
-
-class _NoteEditorToolbarPopupButton extends StatelessWidget {
-  const _NoteEditorToolbarPopupButton({
-    required this.l10n,
-    required this.isPinned,
-    required this.tintColor,
-    required this.onSelected,
-  });
-
-  final AppLocalizations l10n;
-  final bool isPinned;
-  final Color tintColor;
-  final ValueChanged<String> onSelected;
-
-  @override
-  Widget build(BuildContext context) {
-    return ConduitAdaptiveToolbarOverflowButton<String>(
-      tintColor: tintColor,
-      items: [
-        AdaptivePopupMenuItem<String>(
-          value: 'generate',
-          label: l10n.generateTitle,
-          icon: conduitAdaptivePopupMenuIcon(
-            iosSymbol: 'sparkles',
-            materialIcon: Icons.auto_awesome,
-          ),
-        ),
-        AdaptivePopupMenuItem<String>(
-          value: 'copy',
-          label: l10n.copy,
-          icon: conduitAdaptivePopupMenuIcon(
-            iosSymbol: 'doc.on.doc',
-            materialIcon: Icons.copy_outlined,
-          ),
-        ),
-        AdaptivePopupMenuItem<String>(
-          value: 'pin',
-          label: isPinned ? l10n.unpin : l10n.pin,
-          icon: conduitAdaptivePopupMenuIcon(
-            iosSymbol: isPinned ? 'pin.slash' : 'pin',
-            materialIcon: isPinned
-                ? Icons.push_pin_outlined
-                : Icons.push_pin_outlined,
-          ),
-        ),
-        AdaptivePopupMenuItem<String>(
-          value: 'delete',
-          label: l10n.delete,
-          icon: conduitAdaptivePopupMenuIcon(
-            iosSymbol: 'trash',
-            materialIcon: Icons.delete_outline,
-          ),
-        ),
-      ],
-      onSelected: onSelected,
     );
   }
 }

@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import '../theme/theme_extensions.dart';
 
@@ -81,14 +81,7 @@ class _AssistantDetailHeaderState extends State<AssistantDetailHeader>
     }
   }
 
-  bool get _shouldAnimateShimmer {
-    if (!widget.showShimmer || _disableAnimations) {
-      return false;
-    }
-
-    final bindingType = WidgetsBinding.instance.runtimeType.toString();
-    return !bindingType.contains('Test');
-  }
+  bool get _shouldAnimateShimmer => widget.showShimmer && !_disableAnimations;
 
   @override
   Widget build(BuildContext context) {

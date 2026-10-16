@@ -1,12 +1,15 @@
 import 'dart:async';
 
 import 'package:checks/checks.dart';
-import 'package:conduit/core/models/server_config.dart';
-import 'package:conduit/core/models/server_user_settings.dart';
-import 'package:conduit/core/providers/app_providers.dart';
-import 'package:conduit/core/services/api_service.dart';
-import 'package:conduit/core/services/settings_service.dart';
-import 'package:conduit/core/services/worker_manager.dart';
+import 'package:conduit_core/models/server_config.dart';
+import 'package:conduit_core/models/server_user_settings.dart';
+import 'package:conduit_core/persistence/persistence_keys.dart';
+import 'package:conduit_core/persistence/preferences_store.dart';
+import 'package:conduit_core/ports/key_value_store.dart';
+import 'package:conduit_core/providers/app_providers.dart';
+import 'package:conduit_core/services/api_service.dart';
+import 'package:conduit_core/services/settings_service.dart';
+import 'package:conduit_core/services/worker_manager.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -26,6 +29,63 @@ const _secondServerConfig = ServerConfig(
 
 void main() {
   group('PersonalizationSettings pinned models', () {
+    // Settings land under the stored active account, as in the app.
+    setUp(() {
+      PreferencesStore.debugOverride(
+        InMemoryKeyValueStore({PreferenceKeys.activeServerId: _serverConfig.id}),
+      );
+    });
+    tearDown(PreferencesStore.debugReset);
+
+    // Storage can count the only account active with no id stored for it.
+    test('a settings read keeps its pins with no active account stored',
+        () async {
+      await PreferencesStore.put(PreferenceKeys.activeServerId, null);
+      final api = _PinnedModelsApiService(delaySettingsReads: true);
+      addTearDown(api.dispose);
+      final container = _container(
+        api: api,
+        appSettings: const AppSettings(),
+        activeServer: _serverConfig,
+      );
+      addTearDown(container.dispose);
+      await container.read(activeServerProvider.future);
+
+      final read = container.read(personalizationSettingsProvider.future);
+      await api.waitForSettingsReadCount(1);
+      api.completeSettingsRead(0, ['server-a-pin']);
+      await read;
+      await _flushMicrotasks();
+
+      check(container.read(appSettingsProvider).pinnedModels)
+          .deepEquals(['server-a-pin']);
+    });
+
+    // A switch stores the next account before the API client is rebuilt.
+    test('a settings read finishing as the account changes keeps its pins '
+        'with its account', () async {
+      final api = _PinnedModelsApiService(delaySettingsReads: true);
+      addTearDown(api.dispose);
+      final container = _container(
+        api: api,
+        appSettings: const AppSettings(),
+        activeServer: _serverConfig,
+      );
+      addTearDown(container.dispose);
+
+      final read = container.read(personalizationSettingsProvider.future);
+      await api.waitForSettingsReadCount(1);
+      await PreferencesStore.put(
+        PreferenceKeys.activeServerId,
+        _secondServerConfig.id,
+      );
+      api.completeSettingsRead(0, ['server-a-pin']);
+      await read;
+      await _flushMicrotasks();
+
+      check(container.read(appSettingsProvider).pinnedModels).isEmpty();
+    });
+
     test('no-API toggle preserves existing local pins', () async {
       final container = _container(
         api: null,
@@ -49,9 +109,8 @@ void main() {
             .requireValue
             .pinnedModelIds,
       ).deepEquals(['local-a', 'local-b']);
-      check(
-        container.read(appSettingsProvider).pinnedModels,
-      ).deepEquals(['local-a', 'local-b']);
+      check(container.read(appSettingsProvider).pinnedModels)
+          .deepEquals(['local-a', 'local-b']);
     });
 
     test('stale server response cannot overwrite latest pin intent', () async {
@@ -85,9 +144,8 @@ void main() {
             .requireValue
             .pinnedModelIds,
       ).deepEquals(['second']);
-      check(
-        container.read(appSettingsProvider).pinnedModels,
-      ).deepEquals(['second']);
+      check(container.read(appSettingsProvider).pinnedModels)
+          .deepEquals(['second']);
     });
 
     test(
@@ -118,9 +176,8 @@ void main() {
               .requireValue
               .pinnedModelIds,
         ).deepEquals(['new-pin']);
-        check(
-          container.read(effectivePinnedModelIdsProvider),
-        ).deepEquals(['new-pin']);
+        check(container.read(effectivePinnedModelIdsProvider))
+            .deepEquals(['new-pin']);
 
         api.completeSettingsRead(0, ['old-pin']);
         final loaded = await initialRead;
@@ -132,9 +189,8 @@ void main() {
               .requireValue
               .pinnedModelIds,
         ).deepEquals(['new-pin']);
-        check(
-          container.read(appSettingsProvider).pinnedModels,
-        ).deepEquals(['new-pin']);
+        check(container.read(appSettingsProvider).pinnedModels)
+            .deepEquals(['new-pin']);
 
         api.completeRequest(0, ['new-pin']);
         await pinWrite;
@@ -188,9 +244,8 @@ void main() {
         await secondApi.waitForSettingsReadCount(1);
 
         check(container.read(canTogglePinnedModelsProvider)).isFalse();
-        check(
-          container.read(effectivePinnedModelIdsProvider),
-        ).deepEquals(['previous-pin']);
+        check(container.read(effectivePinnedModelIdsProvider))
+            .deepEquals(['previous-pin']);
 
         final pinResult = await container
             .read(personalizationSettingsProvider.notifier)
@@ -199,9 +254,8 @@ void main() {
 
         check(pinResult.pinnedModelIds).isEmpty();
         check(secondApi.requestCount).equals(0);
-        check(
-          container.read(appSettingsProvider).pinnedModels,
-        ).deepEquals(['previous-pin']);
+        check(container.read(appSettingsProvider).pinnedModels)
+            .deepEquals(['previous-pin']);
 
         secondApi.completeSettingsRead(0, ['server-b-pin']);
         final loaded = await switchedRead;
@@ -214,9 +268,8 @@ void main() {
               .pinnedModelIds,
         ).deepEquals(['server-b-pin']);
         await _flushMicrotasks();
-        check(
-          container.read(appSettingsProvider).pinnedModels,
-        ).deepEquals(['server-b-pin']);
+        check(container.read(appSettingsProvider).pinnedModels)
+            .deepEquals(['server-b-pin']);
         check(container.read(canTogglePinnedModelsProvider)).isTrue();
       },
     );
@@ -241,9 +294,8 @@ void main() {
         );
         await api.waitForSettingsReadCount(1);
 
-        check(
-          container.read(effectivePinnedModelIdsProvider),
-        ).deepEquals(['cached-pin']);
+        check(container.read(effectivePinnedModelIdsProvider))
+            .deepEquals(['cached-pin']);
         check(container.read(canTogglePinnedModelsProvider)).isFalse();
 
         final unpinResult = await container
@@ -253,90 +305,83 @@ void main() {
 
         check(unpinResult.pinnedModelIds).isEmpty();
         check(api.requestCount).equals(0);
-        check(
-          container.read(appSettingsProvider).pinnedModels,
-        ).deepEquals(['cached-pin']);
+        check(container.read(appSettingsProvider).pinnedModels)
+            .deepEquals(['cached-pin']);
 
         api.completeSettingsRead(0, ['server-pin']);
         final loaded = await initialRead;
 
         check(loaded.pinnedModelIds).deepEquals(['server-pin']);
         await _flushMicrotasks();
-        check(
-          container.read(appSettingsProvider).pinnedModels,
-        ).deepEquals(['server-pin']);
+        check(container.read(appSettingsProvider).pinnedModels)
+            .deepEquals(['server-pin']);
         check(container.read(canTogglePinnedModelsProvider)).isTrue();
       },
     );
 
-    test(
-      'write response after server switch does not overwrite active server pins',
-      () async {
-        final firstApi = _PinnedModelsApiService(serverConfig: _serverConfig);
-        final secondApi = _PinnedModelsApiService(
-          delaySettingsReads: true,
-          serverConfig: _secondServerConfig,
-        );
-        addTearDown(firstApi.dispose);
-        addTearDown(secondApi.dispose);
-        final activeServer =
-            NotifierProvider<_ActiveServerNotifier, ServerConfig?>(
-              () => _ActiveServerNotifier(_serverConfig),
-            );
-        final container = _container(
-          api: null,
-          apiOverride: (ref) {
-            final server = ref.watch(activeServer);
-            return switch (server?.id) {
-              'test-server' => firstApi,
-              'second-server' => secondApi,
-              _ => null,
-            };
-          },
-          appSettings: const AppSettings(),
-          activeServer: _serverConfig,
-          activeServerOverride: activeServer,
-        );
-        addTearDown(container.dispose);
+    test('write response after server switch does not overwrite active server pins', () async {
+      final firstApi = _PinnedModelsApiService(serverConfig: _serverConfig);
+      final secondApi = _PinnedModelsApiService(
+        delaySettingsReads: true,
+        serverConfig: _secondServerConfig,
+      );
+      addTearDown(firstApi.dispose);
+      addTearDown(secondApi.dispose);
+      final activeServer =
+          NotifierProvider<_ActiveServerNotifier, ServerConfig?>(
+            () => _ActiveServerNotifier(_serverConfig),
+          );
+      final container = _container(
+        api: null,
+        apiOverride: (ref) {
+          final server = ref.watch(activeServer);
+          return switch (server?.id) {
+            'test-server' => firstApi,
+            'second-server' => secondApi,
+            _ => null,
+          };
+        },
+        appSettings: const AppSettings(),
+        activeServer: _serverConfig,
+        activeServerOverride: activeServer,
+      );
+      addTearDown(container.dispose);
 
-        await container.read(personalizationSettingsProvider.future);
+      await container.read(personalizationSettingsProvider.future);
 
-        final writeOnFirstServer = container
-            .read(personalizationSettingsProvider.notifier)
-            .setPinnedModels(['server-a-pin']);
-        await firstApi.waitForRequestCount(1);
-        check(firstApi.requestModelIds(0)).deepEquals(['server-a-pin']);
+      final writeOnFirstServer = container
+          .read(personalizationSettingsProvider.notifier)
+          .setPinnedModels(['server-a-pin']);
+      await firstApi.waitForRequestCount(1);
+      check(firstApi.requestModelIds(0)).deepEquals(['server-a-pin']);
 
-        container.read(activeServer.notifier).set(_secondServerConfig);
-        final switchedRead = container.read(
-          personalizationSettingsProvider.future,
-        );
-        await secondApi.waitForSettingsReadCount(1);
-        secondApi.completeSettingsRead(0, ['server-b-pin']);
-        final loaded = await switchedRead;
+      container.read(activeServer.notifier).set(_secondServerConfig);
+      final switchedRead = container.read(
+        personalizationSettingsProvider.future,
+      );
+      await secondApi.waitForSettingsReadCount(1);
+      secondApi.completeSettingsRead(0, ['server-b-pin']);
+      final loaded = await switchedRead;
 
-        check(loaded.pinnedModelIds).deepEquals(['server-b-pin']);
-        await _flushMicrotasks();
-        check(
-          container.read(appSettingsProvider).pinnedModels,
-        ).deepEquals(['server-b-pin']);
+      check(loaded.pinnedModelIds).deepEquals(['server-b-pin']);
+      await _flushMicrotasks();
+      check(container.read(appSettingsProvider).pinnedModels)
+          .deepEquals(['server-b-pin']);
 
-        firstApi.completeRequest(0, ['server-a-pin']);
-        final staleWriteResult = await writeOnFirstServer;
+      firstApi.completeRequest(0, ['server-a-pin']);
+      final staleWriteResult = await writeOnFirstServer;
 
-        check(staleWriteResult.pinnedModelIds).deepEquals(['server-b-pin']);
-        check(
-          container
-              .read(personalizationSettingsProvider)
-              .requireValue
-              .pinnedModelIds,
-        ).deepEquals(['server-b-pin']);
-        await _flushMicrotasks();
-        check(
-          container.read(appSettingsProvider).pinnedModels,
-        ).deepEquals(['server-b-pin']);
-      },
-    );
+      check(staleWriteResult.pinnedModelIds).deepEquals(['server-b-pin']);
+      check(
+        container
+            .read(personalizationSettingsProvider)
+            .requireValue
+            .pinnedModelIds,
+      ).deepEquals(['server-b-pin']);
+      await _flushMicrotasks();
+      check(container.read(appSettingsProvider).pinnedModels)
+          .deepEquals(['server-b-pin']);
+    });
 
     test(
       'settings read after server switch does not overwrite active server pins',
@@ -387,9 +432,8 @@ void main() {
 
         check(loaded.pinnedModelIds).deepEquals(['server-b-pin']);
         await _flushMicrotasks();
-        check(
-          container.read(appSettingsProvider).pinnedModels,
-        ).deepEquals(['server-b-pin']);
+        check(container.read(appSettingsProvider).pinnedModels)
+            .deepEquals(['server-b-pin']);
 
         firstApi.completeSettingsRead(0, ['server-a-pin']);
         final staleReadResult = await readOnFirstServer;
@@ -402,9 +446,8 @@ void main() {
               .pinnedModelIds,
         ).deepEquals(['server-b-pin']);
         await _flushMicrotasks();
-        check(
-          container.read(appSettingsProvider).pinnedModels,
-        ).deepEquals(['server-b-pin']);
+        check(container.read(appSettingsProvider).pinnedModels)
+            .deepEquals(['server-b-pin']);
       },
     );
   });
@@ -462,6 +505,8 @@ class _ActiveServerNotifier extends Notifier<ServerConfig?> {
   ServerConfig? build() => _initial;
 
   void set(ServerConfig? server) {
+    // Stored first, as a switch does; the write applies in memory at once.
+    unawaited(PreferencesStore.put(PreferenceKeys.activeServerId, server?.id));
     state = server;
   }
 }
@@ -489,7 +534,9 @@ class _PinnedModelsApiService extends ApiService {
   final List<_PinnedModelsRequest> _requests = [];
   final List<void Function()> _requestWaiters = [];
 
+  @override
   void dispose() {
+    super.dispose();
     _workerManager.dispose();
   }
 

@@ -2,12 +2,11 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:ui' show FontFeature, ImageFilter;
 
-import 'package:adaptive_platform_ui/adaptive_platform_ui.dart';
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart';
+import 'package:conduit/shared/widgets/platform_ui/platform_ui.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:conduit/core/services/haptic_service.dart';
 import 'package:conduit/l10n/app_localizations.dart';
-import 'package:record/record.dart';
 
 import '../../../shared/theme/theme_extensions.dart';
 import '../services/audio_recording_service.dart';
@@ -20,8 +19,9 @@ class AudioRecordingOverlay extends StatefulWidget {
   /// Called when the user cancels recording.
   final VoidCallback onCancel;
 
-  /// Called when the user confirms the recording with the audio file.
-  final void Function(File audioFile) onConfirm;
+  /// Durably saves a confirmed recording. Returning false keeps the stopped
+  /// file in this overlay and re-enables the button so the user can retry.
+  final Future<bool> Function(File audioFile) onConfirm;
 
   const AudioRecordingOverlay({
     super.key,
@@ -35,16 +35,18 @@ class AudioRecordingOverlay extends StatefulWidget {
 
 class _AudioRecordingOverlayState extends State<AudioRecordingOverlay>
     with SingleTickerProviderStateMixin {
-  final AudioRecordingService _recordingService = AudioRecordingService();
+  final AudioRecordingService _recordingService =
+      createNoteAudioRecordingService();
 
   bool _isRecording = false;
   bool _isProcessing = false;
   bool _hasError = false;
+  File? _stoppedRecording;
   Duration _duration = Duration.zero;
   double _amplitude = 0.0;
 
   StreamSubscription<Duration>? _durationSub;
-  StreamSubscription<Amplitude>? _amplitudeSub;
+  StreamSubscription<double>? _amplitudeSub;
 
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
@@ -85,13 +87,13 @@ class _AudioRecordingOverlayState extends State<AudioRecordingOverlay>
       _amplitudeSub = _recordingService.amplitudeStream.listen((amp) {
         if (mounted) {
           // Normalize amplitude to 0-1 range
-          // amp.current is in dBFS, typically -160 to 0
+          // amp is in dBFS, typically -160 to 0
           // We normalize from -60 to 0 for a reasonable range
-          final normalized = ((amp.current + 60) / 60).clamp(0.0, 1.0);
+          final normalized = ((amp + 60) / 60).clamp(0.0, 1.0);
           setState(() => _amplitude = normalized);
         }
       });
-    } catch (e) {
+    } catch (_) {
       if (!mounted) return;
       setState(() => _hasError = true);
       final l10n = AppLocalizations.of(context)!;
@@ -107,16 +109,20 @@ class _AudioRecordingOverlayState extends State<AudioRecordingOverlay>
   }
 
   Future<void> _confirmRecording() async {
-    if (_isProcessing || !_isRecording || !mounted) return;
+    if (_isProcessing || (!_isRecording && _stoppedRecording == null)) return;
+    if (!mounted) return;
 
     setState(() => _isProcessing = true);
     ConduitHaptics.mediumImpact();
 
     try {
-      final file = await _recordingService.stopRecording();
+      final file = _stoppedRecording ?? await _recordingService.stopRecording();
 
       if (file != null && mounted) {
-        widget.onConfirm(file);
+        _stoppedRecording = file;
+        setState(() => _isRecording = false);
+        final saved = await widget.onConfirm(file);
+        if (mounted && !saved) setState(() => _isProcessing = false);
       } else if (mounted) {
         final l10n = AppLocalizations.of(context)!;
         AdaptiveSnackBar.show(
@@ -130,11 +136,11 @@ class _AudioRecordingOverlayState extends State<AudioRecordingOverlay>
       if (mounted) {
         AdaptiveSnackBar.show(
           context,
-          message: e.toString(),
+          message: AppLocalizations.of(context)!.recordingFailed,
           type: AdaptiveSnackBarType.error,
           duration: const Duration(seconds: 4),
         );
-        widget.onCancel();
+        setState(() => _isProcessing = false);
       }
     }
   }
@@ -142,7 +148,20 @@ class _AudioRecordingOverlayState extends State<AudioRecordingOverlay>
   Future<void> _cancelRecording() async {
     ConduitHaptics.lightImpact();
     await _recordingService.cancelRecording();
+    await _deleteStoppedRecording();
     if (mounted) widget.onCancel();
+  }
+
+  Future<void> _deleteStoppedRecording() async {
+    final file = _stoppedRecording;
+    _stoppedRecording = null;
+    if (file != null && await file.exists()) {
+      try {
+        await file.delete();
+      } catch (_) {
+        // Cache cleanup is best effort after the user explicitly discards it.
+      }
+    }
   }
 
   String _formatDuration(Duration duration) {
@@ -159,6 +178,7 @@ class _AudioRecordingOverlayState extends State<AudioRecordingOverlay>
     // Recording service dispose is async but Flutter's dispose() is sync.
     // Fire-and-forget is acceptable here as the service handles its own cleanup.
     unawaited(_recordingService.dispose());
+    if (!_isProcessing) unawaited(_deleteStoppedRecording());
     super.dispose();
   }
 
@@ -188,7 +208,7 @@ class _AudioRecordingOverlayState extends State<AudioRecordingOverlay>
                   child: Row(
                     children: [
                       AdaptiveButton.child(
-                        onPressed: _cancelRecording,
+                        onPressed: _isProcessing ? null : _cancelRecording,
                         style: AdaptiveButtonStyle.plain,
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
@@ -333,7 +353,10 @@ class _AudioRecordingOverlayState extends State<AudioRecordingOverlay>
                     width: double.infinity,
                     height: 56,
                     child: AdaptiveButton.child(
-                      onPressed: _isProcessing || !_isRecording || _hasError
+                      onPressed:
+                          _isProcessing ||
+                              (!_isRecording && _stoppedRecording == null) ||
+                              _hasError
                           ? null
                           : _confirmRecording,
                       color: Colors.red,

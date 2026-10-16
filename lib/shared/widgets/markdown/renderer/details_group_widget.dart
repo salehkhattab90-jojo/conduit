@@ -1,9 +1,30 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import 'package:conduit/l10n/app_localizations.dart';
 
 import '../../../theme/theme_extensions.dart';
 import '../../assistant_detail_header.dart';
+
+enum MarkdownDetailsGroupRenderMode { details, previewsOnly }
+
+class MarkdownDetailsGroupRenderScope extends InheritedWidget {
+  const MarkdownDetailsGroupRenderScope({
+    super.key,
+    required this.mode,
+    required super.child,
+  });
+
+  final MarkdownDetailsGroupRenderMode mode;
+
+  static MarkdownDetailsGroupRenderMode? maybeOf(BuildContext context) =>
+      context
+          .dependOnInheritedWidgetOfExactType<MarkdownDetailsGroupRenderScope>()
+          ?.mode;
+
+  @override
+  bool updateShouldNotify(MarkdownDetailsGroupRenderScope oldWidget) =>
+      mode != oldWidget.mode;
+}
 
 class MarkdownDetailsGroupItem {
   const MarkdownDetailsGroupItem({
@@ -56,9 +77,8 @@ class _MarkdownDetailsGroupState extends State<MarkdownDetailsGroup> {
       return;
     }
 
-    final restored = PageStorage.maybeOf(
-      context,
-    )?.readState(context, identifier: stateId);
+    final restored = PageStorage.maybeOf(context)
+        ?.readState(context, identifier: stateId);
     if (restored is bool) {
       _isExpanded = restored;
     }
@@ -70,9 +90,8 @@ class _MarkdownDetailsGroupState extends State<MarkdownDetailsGroup> {
     if (stateId == null) {
       return;
     }
-    PageStorage.maybeOf(
-      context,
-    )?.writeState(context, _isExpanded, identifier: stateId);
+    PageStorage.maybeOf(context)
+        ?.writeState(context, _isExpanded, identifier: stateId);
   }
 
   String _buildSummaryText() {
@@ -147,12 +166,26 @@ class _MarkdownDetailsGroupState extends State<MarkdownDetailsGroup> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: widget.items
-                        .map((item) => Builder(builder: item.childBuilder))
+                        .map(
+                          (item) => MarkdownDetailsGroupRenderScope(
+                            mode: MarkdownDetailsGroupRenderMode.details,
+                            child: Builder(builder: item.childBuilder),
+                          ),
+                        )
                         .toList(growable: false),
                   ),
                 ),
               ),
             ),
+          MarkdownDetailsGroupRenderScope(
+            mode: MarkdownDetailsGroupRenderMode.previewsOnly,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: widget.items
+                  .map((item) => Builder(builder: item.childBuilder))
+                  .toList(growable: false),
+            ),
+          ),
         ],
       ),
     );

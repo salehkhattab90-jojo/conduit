@@ -4,19 +4,23 @@ import 'dart:typed_data';
 import 'package:cached_network_image_ce/cached_network_image.dart';
 import 'package:conduit/core/network/image_header_utils.dart';
 import 'package:conduit/core/network/self_signed_image_cache_manager.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../services/raster_media_policy.dart';
 import '../services/brand_service.dart';
 import '../theme/theme_extensions.dart';
 
-typedef AvatarWidgetBuilder =
-    Widget Function(BuildContext context, double size);
+typedef AvatarWidgetBuilder = Widget Function(
+  BuildContext context,
+  double size,
+);
 
 class AvatarImage extends ConsumerWidget {
   final double size;
   final String? imageUrl;
   final BorderRadius? borderRadius;
+  final Color? tintColor;
   final AvatarWidgetBuilder fallbackBuilder;
   final AvatarWidgetBuilder? placeholderBuilder;
 
@@ -26,6 +30,7 @@ class AvatarImage extends ConsumerWidget {
     required this.fallbackBuilder,
     this.imageUrl,
     this.borderRadius,
+    this.tintColor,
     this.placeholderBuilder,
   });
 
@@ -37,14 +42,44 @@ class AvatarImage extends ConsumerWidget {
     if (url == null || url.isEmpty) {
       return fallbackBuilder(context, size);
     }
+    final decodeTarget = RasterMediaPolicy.forBox(
+      context,
+      profile: RasterDecodeProfile.avatar,
+      logicalWidth: size,
+      logicalHeight: size,
+    );
+
+    if (url.startsWith('asset:')) {
+      final assetName = url.substring('asset:'.length);
+      if (assetName.isEmpty) return fallbackBuilder(context, size);
+      return ClipRRect(
+        borderRadius: _radius,
+        child: Image(
+          image: RasterMediaPolicy.resizeProvider(
+            AssetImage(assetName),
+            decodeTarget,
+          ),
+          width: size,
+          height: size,
+          fit: BoxFit.cover,
+          color: tintColor,
+          colorBlendMode: BlendMode.srcIn,
+          errorBuilder: (context, error, stackTrace) =>
+              fallbackBuilder(context, size),
+        ),
+      );
+    }
 
     if (url.startsWith('data:image')) {
       final content = _decodeDataImage(url);
       if (content != null) {
         return ClipRRect(
           borderRadius: _radius,
-          child: Image.memory(
-            content,
+          child: Image(
+            image: RasterMediaPolicy.resizeProvider(
+              MemoryImage(content),
+              decodeTarget,
+            ),
             width: size,
             height: size,
             fit: BoxFit.cover,
@@ -56,22 +91,33 @@ class AvatarImage extends ConsumerWidget {
       return fallbackBuilder(context, size);
     }
 
-    // Build auth/custom headers when loading from network
-    final headers = buildImageHeadersFromWidgetRef(ref);
+    // Credentials and the Conduit identity are scoped to the configured
+    // server; profile-image fields may contain external URLs.
+    final headers = buildImageHeadersForUrlFromWidgetRef(ref, url);
+    final cacheKey = buildImageCacheKeyForUrlFromWidgetRef(ref, url);
 
     final cacheManager = ref.watch(selfSignedImageCacheManagerProvider);
 
     return ClipRRect(
       borderRadius: _radius,
-      child: CachedNetworkImage(
-        imageUrl: url,
+      child: Image(
+        image: RasterMediaPolicy.resizeProvider(
+          CachedNetworkImageProvider(
+            url,
+            cacheKey: cacheKey,
+            cacheManager: cacheManager,
+            headers: headers,
+          ),
+          decodeTarget,
+        ),
         width: size,
         height: size,
         fit: BoxFit.cover,
-        cacheManager: cacheManager,
-        httpHeaders: headers,
-        placeholder: (context, _) =>
-            (placeholderBuilder ?? _defaultPlaceholder)(context, size),
+        frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+          return wasSynchronouslyLoaded || frame != null
+              ? child
+              : (placeholderBuilder ?? _defaultPlaceholder)(context, size);
+        },
         errorBuilder: (context, error, stackTrace) =>
             fallbackBuilder(context, size),
       ),

@@ -2,6 +2,8 @@ import 'package:flutter/foundation.dart';
 
 import 'renderer/latex_preprocessor.dart';
 
+import 'package:conduit_core/utils/streaming_markdown_preparation.dart';
+
 enum MarkdownRenderTier { plainText, richText, blocks }
 
 enum CompiledMarkdownBlockKind { none, code, mermaid, chartJs, previewableCode }
@@ -39,7 +41,7 @@ enum CompiledMarkdownNodeBlockKind {
 @immutable
 class CompiledMarkdownDocument {
   CompiledMarkdownDocument({
-    required this.normalizedContent,
+    required String normalizedContent,
     required this.renderTier,
     required this.containsCitations,
     required this.heavyBlockCount,
@@ -47,7 +49,29 @@ class CompiledMarkdownDocument {
     required List<CompiledMarkdownNode> nodes,
     required Map<String, String> blockLatexExpressions,
     required Map<String, String> inlineLatexExpressions,
-  }) : blocks = List<CompiledMarkdownBlock>.unmodifiable(blocks),
+    this.mutableBlockStartIndex = -1,
+  }) : _normalizedContent = PreparedMarkdownText.fromString(normalizedContent),
+       blocks = List<CompiledMarkdownBlock>.unmodifiable(blocks),
+       nodes = List<CompiledMarkdownNode>.unmodifiable(nodes),
+       blockLatexExpressions = Map<String, String>.unmodifiable(
+         blockLatexExpressions,
+       ),
+       inlineLatexExpressions = Map<String, String>.unmodifiable(
+         inlineLatexExpressions,
+       );
+
+  CompiledMarkdownDocument.prepared({
+    required PreparedMarkdownText normalizedContent,
+    required this.renderTier,
+    required this.containsCitations,
+    required this.heavyBlockCount,
+    required List<CompiledMarkdownBlock> blocks,
+    required List<CompiledMarkdownNode> nodes,
+    required Map<String, String> blockLatexExpressions,
+    required Map<String, String> inlineLatexExpressions,
+    this.mutableBlockStartIndex = -1,
+  }) : _normalizedContent = normalizedContent,
+       blocks = List<CompiledMarkdownBlock>.unmodifiable(blocks),
        nodes = List<CompiledMarkdownNode>.unmodifiable(nodes),
        blockLatexExpressions = Map<String, String>.unmodifiable(
          blockLatexExpressions,
@@ -57,16 +81,22 @@ class CompiledMarkdownDocument {
        );
 
   const CompiledMarkdownDocument.empty()
-    : normalizedContent = '',
+    : _normalizedContent = const PreparedMarkdownText.empty(),
       renderTier = MarkdownRenderTier.plainText,
       containsCitations = false,
       heavyBlockCount = 0,
       blocks = const <CompiledMarkdownBlock>[],
       nodes = const <CompiledMarkdownNode>[],
       blockLatexExpressions = const <String, String>{},
-      inlineLatexExpressions = const <String, String>{};
+      inlineLatexExpressions = const <String, String>{},
+      mutableBlockStartIndex = -1;
 
-  final String normalizedContent;
+  final PreparedMarkdownText _normalizedContent;
+
+  String get normalizedContent => _normalizedContent.materialize();
+  PreparedMarkdownText get preparedContent => _normalizedContent;
+  int get normalizedContentLength => _normalizedContent.length;
+
   final MarkdownRenderTier renderTier;
   final bool containsCitations;
   final int heavyBlockCount;
@@ -75,7 +105,15 @@ class CompiledMarkdownDocument {
   final Map<String, String> blockLatexExpressions;
   final Map<String, String> inlineLatexExpressions;
 
-  bool get isEmpty => normalizedContent.trim().isEmpty || nodes.isEmpty;
+  /// Index of the first root block that may still be replaced by streaming.
+  ///
+  /// A negative value means the document has no mutable-tail metadata. When
+  /// segments are combined, [compose] rebases this boundary to the composed
+  /// block list so every block at or after it remains mutable.
+  final int mutableBlockStartIndex;
+
+  bool get isEmpty =>
+      _normalizedContent.isBlank || (nodes.isEmpty && blocks.isEmpty);
 
   bool get hasHeavyBlocks => heavyBlockCount > 0;
 
@@ -85,6 +123,17 @@ class CompiledMarkdownDocument {
   int get rootNodeCount => nodes.length;
 
   int get rootBlockCount => blocks.length;
+
+  bool get hasMutableBlockMetadata =>
+      mutableBlockStartIndex >= 0 && mutableBlockStartIndex < blocks.length;
+
+  /// Whether [index] lies on or after the streaming mutation boundary.
+  bool isMutableRootBlock(int index) {
+    if (!hasMutableBlockMetadata) {
+      return false;
+    }
+    return index >= mutableBlockStartIndex && index < blocks.length;
+  }
 
   int get estimatedWeight {
     final blockWeight = blocks.fold<int>(0, (sum, block) => sum + block.weight);
@@ -98,7 +147,7 @@ class CompiledMarkdownDocument {
           0,
           (sum, value) => sum + value.length,
         );
-    return normalizedContent.length + blockWeight + nodeWeight + latexWeight;
+    return normalizedContentLength + blockWeight + nodeWeight + latexWeight;
   }
 
   LatexPreprocessor buildLatexPreprocessor() =>
@@ -106,6 +155,20 @@ class CompiledMarkdownDocument {
         blockLatexExpressions,
         inlineLatexExpressions,
       );
+
+  CompiledMarkdownDocument withPreparedContent(
+    PreparedMarkdownText normalizedContent,
+  ) => CompiledMarkdownDocument.prepared(
+    normalizedContent: normalizedContent,
+    renderTier: renderTier,
+    containsCitations: containsCitations,
+    heavyBlockCount: heavyBlockCount,
+    blocks: blocks,
+    nodes: nodes,
+    blockLatexExpressions: blockLatexExpressions,
+    inlineLatexExpressions: inlineLatexExpressions,
+    mutableBlockStartIndex: mutableBlockStartIndex,
+  );
 
   CompiledMarkdownDocument rebaseRootIds({required int rootNodeOffset}) {
     if (rootNodeOffset == 0 || nodes.isEmpty) {
@@ -122,8 +185,8 @@ class CompiledMarkdownDocument {
       }
     }
 
-    return CompiledMarkdownDocument(
-      normalizedContent: normalizedContent,
+    return CompiledMarkdownDocument.prepared(
+      normalizedContent: _normalizedContent,
       renderTier: renderTier,
       containsCitations: containsCitations,
       heavyBlockCount: heavyBlockCount,
@@ -139,20 +202,32 @@ class CompiledMarkdownDocument {
       nodes: rebasedRootNodes,
       blockLatexExpressions: blockLatexExpressions,
       inlineLatexExpressions: inlineLatexExpressions,
+      mutableBlockStartIndex: mutableBlockStartIndex,
     );
   }
 
   static CompiledMarkdownDocument compose({
     required String normalizedContent,
     required Iterable<CompiledMarkdownDocument> segments,
+    int mutableBlockStartIndex = -1,
+  }) => composePrepared(
+    normalizedContent: PreparedMarkdownText.fromString(normalizedContent),
+    segments: segments,
+    mutableBlockStartIndex: mutableBlockStartIndex,
+  );
+
+  static CompiledMarkdownDocument composePrepared({
+    required PreparedMarkdownText normalizedContent,
+    required Iterable<CompiledMarkdownDocument> segments,
+    int mutableBlockStartIndex = -1,
   }) {
     final segmentList = segments
-        .where((segment) => segment.nodes.isNotEmpty)
+        .where((segment) => !segment.isEmpty)
         .toList(growable: false);
     if (segmentList.isEmpty) {
-      return normalizedContent.trim().isEmpty
+      return normalizedContent.isBlank
           ? const CompiledMarkdownDocument.empty()
-          : CompiledMarkdownDocument(
+          : CompiledMarkdownDocument.prepared(
               normalizedContent: normalizedContent,
               renderTier: MarkdownRenderTier.plainText,
               containsCitations: false,
@@ -161,14 +236,16 @@ class CompiledMarkdownDocument {
               nodes: const <CompiledMarkdownNode>[],
               blockLatexExpressions: const <String, String>{},
               inlineLatexExpressions: const <String, String>{},
+              mutableBlockStartIndex: mutableBlockStartIndex,
             );
     }
     if (segmentList.length == 1) {
       final segment = segmentList.single;
-      if (segment.normalizedContent == normalizedContent) {
+      if (segment.preparedContent == normalizedContent &&
+          segment.mutableBlockStartIndex == mutableBlockStartIndex) {
         return segment;
       }
-      return CompiledMarkdownDocument(
+      return CompiledMarkdownDocument.prepared(
         normalizedContent: normalizedContent,
         renderTier: segment.renderTier,
         containsCitations: segment.containsCitations,
@@ -177,6 +254,7 @@ class CompiledMarkdownDocument {
         nodes: segment.nodes,
         blockLatexExpressions: segment.blockLatexExpressions,
         inlineLatexExpressions: segment.inlineLatexExpressions,
+        mutableBlockStartIndex: mutableBlockStartIndex,
       );
     }
 
@@ -187,10 +265,31 @@ class CompiledMarkdownDocument {
     final blockLatexExpressions = <String, String>{};
     final inlineLatexExpressions = <String, String>{};
 
+    // `mutableBlockStartIndex` is supplied as a block index into the naive
+    // concatenation of the segments. _appendComposedCompiledMarkdownBlock can
+    // merge a groupable tool_calls block into the previous block — collapsing
+    // the boundary between the frozen prefix and the mutable tail — which
+    // shifts composed indices. Recompute the effective index from the composed
+    // list so the mutable tail block keeps its streaming-fade classification.
+    final tracksMutableTail = mutableBlockStartIndex >= 0;
+    var naiveBlockIndex = 0;
+    var effectiveMutableBlockStartIndex = mutableBlockStartIndex;
+
     for (final segment in segmentList) {
       nodes.addAll(segment.nodes);
       for (final block in segment.blocks) {
+        final blockCountBeforeAppend = blocks.length;
         _appendComposedCompiledMarkdownBlock(blocks, block);
+        if (tracksMutableTail && naiveBlockIndex == mutableBlockStartIndex) {
+          // First block of the mutable tail. If it merged into the preceding
+          // (frozen) block, that merged block is the mutable boundary;
+          // otherwise it sits at its freshly appended position.
+          final merged = blocks.length == blockCountBeforeAppend;
+          effectiveMutableBlockStartIndex = merged
+              ? blockCountBeforeAppend - 1
+              : blockCountBeforeAppend;
+        }
+        naiveBlockIndex += 1;
       }
       containsCitations = containsCitations || segment.containsCitations;
       heavyBlockCount += segment.heavyBlockCount;
@@ -204,7 +303,7 @@ class CompiledMarkdownDocument {
       );
     }
 
-    return CompiledMarkdownDocument(
+    return CompiledMarkdownDocument.prepared(
       normalizedContent: normalizedContent,
       renderTier: MarkdownRenderTier.blocks,
       containsCitations: containsCitations,
@@ -213,6 +312,7 @@ class CompiledMarkdownDocument {
       nodes: nodes,
       blockLatexExpressions: blockLatexExpressions,
       inlineLatexExpressions: inlineLatexExpressions,
+      mutableBlockStartIndex: effectiveMutableBlockStartIndex,
     );
   }
 
@@ -225,6 +325,7 @@ class CompiledMarkdownDocument {
     'nodes': nodes.map((node) => node.toMap()).toList(growable: false),
     'blockLatexExpressions': blockLatexExpressions,
     'inlineLatexExpressions': inlineLatexExpressions,
+    'mutableBlockStartIndex': mutableBlockStartIndex,
   };
 
   factory CompiledMarkdownDocument.fromMap(Map<String, Object?> map) {
@@ -263,11 +364,16 @@ class CompiledMarkdownDocument {
       nodes: nodes,
       blockLatexExpressions: blockLatex,
       inlineLatexExpressions: inlineLatex,
+      mutableBlockStartIndex:
+          (map['mutableBlockStartIndex'] as num?)?.toInt() ?? -1,
     );
   }
 
   @override
   bool operator ==(Object other) {
+    if (identical(other, this)) {
+      return true;
+    }
     return other is CompiledMarkdownDocument &&
         other.normalizedContent == normalizedContent &&
         other.renderTier == renderTier &&
@@ -276,7 +382,8 @@ class CompiledMarkdownDocument {
         listEquals(other.blocks, blocks) &&
         listEquals(other.nodes, nodes) &&
         mapEquals(other.blockLatexExpressions, blockLatexExpressions) &&
-        mapEquals(other.inlineLatexExpressions, inlineLatexExpressions);
+        mapEquals(other.inlineLatexExpressions, inlineLatexExpressions) &&
+        other.mutableBlockStartIndex == mutableBlockStartIndex;
   }
 
   @override
@@ -289,6 +396,7 @@ class CompiledMarkdownDocument {
     Object.hashAll(nodes),
     Object.hashAllUnordered(blockLatexExpressions.entries),
     Object.hashAllUnordered(inlineLatexExpressions.entries),
+    mutableBlockStartIndex,
   );
 }
 
@@ -340,6 +448,10 @@ CompiledMarkdownBlock _rebaseCompiledMarkdownBlock(
     );
   }
   if (block is CompiledMarkdownDetailsBlock) {
+    // A details block's only rebaseable id is its blockId, which mirrors the
+    // matching root node's nodeId. detailsData carries no node ids, so it is
+    // reused unchanged. If a future details payload gains node ids that feed
+    // rootNodesById lookups in buildMarkdownDisplayParts, rebase them here too.
     return CompiledMarkdownDetailsBlock(
       blockId: _rebaseCompiledMarkdownPathId(block.blockId, rootNodeOffset),
       detailsData: block.detailsData,
@@ -348,13 +460,11 @@ CompiledMarkdownBlock _rebaseCompiledMarkdownBlock(
   if (block is CompiledMarkdownDetailsGroup) {
     final items = block.items
         .map(
-          (item) =>
-              _rebaseCompiledMarkdownBlock(
-                    item,
-                    rootNodeOffset,
-                    rebasedRootNodesByOldId,
-                  )
-                  as CompiledMarkdownDetailsBlock,
+          (item) => _rebaseCompiledMarkdownBlock(
+            item,
+            rootNodeOffset,
+            rebasedRootNodesByOldId,
+          ) as CompiledMarkdownDetailsBlock,
         )
         .toList(growable: false);
     final blockId = items.isEmpty
@@ -578,10 +688,19 @@ class CompiledMarkdownLatexSegment extends CompiledMarkdownInlineSegment {
   const CompiledMarkdownLatexSegment({
     required this.tex,
     required this.isBlock,
+    this.placeholderLength = 0,
   });
 
   final String tex;
   final bool isBlock;
+
+  /// The length of the placeholder token this segment was recovered from in
+  /// the node's `textContent`.
+  ///
+  /// Streaming-fade offset accounting advances by this length so the visible
+  /// text offset stays aligned with the document-wide `textContent`
+  /// coordinate space (which still contains the placeholder tokens).
+  final int placeholderLength;
 
   @override
   int get weight => tex.length + (isBlock ? 1 : 0);
@@ -591,22 +710,25 @@ class CompiledMarkdownLatexSegment extends CompiledMarkdownInlineSegment {
     'kind': 'latex',
     'tex': tex,
     'isBlock': isBlock,
+    'placeholderLength': placeholderLength,
   };
 
   factory CompiledMarkdownLatexSegment.fromMap(Map<String, Object?> map) =>
       CompiledMarkdownLatexSegment(
         tex: (map['tex'] ?? '') as String,
         isBlock: (map['isBlock'] ?? false) as bool,
+        placeholderLength: (map['placeholderLength'] as num?)?.toInt() ?? 0,
       );
 
   @override
   bool operator ==(Object other) =>
       other is CompiledMarkdownLatexSegment &&
       other.tex == tex &&
-      other.isBlock == isBlock;
+      other.isBlock == isBlock &&
+      other.placeholderLength == placeholderLength;
 
   @override
-  int get hashCode => Object.hash(tex, isBlock);
+  int get hashCode => Object.hash(tex, isBlock, placeholderLength);
 }
 
 @immutable
@@ -848,6 +970,7 @@ class CompiledMarkdownToolCallData {
     this.argumentsCode = '',
     this.resultCode = '',
     this.resultDisplayText = '',
+    this.isError = false,
     required List<String> embedSources,
     required List<String> imageUrls,
   }) : argumentEntries =
@@ -863,6 +986,7 @@ class CompiledMarkdownToolCallData {
   final String argumentsCode;
   final String resultCode;
   final String resultDisplayText;
+  final bool isError;
   final List<String> embedSources;
   final List<String> imageUrls;
 
@@ -894,6 +1018,7 @@ class CompiledMarkdownToolCallData {
     'argumentsCode': argumentsCode,
     'resultCode': resultCode,
     'resultDisplayText': resultDisplayText,
+    'isError': isError,
     'embedSources': embedSources,
     'imageUrls': imageUrls,
   };
@@ -915,6 +1040,7 @@ class CompiledMarkdownToolCallData {
       argumentsCode: (map['argumentsCode'] ?? '') as String,
       resultCode: (map['resultCode'] ?? '') as String,
       resultDisplayText: (map['resultDisplayText'] ?? '') as String,
+      isError: map['isError'] == true,
       embedSources:
           ((map['embedSources'] as List<dynamic>? ?? const <dynamic>[]))
               .map((value) => value.toString())
@@ -934,6 +1060,7 @@ class CompiledMarkdownToolCallData {
         other.argumentsCode == argumentsCode &&
         other.resultCode == resultCode &&
         other.resultDisplayText == resultDisplayText &&
+        other.isError == isError &&
         listEquals(other.embedSources, embedSources) &&
         listEquals(other.imageUrls, imageUrls);
   }
@@ -946,6 +1073,7 @@ class CompiledMarkdownToolCallData {
     argumentsCode,
     resultCode,
     resultDisplayText,
+    isError,
     Object.hashAll(embedSources),
     Object.hashAll(imageUrls),
   );
@@ -964,6 +1092,8 @@ class CompiledMarkdownDetailsData {
     required this.isDone,
     required this.isPending,
     required this.durationSeconds,
+    this.hasDuration = false,
+    this.status,
     this.toolCallData,
   });
 
@@ -974,9 +1104,15 @@ class CompiledMarkdownDetailsData {
   final CompiledMarkdownDetailsKind kind;
   final String type;
   final String name;
+  final String? status;
   final bool isDone;
   final bool isPending;
   final int durationSeconds;
+
+  /// Whether the source carried an explicit `duration` attribute. Upstream
+  /// only labels a reasoning block "Thought for…" once a duration exists;
+  /// a done block without one is still shown as thinking.
+  final bool hasDuration;
   final CompiledMarkdownToolCallData? toolCallData;
 
   bool get supportsInlineExpansion =>
@@ -1005,6 +1141,7 @@ class CompiledMarkdownDetailsData {
       kind.name.length +
       type.length +
       name.length +
+      (status?.length ?? 0) +
       durationSeconds +
       (toolCallData?.weight ?? 0);
 
@@ -1016,9 +1153,11 @@ class CompiledMarkdownDetailsData {
     'kind': kind.name,
     'type': type,
     'name': name,
+    'status': status,
     'isDone': isDone,
     'isPending': isPending,
     'durationSeconds': durationSeconds,
+    'hasDuration': hasDuration,
     'toolCallData': toolCallData?.toMap(),
   };
 
@@ -1034,9 +1173,11 @@ class CompiledMarkdownDetailsData {
       kind: _detailsKindFromName((map['kind'] ?? '') as String),
       type: (map['type'] ?? '') as String,
       name: (map['name'] ?? '') as String,
+      status: map['status'] as String?,
       isDone: (map['isDone'] ?? false) as bool,
       isPending: (map['isPending'] ?? false) as bool,
       durationSeconds: (map['durationSeconds'] ?? 0) as int,
+      hasDuration: (map['hasDuration'] ?? false) as bool,
       toolCallData: toolCallDataMap == null
           ? null
           : CompiledMarkdownToolCallData.fromMap(
@@ -1055,6 +1196,7 @@ class CompiledMarkdownDetailsData {
         other.kind == kind &&
         other.type == type &&
         other.name == name &&
+        other.status == status &&
         other.isDone == isDone &&
         other.isPending == isPending &&
         other.durationSeconds == durationSeconds &&
@@ -1070,6 +1212,7 @@ class CompiledMarkdownDetailsData {
     kind,
     type,
     name,
+    status,
     isDone,
     isPending,
     durationSeconds,

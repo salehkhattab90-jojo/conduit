@@ -1,19 +1,19 @@
-import 'dart:io' show Platform;
+import 'package:flutter/widgets.dart';
 
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart';
+import '../../../shared/widgets/platform_ui/platform_ui.dart';
+import '../../../shared/widgets/platform_ui/vocabulary.dart';
 
 import '../../../l10n/app_localizations.dart';
 import '../../../shared/theme/theme_extensions.dart';
 
-/// A generic segmented selector that adapts to Cupertino on iOS/macOS
-/// and Material SegmentedButton on other platforms.
+/// A typed settings selector with platform-specific labels.
 class AdaptiveSegmentedSelector<T extends Object> extends StatelessWidget {
   const AdaptiveSegmentedSelector({
     super.key,
     required this.value,
     required this.onChanged,
     required this.options,
+    this.showIcons = true,
   });
 
   final T value;
@@ -28,60 +28,39 @@ class AdaptiveSegmentedSelector<T extends Object> extends StatelessWidget {
     })
   >
   options;
+  final bool showIcons;
 
   @override
   Widget build(BuildContext context) {
+    final platform = Theme.of(context).platform;
     final isCupertino =
-        Platform.isIOS || Theme.of(context).platform == TargetPlatform.macOS;
-
-    if (isCupertino) {
-      return CupertinoSlidingSegmentedControl<T>(
-        groupValue: value,
-        disabledChildren: {
-          for (final option in options)
-            if (!option.enabled) option.value,
-        },
-        onValueChanged: (next) {
-          if (next == null) return;
-          final selected = options.any(
-            (option) => option.value == next && option.enabled,
-          );
-          if (selected) {
-            onChanged(next);
-          }
-        },
-        children: {
-          for (final option in options)
-            option.value: ThemeModeSegmentLabel(
-              icon: option.cupertinoIcon,
-              label: option.label,
-            ),
-        },
-      );
-    }
-
-    return SegmentedButton<T>(
-      selected: {value},
-      showSelectedIcon: false,
+        platform == TargetPlatform.iOS || platform == TargetPlatform.macOS;
+    return AdaptiveValueSegmentedControl<T>(
+      value: value,
+      onChanged: onChanged,
       segments: [
         for (final option in options)
-          ButtonSegment<T>(
+          AdaptiveSegment<T>(
             value: option.value,
-            icon: Icon(option.materialIcon),
-            label: Text(option.label),
             enabled: option.enabled,
+            semanticLabel: option.label,
+            label: isCupertino && showIcons
+                ? ThemeModeSegmentLabel(
+                    icon: option.cupertinoIcon,
+                    label: option.label,
+                  )
+                : isCupertino
+                ? Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: Spacing.sm,
+                      vertical: Spacing.xs,
+                    ),
+                    child: Text(option.label),
+                  )
+                : Text(option.label),
+            icon: showIcons && !isCupertino ? Icon(option.materialIcon) : null,
           ),
       ],
-      onSelectionChanged: (selection) {
-        if (selection.isEmpty) return;
-        final next = selection.first;
-        final selected = options.any(
-          (option) => option.value == next && option.enabled,
-        );
-        if (selected) {
-          onChanged(next);
-        }
-      },
     );
   }
 }
@@ -101,59 +80,32 @@ class ThemeModeSegmentedControl extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context)!;
-    final isCupertino =
-        Platform.isIOS || Theme.of(context).platform == TargetPlatform.macOS;
-
-    if (isCupertino) {
-      return CupertinoSlidingSegmentedControl<ThemeMode>(
-        groupValue: value,
-        onValueChanged: (next) {
-          if (next != null) {
-            onChanged(next);
-          }
-        },
-        children: {
-          ThemeMode.system: ThemeModeSegmentLabel(
-            icon: CupertinoIcons.sparkles,
-            label: l10n.system,
-          ),
-          ThemeMode.light: ThemeModeSegmentLabel(
-            icon: CupertinoIcons.sun_max,
-            label: l10n.themeLight,
-          ),
-          ThemeMode.dark: ThemeModeSegmentLabel(
-            icon: CupertinoIcons.moon_fill,
-            label: l10n.themeDark,
-          ),
-        },
-      );
-    }
-
-    return SegmentedButton<ThemeMode>(
-      selected: {value},
-      segments: [
-        ButtonSegment<ThemeMode>(
+    return AdaptiveSegmentedSelector<ThemeMode>(
+      value: value,
+      onChanged: onChanged,
+      options: [
+        (
           value: ThemeMode.system,
-          icon: const Icon(Icons.auto_mode),
-          label: Text(l10n.system),
+          label: l10n.system,
+          cupertinoIcon: CupertinoIcons.sparkles,
+          materialIcon: Icons.auto_mode,
+          enabled: true,
         ),
-        ButtonSegment<ThemeMode>(
+        (
           value: ThemeMode.light,
-          icon: const Icon(Icons.light_mode),
-          label: Text(l10n.themeLight),
+          label: l10n.themeLight,
+          cupertinoIcon: CupertinoIcons.sun_max,
+          materialIcon: Icons.light_mode,
+          enabled: true,
         ),
-        ButtonSegment<ThemeMode>(
+        (
           value: ThemeMode.dark,
-          icon: const Icon(Icons.dark_mode),
-          label: Text(l10n.themeDark),
+          label: l10n.themeDark,
+          cupertinoIcon: CupertinoIcons.moon_fill,
+          materialIcon: Icons.dark_mode,
+          enabled: true,
         ),
       ],
-      showSelectedIcon: false,
-      onSelectionChanged: (selection) {
-        if (selection.isNotEmpty) {
-          onChanged(selection.first);
-        }
-      },
     );
   }
 }

@@ -1,5 +1,8 @@
 import 'package:conduit/features/terminal/models/terminal_models.dart';
 import 'package:conduit/features/terminal/services/terminal_service.dart';
+import 'package:conduit_core/models/server_config.dart';
+import 'package:conduit_core/services/api_service.dart';
+import 'package:conduit_core/services/worker_manager.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -52,6 +55,76 @@ void main() {
       expect(originalServers[1]['enabled'], isTrue);
     });
 
+    test('direct terminals come from the ui list when it is present', () {
+      final service = TerminalService(
+        ApiService(
+          serverConfig: const ServerConfig(
+            id: 'terminal-precedence',
+            name: 'Terminal precedence',
+            url: 'https://example.test',
+          ),
+          workerManager: WorkerManager(),
+        ),
+      );
+      Map<String, dynamic> terminal(String url) => <String, dynamic>{
+        'url': url,
+        'enabled': true,
+      };
+
+      List<String> urls(Map<String, dynamic> settings) => service
+          .parseDirectTerminalServers(settings)
+          .map((server) => server.selectionId)
+          .toList();
+
+      // A newer ui list wins over the root list an older client left behind.
+      expect(
+        urls(<String, dynamic>{
+          'terminalServers': [terminal('https://stale.example')],
+          'ui': {
+            'terminalServers': [terminal('https://fresh.example')],
+          },
+        }),
+        ['https://fresh.example'],
+      );
+      // An explicitly empty ui list means no terminals, not the stale ones.
+      expect(
+        urls(<String, dynamic>{
+          'terminalServers': [terminal('https://stale.example')],
+          'ui': {'terminalServers': <Object>[]},
+        }),
+        isEmpty,
+      );
+      // Without a ui list the root list is still honoured.
+      expect(
+        urls(<String, dynamic>{
+          'terminalServers': [terminal('https://legacy.example')],
+        }),
+        ['https://legacy.example'],
+      );
+    });
+
+    test('selecting a terminal edits the list consumers read', () {
+      final updated = applyDirectTerminalSelectionForTest(<String, dynamic>{
+        'terminalServers': [
+          {'url': 'https://stale.example', 'enabled': true},
+        ],
+        'ui': {
+          'terminalServers': [
+            {'url': 'https://a.example'},
+            {'url': 'https://b.example'},
+          ],
+        },
+      }, 'https://b.example');
+
+      final ui = (updated['ui']! as Map)['terminalServers']! as List;
+      expect(ui.map((s) => (s as Map)['enabled']), [false, true]);
+      // The stale root list is left exactly as it was.
+      expect((updated['terminalServers']! as List).single, {
+        'url': 'https://stale.example',
+        'enabled': true,
+      });
+    });
+
     test('resolves explicit and enabled direct selections', () {
       final servers = <TerminalServerInfo>[
         TerminalServerInfo(
@@ -86,6 +159,80 @@ void main() {
       expect(ensureTerminalDirectoryPath('/tmp/data'), '/tmp/data/');
       expect(joinTerminalPath('/tmp/data', 'notes.md'), '/tmp/data/notes.md');
       expect(parentTerminalPath('/tmp/data/project/'), '/tmp/data/');
+    });
+
+    test('parses chat context availability and saved-chat scoping', () {
+      expect(parseTerminalChatContextForTest(null), (
+        available: true,
+        requiresSavedChat: false,
+      ));
+      expect(parseTerminalChatContextForTest(const {'chat': false}), (
+        available: false,
+        requiresSavedChat: false,
+      ));
+      expect(
+        parseTerminalChatContextForTest(const {
+          'chat': {'context_id': 'chat_id'},
+        }),
+        (available: true, requiresSavedChat: true),
+      );
+
+      final scoped = TerminalServerInfo(
+        kind: TerminalServerKind.system,
+        selectionId: 'scoped',
+        baseUrl: Uri.parse('https://example.test'),
+        requiresSavedChatContext: true,
+      );
+      expect(scoped.isAvailableForChatScope('sidebar-terminal'), isFalse);
+      expect(scoped.isAvailableForChatScope('local:draft'), isFalse);
+      expect(scoped.isAvailableForChatScope('temporary:socket'), isFalse);
+      expect(scoped.isAvailableForChatScope('channel:team'), isFalse);
+      expect(scoped.isAvailableForChatScope('saved-chat'), isTrue);
+    });
+
+    test('system websocket auth carries only a saved chat id', () {
+      final system = TerminalServerInfo(
+        kind: TerminalServerKind.system,
+        selectionId: 'system',
+        baseUrl: Uri.parse('https://example.test'),
+      );
+      final direct = TerminalServerInfo(
+        kind: TerminalServerKind.direct,
+        selectionId: 'direct',
+        baseUrl: Uri.parse('https://terminal.example.test'),
+      );
+
+      expect(
+        buildTerminalWebSocketAuthPayload(
+          system,
+          token: 'token',
+          sessionScopeId: 'saved-chat',
+        ),
+        {'type': 'auth', 'token': 'token', 'chat_id': 'saved-chat'},
+      );
+      expect(
+        buildTerminalWebSocketAuthPayload(
+          direct,
+          token: 'key',
+          sessionScopeId: 'saved-chat',
+        ),
+        {'type': 'auth', 'token': 'key'},
+      );
+      for (final unsavedId in [
+        'sidebar-terminal',
+        'local:draft',
+        'temporary:socket',
+        'channel:team',
+      ]) {
+        expect(
+          buildTerminalWebSocketAuthPayload(
+            system,
+            token: 'token',
+            sessionScopeId: unsavedId,
+          ),
+          {'type': 'auth', 'token': 'token'},
+        );
+      }
     });
   });
 }

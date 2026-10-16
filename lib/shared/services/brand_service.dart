@@ -1,8 +1,13 @@
-import 'package:adaptive_platform_ui/adaptive_platform_ui.dart';
-import 'package:flutter/material.dart';
+import 'package:conduit/shared/widgets/platform_ui/platform_ui.dart';
+import 'package:material_ui/material_ui.dart';
+
 import '../theme/theme_extensions.dart';
-import 'package:flutter/cupertino.dart';
+
+import 'package:cupertino_ui/cupertino_ui.dart';
+
 import 'dart:io' show Platform;
+
+import '../../core/deployment/active_deployment.dart';
 import '../theme/color_tokens.dart';
 import '../theme/tweakcn_themes.dart';
 
@@ -256,7 +261,7 @@ class BrandService {
   }
 
   /// Brand-specific semantic labels for accessibility
-  static String get brandName => 'Conduit';
+  static String get brandName => activeDeployment.brand.appName;
   static String get brandDescription => 'Your AI Conversation Hub';
   static String get connectionLabel => 'Hub Connection';
   static String get networkLabel => 'Network Hub';

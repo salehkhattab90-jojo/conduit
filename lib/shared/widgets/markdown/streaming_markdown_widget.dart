@@ -1,16 +1,36 @@
 import 'dart:async';
-import 'package:flutter/material.dart';
+
+import 'package:flutter/foundation.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../core/models/chat_message.dart';
+import 'package:conduit_core/models/chat_message.dart';
+
 import '../../utils/ask_conduit_context_menu.dart';
+import '../horizontal_gesture_ownership.dart';
 import 'compiled_markdown_document.dart';
 import 'markdown_config.dart';
 import 'markdown_compile_service.dart';
+import 'markdown_display_part.dart';
 import 'markdown_document_controller.dart';
+import 'markdown_render_gate.dart';
 import 'markdown_loading_skeleton.dart';
+
+import 'package:conduit_core/utils/streaming_markdown_preparation.dart';
+
 import 'renderer/block_renderer.dart';
+import 'renderer/chunked_block_column.dart';
 import 'renderer/conduit_markdown_widget.dart';
+
+const int _streamingDiagnosticsSampleInterval = 16;
+
+@visibleForTesting
+bool debugShouldSampleStreamingMarkdownDiagnostics(
+  int revision, {
+  bool diagnosticsEnabled = true,
+}) =>
+    diagnosticsEnabled &&
+    (revision == 1 || revision % _streamingDiagnosticsSampleInterval == 0);
 
 @visibleForTesting
 Map<String, Object> buildStreamingMarkdownSnapshotForTesting(
@@ -30,24 +50,42 @@ _MarkdownRenderSnapshot _buildMarkdownSnapshot(
 }
 
 class _MarkdownRenderSnapshot {
-  const _MarkdownRenderSnapshot({required this.normalizedContent});
+  const _MarkdownRenderSnapshot.empty()
+    : preparedContent = const PreparedMarkdownText.empty(),
+      patch = null;
 
-  const _MarkdownRenderSnapshot.empty() : normalizedContent = '';
+  _MarkdownRenderSnapshot.full(String normalizedContent)
+    : preparedContent = PreparedMarkdownText.fromString(normalizedContent),
+      patch = null;
 
-  const _MarkdownRenderSnapshot.full(this.normalizedContent);
+  const _MarkdownRenderSnapshot.prepared({
+    required this.preparedContent,
+    required this.patch,
+  });
 
-  final String normalizedContent;
+  final PreparedMarkdownText preparedContent;
+  final MarkdownPreparationPatch? patch;
+
+  String get normalizedContent => preparedContent.materialize();
+  int get length => preparedContent.length;
+  bool get isBlank => preparedContent.isBlank;
 
   Map<String, Object> toMap() => {'normalizedContent': normalizedContent};
 
   @override
   bool operator ==(Object other) {
-    return other is _MarkdownRenderSnapshot &&
-        other.normalizedContent == normalizedContent;
+    if (other is! _MarkdownRenderSnapshot) return false;
+    if (patch != null || other.patch != null) {
+      return patch?.sessionId == other.patch?.sessionId &&
+          patch?.revision == other.patch?.revision;
+    }
+    return other.preparedContent == preparedContent;
   }
 
   @override
-  int get hashCode => normalizedContent.hashCode;
+  int get hashCode => patch == null
+      ? preparedContent.hashCode
+      : Object.hash(patch!.sessionId, patch!.revision);
 }
 
 class StreamingMarkdownWidget extends ConsumerStatefulWidget {
@@ -61,11 +99,13 @@ class StreamingMarkdownWidget extends ConsumerStatefulWidget {
     this.onSourceTap,
     this.askConduitComposerTargetId,
     this.stateScopeId,
+    this.enableStreamingTextFade = true,
     this.debugTreatAsWidgetTest,
     this.debugRenderInterval,
     this.debugOnCompiledViewMounted,
     this.debugOnCompiledViewDisposed,
     this.debugOnStreamingRefreshFrame,
+    this.debugOnBaseRender,
   });
 
   final String content;
@@ -89,6 +129,13 @@ class StreamingMarkdownWidget extends ConsumerStatefulWidget {
   /// Optional scope used to preserve state for remounted markdown blocks.
   final String? stateScopeId;
 
+  /// Controls fading newly appended visible text while streaming.
+  ///
+  /// This stays enabled by default for existing standalone callers. Live chat
+  /// explicitly disables it so token updates remain immediate; low-frequency
+  /// preview surfaces can retain the decorative reveal.
+  final bool enableStreamingTextFade;
+
   @visibleForTesting
   final bool? debugTreatAsWidgetTest;
 
@@ -104,6 +151,11 @@ class StreamingMarkdownWidget extends ConsumerStatefulWidget {
   @visibleForTesting
   final VoidCallback? debugOnStreamingRefreshFrame;
 
+  /// Invoked each time the compiled view rebuilds its cached base span tree
+  /// (once per content change, never per fade frame).
+  @visibleForTesting
+  final VoidCallback? debugOnBaseRender;
+
   @override
   ConsumerState<StreamingMarkdownWidget> createState() =>
       _StreamingMarkdownWidgetState();
@@ -112,18 +164,48 @@ class StreamingMarkdownWidget extends ConsumerStatefulWidget {
 class _StreamingMarkdownWidgetState
     extends ConsumerState<StreamingMarkdownWidget>
     with WidgetsBindingObserver {
+  late final MarkdownCompileService _compileService;
   late final MarkdownDocumentController _documentController;
   final GlobalKey _markdownContentKey = GlobalKey();
+  final Map<String, CompiledMarkdownDocument> _displayPartDocumentCache =
+      <String, CompiledMarkdownDocument>{};
+  // buildMarkdownDisplayParts re-derives one sub-document per root block and
+  // deep-compares each against the cache — O(whole message) string work. The
+  // widget rebuilds far more often than the compiled document changes (shell
+  // rebuilds, fade frames), so memoize the split by document identity.
+  CompiledMarkdownDocument? _displayPartsSourceDocument;
+  bool _displayPartsWereStreaming = false;
+  List<MarkdownDisplayPart>? _displayPartsMemo;
+  // Unique per-instance prefix used when no stateScopeId is supplied, so two
+  // scope-less StreamingMarkdownWidgets on the same route don't share
+  // PageStorage keys (markdown_compile_service reuses block ids across unrelated
+  // documents, so a raw partId is not unique on its own).
+  static int _scopelessInstanceCounter = 0;
+  static int _preparationSessionCounter = 0;
+  late final String _scopelessFallbackScopeId =
+      'sm${_scopelessInstanceCounter++}';
+  String? _preparationSessionId;
+  int _nextPreparationRevision = 1;
+  int _acknowledgedPreparationRevision = 0;
+  PreparedMarkdownText _preparedStreamingContent =
+      const PreparedMarkdownText.empty();
   _MarkdownRenderSnapshot _snapshot = const _MarkdownRenderSnapshot.empty();
-  bool _preserveStaleCompiledDocumentUntilFreshFinal = false;
   Timer? _debugStreamingDelayTimer;
   bool _snapshotInFlight = false;
+  bool _settledSnapshotInFlight = false;
+  bool _settledPreparationPending = false;
+  ({String content, int generation, bool clearStaleDocument})?
+  _pendingSettledSnapshot;
   bool _streamingRefreshFrameScheduled = false;
   String? _pendingStreamingContent;
   String? _selectedText;
   int _snapshotGeneration = 0;
   bool _isAppForeground = true;
   bool _isRouteVisible = true;
+  ImageBuilder? _adaptedImageBuilder;
+  // Chunked block inflation registers here while revealing; completion
+  // re-arms SelectionArea wrapping via the listener.
+  final MarkdownRenderGate _renderGate = MarkdownRenderGate();
 
   CompiledMarkdownDocument? get _compiledDocument =>
       _documentController.compiledDocument;
@@ -131,23 +213,115 @@ class _StreamingMarkdownWidgetState
   String get _compiledPreparedContent =>
       _documentController.compiledPreparedContent;
 
+  bool _compiledMatchesSnapshot(_MarkdownRenderSnapshot snapshot) {
+    final patch = snapshot.patch;
+    if (patch == null) {
+      return _compiledPreparedContent == snapshot.normalizedContent;
+    }
+    return _documentController.compiledStreamingSessionId == patch.sessionId &&
+        _documentController.compiledStreamingRevision == patch.revision;
+  }
+
+  void _handleRenderGateChanged() {
+    if (!mounted) return;
+    // The gate flips to incomplete while a chunked descendant inflates —
+    // that is mid-build, where an ancestor setState is illegal. Both edges
+    // of the gate only need to take visual effect by the next frame.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) setState(() {});
+    });
+  }
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _renderGate.addListener(_handleRenderGateChanged);
     _isAppForeground = _isLifecycleForeground(
       WidgetsBinding.instance.lifecycleState,
     );
+    _compileService = ref.read(markdownCompileServiceProvider);
+    _adaptedImageBuilder = _adaptImageBuilder(widget.imageBuilderOverride);
     _documentController = MarkdownDocumentController(
-      readCompiler: () => ref.read(markdownCompileServiceProvider),
+      readCompiler: () => _compileService,
       isWidgetTest: () => _isWidgetTest,
       onStateChanged: _applyCompiledDocumentState,
     );
-    _snapshot = _buildMarkdownSnapshot(
+    final compiler = _compileService;
+    if (!widget.isStreaming) {
+      _mountSettledContent(compiler);
+    } else if (compiler.shouldPrepareSynchronously(
       widget.content,
-      streaming: widget.isStreaming,
-    );
-    _resolveCompiledDocument(_snapshot);
+      widgetTest: _isWidgetTest,
+    )) {
+      _snapshot = _buildMarkdownSnapshot(widget.content, streaming: true);
+      _resolveCompiledDocument(_snapshot);
+    } else if (widget.content.trim().isNotEmpty) {
+      _initStreamingDeferredMount();
+    }
+  }
+
+  /// Above this size a settled mount never prepares/compiles synchronously:
+  /// the multi-pass normalization + parse of a very large body froze the UI
+  /// for over a second when opening a conversation cold. Over-cap bodies
+  /// mount an approximate skeleton and compile off-frame; the one-time
+  /// extent correction when the real document lands is absorbed by the
+  /// timeline's anchor maintenance / latest-follow, and is invisible next to
+  /// a freeze. Typical assistant messages stay well below this cap, so
+  /// scroll-up-through-history keeps its exact-extent mount guarantee.
+  static const int _settledSynchronousMountCharCap = 20000;
+
+  /// Resolves a settled body at mount time.
+  ///
+  /// Settled rows must mount at their final extent or the timeline jumps
+  /// while scrolling through history, so mounts are synchronous when cheap:
+  /// memoized prepare + cached compile apply directly with no string work,
+  /// and uncached bodies under [_settledSynchronousMountCharCap] prepare and
+  /// compile in-frame. Only over-cap giants go async behind a skeleton.
+  void _mountSettledContent(MarkdownCompileService compiler) {
+    final content = widget.content;
+    final memoizedPrepared = compiler.peekSettledPrepared(content);
+    if (memoizedPrepared != null) {
+      final cachedDocument = compiler.peekPrepared(memoizedPrepared);
+      if (cachedDocument != null) {
+        _snapshot = _MarkdownRenderSnapshot.full(memoizedPrepared);
+        _documentController.applyDirectDocument(cachedDocument);
+        return;
+      }
+    }
+    // Widget tests stay on the synchronous deterministic path so settled
+    // fixtures render fully on the first pump regardless of size.
+    if (_isWidgetTest || content.length <= _settledSynchronousMountCharCap) {
+      final prepared =
+          memoizedPrepared ?? prepareMarkdownContent(content, streaming: false);
+      compiler.memoizeSettledPrepared(content, prepared);
+      _snapshot = _MarkdownRenderSnapshot.full(prepared);
+      final document =
+          compiler.peekPrepared(prepared) ??
+          compiler.compilePreparedSynchronously(prepared);
+      _documentController.applyDirectDocument(document);
+      return;
+    }
+    _queueSettledSnapshot(content, generation: _snapshotGeneration);
+  }
+
+  void _initStreamingDeferredMount() {
+    // Long normalization performs several full-string passes. For a row that
+    // mounts mid-stream, keep it off the first UI frame and let the existing
+    // generation checks reject stale results as the stream advances.
+    if (widget.content.length > markdownSynchronousPrepareThreshold) {
+      // Route a long initial snapshot through the same coalescing window as
+      // subsequent token updates. Starting it immediately would make the
+      // seed snapshot consume a worker slot even when a newer stream value
+      // arrives during the first frame.
+      _markPendingStreamingContent(widget.content);
+      _scheduleStreamingRefresh();
+    } else {
+      // Test doubles and platform-specific backends may still request the
+      // async path for small inputs. Those are cheap and should remain
+      // available on the initial frame.
+      unawaited(_refreshStreamingSnapshot(widget.content));
+    }
   }
 
   @override
@@ -159,38 +333,66 @@ class _StreamingMarkdownWidgetState
   @override
   void didUpdateWidget(covariant StreamingMarkdownWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.isStreaming && !widget.isStreaming) {
-      _preserveStaleCompiledDocumentUntilFreshFinal = true;
-    } else if (widget.isStreaming ||
-        widget.stateScopeId != oldWidget.stateScopeId) {
-      _preserveStaleCompiledDocumentUntilFreshFinal = false;
+    final scopeChanged = widget.stateScopeId != oldWidget.stateScopeId;
+    final imageBuilderChanged = !identical(
+      widget.imageBuilderOverride,
+      oldWidget.imageBuilderOverride,
+    );
+    if (scopeChanged) {
+      _retirePreparationSession();
+    }
+    if (imageBuilderChanged) {
+      _adaptedImageBuilder = _adaptImageBuilder(widget.imageBuilderOverride);
     }
     if (!identical(widget.sources, oldWidget.sources) ||
         widget.onSourceTap != oldWidget.onSourceTap ||
         widget.onTapLink != oldWidget.onTapLink ||
-        widget.imageBuilderOverride != oldWidget.imageBuilderOverride ||
-        widget.stateScopeId != oldWidget.stateScopeId) {
+        imageBuilderChanged ||
+        scopeChanged) {
       setState(() {});
     }
-    if (widget.content == oldWidget.content &&
+    if (!scopeChanged &&
+        widget.content == oldWidget.content &&
         widget.isStreaming == oldWidget.isStreaming) {
       return;
     }
 
     if (!widget.isStreaming) {
+      _retirePreparationSession();
       _invalidatePendingAsyncSnapshot();
-      _applyPreparedSnapshotIfNeeded(
-        prepareMarkdownContent(widget.content, streaming: false),
-      );
+      final compiler = _compileService;
+      if (compiler.shouldPrepareSynchronously(
+        widget.content,
+        widgetTest: _isWidgetTest,
+      )) {
+        _settledPreparationPending = false;
+        _applyPreparedSnapshotIfNeeded(
+          prepareMarkdownContent(widget.content, streaming: false),
+          // A scope change means a new message/version, not a continuation of
+          // the current content. Clear stale content while the new body compiles.
+          clearStaleDocument: scopeChanged,
+        );
+      } else {
+        if (scopeChanged) {
+          _documentController.clearDocument();
+        }
+        final generation = _snapshotGeneration;
+        _queueSettledSnapshot(
+          widget.content,
+          generation: generation,
+          clearStaleDocument: scopeChanged,
+        );
+      }
       return;
     }
 
-    final compiler = ref.read(markdownCompileServiceProvider);
+    final compiler = _compileService;
     if (_canActivelyRefreshStreamingMarkdown &&
         compiler.shouldPrepareSynchronously(
           widget.content,
           widgetTest: _isWidgetTest,
         )) {
+      _retirePreparationSession();
       final preparedContent = prepareMarkdownContent(
         widget.content,
         streaming: true,
@@ -199,10 +401,28 @@ class _StreamingMarkdownWidgetState
         widget.debugOnStreamingRefreshFrame?.call();
       }
       _invalidatePendingAsyncSnapshot();
-      _applyPreparedSnapshotIfNeeded(preparedContent);
+      _applyPreparedSnapshotIfNeeded(
+        preparedContent,
+        clearStaleDocument: scopeChanged,
+      );
       return;
     }
 
+    // Deferred streaming path: the body needs an async compile, so the new
+    // document won't be ready this frame. On a scope change, clear the previous
+    // scope's document now — deferring the clear to the scheduled refresh would
+    // let the old document paint for one frame under the new scope (#541). The
+    // scheduled refresh below then compiles the new content. (The sync paths
+    // above clear/replace the document synchronously and don't need this.)
+    // A settled preparation may still be running from the previous widget
+    // state. Its generation check prevents publication, while clearing its
+    // queued successor and loading flag keeps streaming blank until its own
+    // snapshot is ready (streaming must never show the settled skeleton).
+    _pendingSettledSnapshot = null;
+    _settledPreparationPending = false;
+    if (scopeChanged) {
+      _documentController.clearDocument();
+    }
     _markPendingStreamingContent(widget.content);
     _scheduleStreamingRefresh();
   }
@@ -211,10 +431,36 @@ class _StreamingMarkdownWidgetState
       widget.debugTreatAsWidgetTest ??
       WidgetsBinding.instance.runtimeType.toString().contains('Test');
 
+  String _ensurePreparationSession() {
+    final existing = _preparationSessionId;
+    if (existing != null) return existing;
+    final scope = widget.stateScopeId ?? _scopelessFallbackScopeId;
+    final sessionId = 'markdown-${_preparationSessionCounter++}:$scope';
+    _preparationSessionId = sessionId;
+    _nextPreparationRevision = 1;
+    _acknowledgedPreparationRevision = 0;
+    _preparedStreamingContent = const PreparedMarkdownText.empty();
+    return sessionId;
+  }
+
+  void _retirePreparationSession() {
+    final sessionId = _preparationSessionId;
+    _preparationSessionId = null;
+    _nextPreparationRevision = 1;
+    _acknowledgedPreparationRevision = 0;
+    _preparedStreamingContent = const PreparedMarkdownText.empty();
+    if (sessionId == null) return;
+    unawaited(_compileService.releaseStreamingPreparationSession(sessionId));
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _renderGate
+      ..removeListener(_handleRenderGateChanged)
+      ..dispose();
     _debugStreamingDelayTimer?.cancel();
+    _retirePreparationSession();
     _documentController.dispose();
     super.dispose();
   }
@@ -226,7 +472,18 @@ class _StreamingMarkdownWidgetState
       return;
     }
     _isAppForeground = nextIsForeground;
+    if (!nextIsForeground) {
+      _compileService.retireIdleWorkers();
+    }
     _handleStreamingRefreshVisibilityChanged();
+  }
+
+  @override
+  void didHaveMemoryPressure() {
+    _displayPartDocumentCache.clear();
+    _displayPartsSourceDocument = null;
+    _displayPartsMemo = null;
+    _compileService.handleMemoryPressure();
   }
 
   void _scheduleStreamingRefresh() {
@@ -253,6 +510,8 @@ class _StreamingMarkdownWidgetState
     _debugStreamingDelayTimer?.cancel();
     _debugStreamingDelayTimer = null;
     _pendingStreamingContent = null;
+    _pendingSettledSnapshot = null;
+    _settledPreparationPending = false;
     _snapshotGeneration += 1;
     _documentController.invalidatePending();
   }
@@ -275,8 +534,11 @@ class _StreamingMarkdownWidgetState
       return;
     }
     _streamingRefreshFrameScheduled = true;
-    WidgetsBinding.instance.scheduleFrame();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    // Start preparation before the build phase. A post-frame callback would
+    // consume a platform-view composition frame just to launch the work, then
+    // require another frame to show the result. The native Liquid Glass chrome
+    // stays mounted; only the mutable Markdown tail is refreshed.
+    WidgetsBinding.instance.scheduleFrameCallback((_) {
       _streamingRefreshFrameScheduled = false;
       if (!mounted ||
           !widget.isStreaming ||
@@ -305,7 +567,7 @@ class _StreamingMarkdownWidgetState
     _snapshotInFlight = true;
     final generation = _snapshotGeneration;
     try {
-      final compiler = ref.read(markdownCompileServiceProvider);
+      final compiler = _compileService;
       if (compiler.shouldPrepareSynchronously(
         content,
         widgetTest: _isWidgetTest,
@@ -317,18 +579,56 @@ class _StreamingMarkdownWidgetState
         _applyPreparedSnapshotIfNeeded(synchronousPrepared);
         return;
       }
-      final preparedContent = await compiler.prepareContent(
-        content,
-        streaming: true,
+      final sessionId = _ensurePreparationSession();
+      final revision = _nextPreparationRevision++;
+      final collectDiagnostics =
+          !kReleaseMode &&
+          debugShouldSampleStreamingMarkdownDiagnostics(revision);
+      final patch = await compiler.prepareStreamingContent(
+        MarkdownPreparationRequest(
+          sessionId: sessionId,
+          revision: revision,
+          expectedBaseRevision: _acknowledgedPreparationRevision,
+          content: content,
+          streaming: true,
+          collectMetrics: collectDiagnostics,
+          verifyParity: kDebugMode && collectDiagnostics,
+        ),
       );
-      if (!mounted || generation != _snapshotGeneration) {
+      if (_preparationSessionId != sessionId || patch.isStale) {
         return;
       }
-      _applyPreparedSnapshotIfNeeded(preparedContent);
+      if (patch.isIncremental &&
+          patch.baseRevision != _acknowledgedPreparationRevision) {
+        _retirePreparationSession();
+        if (mounted && generation == _snapshotGeneration) {
+          _applyPreparedSnapshotIfNeeded(
+            prepareMarkdownContent(content, streaming: true),
+          );
+        }
+        return;
+      }
+
+      final previousPreparedContent = _preparedStreamingContent;
+      final preparedContent = previousPreparedContent.applyPatch(patch);
+      _preparedStreamingContent = preparedContent;
+      _acknowledgedPreparationRevision = patch.revision;
+      final preparedChanged =
+          patch.preparedRetainLength != previousPreparedContent.length ||
+          patch.replacementTail.isNotEmpty;
+      final visibleAlreadyMatches =
+          !preparedChanged && _snapshot.preparedContent == preparedContent;
+      if ((!preparedChanged && visibleAlreadyMatches) ||
+          !mounted ||
+          generation != _snapshotGeneration) {
+        return;
+      }
+      _applyPreparedPatchIfNeeded(preparedContent, patch);
     } catch (_) {
       if (!mounted || generation != _snapshotGeneration) {
         return;
       }
+      _retirePreparationSession();
       _applyPreparedSnapshotIfNeeded(
         prepareMarkdownContent(content, streaming: true),
       );
@@ -343,29 +643,123 @@ class _StreamingMarkdownWidgetState
     }
   }
 
-  void _applySnapshot(_MarkdownRenderSnapshot nextSnapshot) {
+  Future<void> _refreshSettledSnapshot(
+    String content, {
+    required int generation,
+    bool clearStaleDocument = false,
+  }) async {
+    String preparedContent;
+    try {
+      preparedContent = await ref
+          .read(markdownCompileServiceProvider)
+          .prepareContent(content, streaming: false);
+    } catch (_) {
+      // Preserve rendering if the long-lived worker is unavailable. The
+      // service normally handles this fallback itself; this also protects test
+      // doubles and unexpected disposal races.
+      preparedContent = prepareMarkdownContent(content, streaming: false);
+    }
+    if (!mounted ||
+        generation != _snapshotGeneration ||
+        widget.isStreaming ||
+        widget.content != content) {
+      // A stale refresh must not leave the pending flag set forever: when no
+      // newer settled snapshot is queued to clear it, a blank snapshot would
+      // otherwise render an indefinite loading skeleton.
+      if (mounted && _pendingSettledSnapshot == null) {
+        _settledPreparationPending = false;
+      }
+      return;
+    }
+
+    final needsUpdate = _needsPreparedSnapshotUpdate(preparedContent);
+    _settledPreparationPending = false;
+    if (needsUpdate) {
+      _applyPreparedSnapshotIfNeeded(
+        preparedContent,
+        clearStaleDocument: clearStaleDocument,
+      );
+    } else {
+      setState(() {});
+    }
+  }
+
+  void _queueSettledSnapshot(
+    String content, {
+    required int generation,
+    bool clearStaleDocument = false,
+  }) {
+    final previous = _pendingSettledSnapshot;
+    _pendingSettledSnapshot = (
+      content: content,
+      generation: generation,
+      clearStaleDocument:
+          clearStaleDocument || (previous?.clearStaleDocument ?? false),
+    );
+    _settledPreparationPending = true;
+    if (!_settledSnapshotInFlight) {
+      unawaited(_drainSettledSnapshots());
+    }
+  }
+
+  Future<void> _drainSettledSnapshots() async {
+    if (_settledSnapshotInFlight) return;
+    _settledSnapshotInFlight = true;
+    try {
+      while (mounted) {
+        final pending = _pendingSettledSnapshot;
+        if (pending == null) break;
+        _pendingSettledSnapshot = null;
+        await _refreshSettledSnapshot(
+          pending.content,
+          generation: pending.generation,
+          clearStaleDocument: pending.clearStaleDocument,
+        );
+      }
+    } finally {
+      _settledSnapshotInFlight = false;
+      if (mounted && _pendingSettledSnapshot != null) {
+        unawaited(_drainSettledSnapshots());
+      }
+    }
+  }
+
+  void _applySnapshot(
+    _MarkdownRenderSnapshot nextSnapshot, {
+    bool clearStaleDocument = false,
+  }) {
     final changed = _snapshot != nextSnapshot;
     if (!changed) {
       if (_compiledDocument == null ||
-          _compiledPreparedContent != nextSnapshot.normalizedContent) {
-        _resolveCompiledDocument(nextSnapshot);
+          !_compiledMatchesSnapshot(nextSnapshot)) {
+        _resolveCompiledDocument(
+          nextSnapshot,
+          clearStaleDocument: clearStaleDocument,
+        );
       }
       return;
     }
     if (!mounted) {
       _snapshot = nextSnapshot;
-      _resolveCompiledDocument(nextSnapshot);
+      _resolveCompiledDocument(
+        nextSnapshot,
+        clearStaleDocument: clearStaleDocument,
+      );
       return;
     }
     setState(() => _snapshot = nextSnapshot);
-    _resolveCompiledDocument(nextSnapshot);
+    _resolveCompiledDocument(
+      nextSnapshot,
+      clearStaleDocument: clearStaleDocument,
+    );
   }
 
   /// Adapts the legacy [imageBuilderOverride] callback
   /// to the [ImageBuilder] signature used by the custom
   /// renderer.
-  ImageBuilder? _adaptImageBuilder() {
-    final override = widget.imageBuilderOverride;
+  ImageBuilder? _adaptImageBuilder(
+    Widget Function(Uri uri, String? title, String? alt)? override,
+  ) {
     if (override == null) return null;
     return (String src, String? alt, String? title) {
       final uri = Uri.tryParse(src);
@@ -377,86 +771,220 @@ class _StreamingMarkdownWidgetState
   @override
   Widget build(BuildContext context) {
     final snapshot = _snapshot;
-    if (snapshot.normalizedContent.trim().isEmpty) {
+    if (snapshot.isBlank) {
+      if (_settledPreparationPending && widget.content.trim().isNotEmpty) {
+        return MarkdownLoadingSkeleton(contentLength: widget.content.length);
+      }
       return const SizedBox.shrink();
     }
 
     final compiledDocument = _compiledDocument;
     final hasFreshCompiledDocument =
-        compiledDocument != null &&
-        _compiledPreparedContent == snapshot.normalizedContent;
+        compiledDocument != null && _compiledMatchesSnapshot(snapshot);
     if (_shouldShowLoadingSkeleton(
       snapshot: snapshot,
       compiledDocument: compiledDocument,
       hasFreshCompiledDocument: hasFreshCompiledDocument,
     )) {
-      return MarkdownLoadingSkeleton(
-        contentLength: snapshot.normalizedContent.length,
-      );
+      return MarkdownLoadingSkeleton(contentLength: snapshot.length);
     }
     if (compiledDocument == null) {
       return const SizedBox.shrink();
     }
-    if (!widget.isStreaming &&
-        !hasFreshCompiledDocument &&
-        !_preserveStaleCompiledDocumentUntilFreshFinal) {
-      return const SizedBox.shrink();
-    }
+    // Once a compiled document exists, always render it — even when it is stale
+    // (a newer snapshot is still compiling). Replacing already-rendered content
+    // with a placeholder/blank causes the streaming body to flash whenever the
+    // turn phase flips to non-streaming mid-response (issue #540). The stale
+    // document is valid markdown and is superseded by `_applyCompiledDocumentState`
+    // within a frame once the fresh compile lands.
 
     final result = KeyedSubtree(
       key: _markdownContentKey,
-      child: _buildMarkdownWithCitations(compiledDocument),
+      child: MarkdownRenderGateScope(
+        gate: _renderGate,
+        child: _buildMarkdownDisplayParts(compiledDocument),
+      ),
     );
 
-    // Only wrap in SelectionArea when not streaming to
-    // avoid concurrent modification errors in Flutter's
-    // selection system during rapid updates.
-    if (widget.isStreaming) {
+    // Only wrap in SelectionArea when not streaming, no settled normalization
+    // is pending, AND the rendered document is fresh for the current content.
+    // A stale/equivalent document shown during ongoing updates (the
+    // responseDone-gap growing-content path that #540's fix now keeps on screen)
+    // must not be made selectable: SelectionArea over rapidly-changing content
+    // triggers concurrent-modification errors in Flutter's selection system.
+    // Chunked inflation mutates children per frame, so it also holds this off.
+    if (widget.isStreaming ||
+        _settledPreparationPending ||
+        !hasFreshCompiledDocument ||
+        !_renderGate.isComplete) {
       return result;
     }
 
-    return SelectionArea(
-      contextMenuBuilder: (context, selectableRegionState) {
-        return buildAskConduitSelectionAreaContextMenu(
-          selectableRegionState: selectableRegionState,
-          ref: ref,
-          selectedText: _selectedText,
-          composerTargetId: widget.askConduitComposerTargetId,
-        );
-      },
-      onSelectionChanged: (content) {
-        _selectedText = content?.plainText;
-      },
-      child: result,
+    return HorizontalGestureExclusion(
+      child: SelectionArea(
+        contextMenuBuilder: (context, selectableRegionState) {
+          return buildAskConduitSelectionAreaContextMenu(
+            selectableRegionState: selectableRegionState,
+            ref: ref,
+            selectedText: _selectedText,
+            composerTargetId: widget.askConduitComposerTargetId,
+          );
+        },
+        onSelectionChanged: (content) {
+          _selectedText = content?.plainText;
+        },
+        child: PrioritizedHorizontalGesture(child: result),
+      ),
     );
+  }
+
+  Widget _buildMarkdownDisplayParts(CompiledMarkdownDocument document) {
+    var stableParts = _displayPartsMemo;
+    if (stableParts == null ||
+        !identical(document, _displayPartsSourceDocument) ||
+        widget.isStreaming != _displayPartsWereStreaming) {
+      final parts = buildMarkdownDisplayParts(
+        document,
+        isStreaming: widget.isStreaming,
+      );
+      stableParts = parts.isEmpty
+          ? const <MarkdownDisplayPart>[]
+          : _reuseStableDisplayPartDocuments(parts);
+      _displayPartsSourceDocument = document;
+      _displayPartsWereStreaming = widget.isStreaming;
+      _displayPartsMemo = stableParts;
+    }
+    if (stableParts.isEmpty) {
+      _displayPartDocumentCache.clear();
+      return _buildMarkdownWithCitations(
+        document: document,
+        stateScopeId: widget.stateScopeId,
+        enableStreamingTextFade:
+            widget.isStreaming && widget.enableStreamingTextFade,
+        trimLastBlockBottomPadding: true,
+      );
+    }
+
+    final partWidgets = <Widget>[
+      for (var index = 0; index < stableParts.length; index += 1)
+        KeyedSubtree(
+          key: ValueKey<String>(
+            'markdown-display-part:${stableParts[index].partId}',
+          ),
+          child: _buildMarkdownWithCitations(
+            document: stableParts[index].document,
+            stateScopeId: _stateScopeIdForPart(stableParts[index]),
+            enableStreamingTextFade:
+                widget.isStreaming &&
+                widget.enableStreamingTextFade &&
+                stableParts[index].isMutableTail,
+            trimLastBlockBottomPadding: index == stableParts.length - 1,
+          ),
+        ),
+    ];
+
+    // This column — not the per-part block columns — is where a giant
+    // settled message inflates: the display-part split produces one
+    // single-block sub-document per root block, so the sub-documents are
+    // always under ConduitMarkdownWidget's own chunk threshold and the
+    // freeze lives in inflating thousands of parts here in one frame.
+    //
+    // The chunked column is used unconditionally (it renders a plain Column
+    // when everything is revealed) so the body's widget type never changes.
+    // An earlier version latched a type choice on the first build, which
+    // left a body that mounted small and later grew past the threshold —
+    // e.g. a local stub replaced by full server content — on the plain
+    // column, re-creating the multi-second inflation freeze. Streaming
+    // reveals immediately (blocks arrive one at a time; the live tail must
+    // never trail the pin/extent math), and that progress is monotonic, so
+    // the streaming→settled flip re-inflates nothing.
+    return ChunkedBlockColumn(
+      revealImmediately: widget.isStreaming,
+      children: partWidgets,
+    );
+  }
+
+  List<MarkdownDisplayPart> _reuseStableDisplayPartDocuments(
+    List<MarkdownDisplayPart> parts,
+  ) {
+    final activePartIds = <String>{};
+    final stableParts = <MarkdownDisplayPart>[];
+    for (final part in parts) {
+      activePartIds.add(part.partId);
+      final previousDocument = _displayPartDocumentCache[part.partId];
+      final stableDocument =
+          previousDocument != null && previousDocument == part.document
+          ? previousDocument
+          : part.document;
+      _displayPartDocumentCache[part.partId] = stableDocument;
+      stableParts.add(part.copyWith(document: stableDocument));
+    }
+    _displayPartDocumentCache.removeWhere(
+      (partId, _) => !activePartIds.contains(partId),
+    );
+    return stableParts;
   }
 
   /// Builds markdown with inline citation badges.
   ///
   /// Citations like [1], [2] are rendered as clickable
   /// badges inline with the text.
-  Widget _buildMarkdownWithCitations(CompiledMarkdownDocument document) {
+  Widget _buildMarkdownWithCitations({
+    required CompiledMarkdownDocument document,
+    required String? stateScopeId,
+    required bool enableStreamingTextFade,
+    required bool trimLastBlockBottomPadding,
+  }) {
     return ConduitMarkdownWidget(
       compiledDocument: document,
       onLinkTap: widget.onTapLink,
-      imageBuilder: _adaptImageBuilder(),
+      imageBuilder: _adaptedImageBuilder,
       sources: widget.sources,
       onSourceTap: widget.onSourceTap,
-      stateScopeId: widget.stateScopeId,
+      stateScopeId: stateScopeId,
+      enableStreamingTextFade: enableStreamingTextFade,
       heavyBlockPolicy: widget.isStreaming
           ? MarkdownHeavyBlockPolicy.defer
           : MarkdownHeavyBlockPolicy.eager,
+      trimLastBlockBottomPadding: trimLastBlockBottomPadding,
       debugOnCompiledViewMounted: widget.debugOnCompiledViewMounted,
       debugOnCompiledViewDisposed: widget.debugOnCompiledViewDisposed,
+      debugOnBaseRender: widget.debugOnBaseRender,
     );
   }
 
-  void _resolveCompiledDocument(_MarkdownRenderSnapshot snapshot) {
+  String? _stateScopeIdForPart(MarkdownDisplayPart part) {
+    final scope = widget.stateScopeId;
+    if (scope == null || scope.isEmpty) {
+      return '$_scopelessFallbackScopeId:${part.partId}';
+    }
+    return '$scope:${part.partId}';
+  }
+
+  void _resolveCompiledDocument(
+    _MarkdownRenderSnapshot snapshot, {
+    bool clearStaleDocument = false,
+  }) {
     if (widget.isStreaming) {
-      _documentController.resolveStreamingPrepared(snapshot.normalizedContent);
+      final patch = snapshot.patch;
+      if (patch != null) {
+        _documentController.resolveStreamingPreparedPatch(
+          snapshot.preparedContent,
+          patch,
+          clearDocumentWhenAsync: clearStaleDocument,
+        );
+      } else {
+        _documentController.resolveStreamingPrepared(
+          snapshot.normalizedContent,
+          clearDocumentWhenAsync: clearStaleDocument,
+        );
+      }
       return;
     }
-    _documentController.resolvePrepared(snapshot.normalizedContent);
+    _documentController.resolvePrepared(
+      snapshot.normalizedContent,
+      clearDocumentWhenAsync: clearStaleDocument,
+    );
   }
 
   bool _needsPreparedSnapshotUpdate(String preparedContent) {
@@ -467,11 +995,34 @@ class _StreamingMarkdownWidgetState
         _compiledPreparedContent != preparedContent;
   }
 
-  void _applyPreparedSnapshotIfNeeded(String preparedContent) {
+  void _applyPreparedSnapshotIfNeeded(
+    String preparedContent, {
+    bool clearStaleDocument = false,
+  }) {
     if (!_needsPreparedSnapshotUpdate(preparedContent)) {
       return;
     }
-    _applySnapshot(_MarkdownRenderSnapshot.full(preparedContent));
+    _applySnapshot(
+      _MarkdownRenderSnapshot.full(preparedContent),
+      clearStaleDocument: clearStaleDocument,
+    );
+  }
+
+  void _applyPreparedPatchIfNeeded(
+    PreparedMarkdownText preparedContent,
+    MarkdownPreparationPatch patch, {
+    bool clearStaleDocument = false,
+  }) {
+    final nextSnapshot = _MarkdownRenderSnapshot.prepared(
+      preparedContent: preparedContent,
+      patch: patch,
+    );
+    if (_snapshot == nextSnapshot &&
+        _compiledDocument != null &&
+        _compiledMatchesSnapshot(nextSnapshot)) {
+      return;
+    }
+    _applySnapshot(nextSnapshot, clearStaleDocument: clearStaleDocument);
   }
 
   bool get _canActivelyRefreshStreamingMarkdown =>
@@ -515,36 +1066,30 @@ class _StreamingMarkdownWidgetState
     required CompiledMarkdownDocument? compiledDocument,
     required bool hasFreshCompiledDocument,
   }) {
-    if (widget.isStreaming || snapshot.normalizedContent.trim().isEmpty) {
+    if (widget.isStreaming || snapshot.isBlank) {
       return false;
     }
     if (hasFreshCompiledDocument) {
       return false;
     }
-    if (_preserveStaleCompiledDocumentUntilFreshFinal &&
-        compiledDocument != null) {
+    // The loading skeleton is strictly a first-paint state: it may only appear
+    // when no compiled document exists yet. Once any valid document has been
+    // rendered, a stale-but-valid document is kept on screen during async
+    // recompiles instead of regressing to the skeleton (issue #540).
+    if (compiledDocument != null) {
       return false;
     }
     return true;
   }
 
-  void _applyCompiledDocumentState(
-    String compiledPreparedContent,
-    CompiledMarkdownDocument? document,
-  ) {
-    final hasFreshCompiledDocument =
-        compiledPreparedContent == _snapshot.normalizedContent;
+  void _applyCompiledDocumentState(CompiledMarkdownDocument? document) {
     if (!mounted) {
-      if (hasFreshCompiledDocument) {
-        _preserveStaleCompiledDocumentUntilFreshFinal = false;
-      }
       return;
     }
-    setState(() {
-      if (hasFreshCompiledDocument) {
-        _preserveStaleCompiledDocumentUntilFreshFinal = false;
-      }
-    });
+    // Rebuild so the freshly compiled document (or a cleared document) is
+    // reflected. Any stale document already on screen is superseded here.
+    setState(() {});
+    scheduleEmbeddedPreviewEligibilityRecheck();
   }
 }
 
@@ -552,6 +1097,7 @@ extension StreamingMarkdownExtension on String {
   Widget toMarkdown({
     required BuildContext context,
     bool isStreaming = false,
+    bool enableStreamingTextFade = true,
     MarkdownLinkTapCallback? onTapLink,
     List<ChatSourceReference>? sources,
     void Function(int sourceIndex)? onSourceTap,
@@ -561,6 +1107,7 @@ extension StreamingMarkdownExtension on String {
     return StreamingMarkdownWidget(
       content: this,
       isStreaming: isStreaming,
+      enableStreamingTextFade: enableStreamingTextFade,
       onTapLink: onTapLink,
       sources: sources,
       onSourceTap: onSourceTap,
@@ -571,10 +1118,16 @@ extension StreamingMarkdownExtension on String {
 }
 
 class MarkdownWithLoading extends StatelessWidget {
-  const MarkdownWithLoading({super.key, this.content, required this.isLoading});
+  const MarkdownWithLoading({
+    super.key,
+    this.content,
+    required this.isLoading,
+    this.enableStreamingTextFade = true,
+  });
 
   final String? content;
   final bool isLoading;
+  final bool enableStreamingTextFade;
 
   @override
   Widget build(BuildContext context) {
@@ -583,6 +1136,10 @@ class MarkdownWithLoading extends StatelessWidget {
       return const Center(child: CircularProgressIndicator());
     }
 
-    return StreamingMarkdownWidget(content: value, isStreaming: isLoading);
+    return StreamingMarkdownWidget(
+      content: value,
+      isStreaming: isLoading,
+      enableStreamingTextFade: enableStreamingTextFade,
+    );
   }
 }

@@ -1,4 +1,5 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
+
 import '../theme/theme_extensions.dart';
 
 /// Enhanced skeleton loader with production-grade animations and better hierarchy
@@ -30,6 +31,7 @@ class _SkeletonLoaderState extends State<SkeletonLoader>
     with SingleTickerProviderStateMixin {
   late AnimationController _controller;
   late Animation<double> _animation;
+  bool _reduceMotion = false;
 
   @override
   void initState() {
@@ -45,8 +47,37 @@ class _SkeletonLoaderState extends State<SkeletonLoader>
         ).animate(
           CurvedAnimation(parent: _controller, curve: AnimationCurves.linear),
         );
+  }
 
-    _controller.repeat();
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final reduceMotion = context.reduceMotion;
+    if (_reduceMotion == reduceMotion && _controller.isAnimating) {
+      return;
+    }
+    _reduceMotion = reduceMotion;
+    _syncAnimation();
+  }
+
+  @override
+  void didUpdateWidget(SkeletonLoader oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.duration != oldWidget.duration) {
+      _controller.duration =
+          widget.duration ?? AnimationDuration.typingIndicator;
+      _syncAnimation();
+    }
+  }
+
+  void _syncAnimation() {
+    if (_reduceMotion) {
+      _controller.stop();
+      return;
+    }
+    if (!_controller.isAnimating) {
+      _controller.repeat();
+    }
   }
 
   @override
@@ -65,7 +96,7 @@ class _SkeletonLoaderState extends State<SkeletonLoader>
   @override
   void activate() {
     super.activate();
-    if (!_controller.isAnimating) {
+    if (!_reduceMotion && !_controller.isAnimating) {
       // Resume shimmer after re-activation
       _controller.repeat();
     }
@@ -73,6 +104,21 @@ class _SkeletonLoaderState extends State<SkeletonLoader>
 
   @override
   Widget build(BuildContext context) {
+    if (_reduceMotion) {
+      return Container(
+        width: widget.width,
+        height: widget.height,
+        decoration: BoxDecoration(
+          color: widget.baseColor ?? context.conduitTheme.shimmerBase,
+          borderRadius:
+              widget.borderRadius ??
+              BorderRadius.circular(
+                widget.isCompact ? AppBorderRadius.xs : AppBorderRadius.sm,
+              ),
+        ),
+      );
+    }
+
     return AnimatedBuilder(
       animation: _animation,
       builder: (context, child) {
@@ -102,276 +148,6 @@ class _SkeletonLoaderState extends State<SkeletonLoader>
           ),
         );
       },
-    );
-  }
-}
-
-/// Enhanced skeleton for chat messages with better hierarchy
-class SkeletonChatMessage extends StatelessWidget {
-  final bool isUser;
-  final int lines;
-  final bool isCompact;
-
-  const SkeletonChatMessage({
-    super.key,
-    this.isUser = false,
-    this.lines = 2,
-    this.isCompact = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.symmetric(
-        horizontal: isCompact ? Spacing.sm : Spacing.messagePadding,
-        vertical: isCompact ? Spacing.xs : Spacing.sm,
-      ),
-      child: Row(
-        mainAxisAlignment: isUser
-            ? MainAxisAlignment.end
-            : MainAxisAlignment.start,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (!isUser) ...[
-            SkeletonLoader(
-              width: isCompact ? 32 : 40,
-              height: isCompact ? 32 : 40,
-              borderRadius: BorderRadius.circular(AppBorderRadius.avatar),
-            ),
-            SizedBox(width: isCompact ? Spacing.xs : Spacing.sm),
-          ],
-          Expanded(
-            child: Column(
-              crossAxisAlignment: isUser
-                  ? CrossAxisAlignment.end
-                  : CrossAxisAlignment.start,
-              children: [
-                for (int i = 0; i < lines; i++)
-                  Padding(
-                    padding: EdgeInsets.only(
-                      bottom: i < lines - 1
-                          ? (isCompact ? Spacing.xs : Spacing.sm)
-                          : 0,
-                    ),
-                    child: SkeletonLoader(
-                      width: isUser
-                          ? null
-                          : (MediaQuery.of(context).size.width * 0.6),
-                      height: isCompact ? 12 : 16,
-                      borderRadius: BorderRadius.circular(
-                        isCompact ? AppBorderRadius.xs : AppBorderRadius.sm,
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-          if (isUser) ...[
-            SizedBox(width: isCompact ? Spacing.xs : Spacing.sm),
-            SkeletonLoader(
-              width: isCompact ? 32 : 40,
-              height: isCompact ? 32 : 40,
-              borderRadius: BorderRadius.circular(AppBorderRadius.avatar),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-/// Enhanced skeleton for list items with better hierarchy
-class SkeletonListItem extends StatelessWidget {
-  final bool showAvatar;
-  final bool showSubtitle;
-  final bool isCompact;
-
-  const SkeletonListItem({
-    super.key,
-    this.showAvatar = true,
-    this.showSubtitle = true,
-    this.isCompact = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.all(isCompact ? Spacing.sm : Spacing.listItemPadding),
-      child: Row(
-        children: [
-          if (showAvatar) ...[
-            SkeletonLoader(
-              width: isCompact ? 32 : 40,
-              height: isCompact ? 32 : 40,
-              borderRadius: BorderRadius.circular(AppBorderRadius.avatar),
-            ),
-            SizedBox(width: isCompact ? Spacing.sm : Spacing.md),
-          ],
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                SkeletonLoader(
-                  width: double.infinity,
-                  height: isCompact ? 14 : 16,
-                  borderRadius: BorderRadius.circular(
-                    isCompact ? AppBorderRadius.xs : AppBorderRadius.sm,
-                  ),
-                ),
-                if (showSubtitle) ...[
-                  SizedBox(height: isCompact ? Spacing.xs : Spacing.sm),
-                  SkeletonLoader(
-                    width: MediaQuery.of(context).size.width * 0.7,
-                    height: isCompact ? 12 : 14,
-                    borderRadius: BorderRadius.circular(
-                      isCompact ? AppBorderRadius.xs : AppBorderRadius.sm,
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Enhanced skeleton for cards with better hierarchy
-class SkeletonCard extends StatelessWidget {
-  final bool showTitle;
-  final bool showContent;
-  final bool showActions;
-  final bool isCompact;
-
-  const SkeletonCard({
-    super.key,
-    this.showTitle = true,
-    this.showContent = true,
-    this.showActions = false,
-    this.isCompact = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: EdgeInsets.all(isCompact ? Spacing.sm : Spacing.cardPadding),
-      decoration: BoxDecoration(
-        color: context.conduitTheme.cardBackground,
-        borderRadius: BorderRadius.circular(AppBorderRadius.card),
-        border: Border.all(
-          color: context.conduitTheme.cardBorder,
-          width: BorderWidth.standard,
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (showTitle) ...[
-            SkeletonLoader(
-              width: MediaQuery.of(context).size.width * 0.8,
-              height: isCompact ? 16 : 20,
-              borderRadius: BorderRadius.circular(
-                isCompact ? AppBorderRadius.xs : AppBorderRadius.sm,
-              ),
-            ),
-            SizedBox(height: isCompact ? Spacing.sm : Spacing.md),
-          ],
-          if (showContent) ...[
-            SkeletonLoader(
-              width: double.infinity,
-              height: isCompact ? 12 : 14,
-              borderRadius: BorderRadius.circular(
-                isCompact ? AppBorderRadius.xs : AppBorderRadius.sm,
-              ),
-            ),
-            SizedBox(height: isCompact ? Spacing.xs : Spacing.sm),
-            SkeletonLoader(
-              width: MediaQuery.of(context).size.width * 0.6,
-              height: isCompact ? 12 : 14,
-              borderRadius: BorderRadius.circular(
-                isCompact ? AppBorderRadius.xs : AppBorderRadius.sm,
-              ),
-            ),
-            if (showActions) ...[
-              SizedBox(height: isCompact ? Spacing.md : Spacing.lg),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  SkeletonLoader(
-                    width: isCompact ? 60 : 80,
-                    height: isCompact ? 32 : 40,
-                    borderRadius: BorderRadius.circular(AppBorderRadius.button),
-                  ),
-                  SizedBox(width: isCompact ? Spacing.sm : Spacing.md),
-                  SkeletonLoader(
-                    width: isCompact ? 60 : 80,
-                    height: isCompact ? 32 : 40,
-                    borderRadius: BorderRadius.circular(AppBorderRadius.button),
-                  ),
-                ],
-              ),
-            ],
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-/// Enhanced skeleton for input fields with better hierarchy
-class SkeletonInput extends StatelessWidget {
-  final bool showLabel;
-  final bool isCompact;
-
-  const SkeletonInput({
-    super.key,
-    this.showLabel = true,
-    this.isCompact = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (showLabel) ...[
-          SkeletonLoader(
-            width: 80,
-            height: isCompact ? 14 : 16,
-            borderRadius: BorderRadius.circular(
-              isCompact ? AppBorderRadius.xs : AppBorderRadius.sm,
-            ),
-          ),
-          SizedBox(height: isCompact ? Spacing.xs : Spacing.sm),
-        ],
-        SkeletonLoader(
-          width: double.infinity,
-          height: isCompact ? 40 : 48,
-          borderRadius: BorderRadius.circular(AppBorderRadius.input),
-        ),
-      ],
-    );
-  }
-}
-
-/// Enhanced skeleton for buttons with better hierarchy
-class SkeletonButton extends StatelessWidget {
-  final bool isFullWidth;
-  final bool isCompact;
-
-  const SkeletonButton({
-    super.key,
-    this.isFullWidth = false,
-    this.isCompact = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return SkeletonLoader(
-      width: isFullWidth ? double.infinity : (isCompact ? 80 : 120),
-      height: isCompact ? TouchTarget.medium : TouchTarget.comfortable,
-      borderRadius: BorderRadius.circular(AppBorderRadius.button),
     );
   }
 }

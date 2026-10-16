@@ -2,54 +2,103 @@ import 'dart:async';
 import 'dart:io' show Platform;
 import 'dart:math' as math;
 
-import 'package:adaptive_platform_ui/adaptive_platform_ui.dart';
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart';
+import 'package:conduit/shared/widgets/platform_ui/platform_ui.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../../core/database/local_conversation_loader.dart';
-import '../../../core/models/conversation.dart';
-import '../../../core/models/folder.dart';
-import '../../../core/models/model.dart';
-import '../../../core/providers/app_providers.dart';
+import 'package:conduit_core/models/conversation.dart';
+import 'package:conduit_core/models/folder.dart';
+import 'package:conduit_core/models/model.dart';
+
+import 'package:conduit_core/providers/app_providers.dart';
+
 import '../../../core/services/haptic_service.dart';
 import '../../../core/services/native_sheet_bridge.dart';
 import '../../../core/services/native_sheet_hydration_service.dart';
-import '../../../core/services/navigation_service.dart';
-import '../../../core/services/settings_service.dart';
-import '../../../core/widgets/error_boundary.dart';
+import '../../../shared/services/navigation_service.dart';
+import '../../../shared/services/user_friendly_error_handler.dart';
+
+import 'package:conduit/features/workspace/providers/workspace_capabilities_provider.dart';
+import 'package:conduit/features/workspace/widgets/resource_sharing_sheet.dart';
+import 'package:conduit/features/workspace/widgets/workspace_access_grants.dart'
+    show WorkspaceAccessOwner;
+import 'package:conduit_core/features/sharing/models/resource_access.dart';
+
 import '../../../l10n/app_localizations.dart';
+
+import 'package:conduit_core/features/auth/providers/unified_auth_providers.dart';
+
 import '../../../shared/theme/conduit_input_styles.dart';
 import '../../../shared/theme/theme_extensions.dart';
+import '../../../shared/utils/adaptive_glass.dart';
 import '../../../shared/utils/platform_scroll_physics.dart';
 import '../../../shared/utils/conversation_context_menu.dart';
 import '../../../shared/utils/ui_utils.dart';
 import '../../../core/services/media_upload_controller.dart';
-import '../../../core/utils/debug_logger.dart';
+
+import 'package:conduit_core/utils/debug_logger.dart';
+
 import '../../../shared/widgets/adaptive_route_shell.dart';
 import '../../../shared/widgets/adaptive_toolbar_components.dart';
 import '../../../shared/widgets/chrome_gradient_fade.dart';
+import '../../../shared/widgets/conduit_components.dart';
 import '../../../shared/widgets/conduit_loading.dart';
 import '../../../shared/widgets/measure_size.dart';
 import '../../../shared/widgets/middle_ellipsis_text.dart';
-import '../../../shared/widgets/responsive_drawer_layout.dart';
+import '../../../shared/widgets/sidebar_layout_contract.dart';
 import '../../../shared/widgets/sheet_handle.dart';
 import '../../../shared/widgets/themed_dialogs.dart';
 import '../../../shared/widgets/themed_sheets.dart';
-import '../../chat/providers/chat_providers.dart' as chat;
-import '../../chat/providers/context_attachments_provider.dart';
+
+import 'package:conduit_core/features/chat/providers/chat_providers.dart'
+    as chat;
+import 'package:conduit_core/features/chat/providers/context_attachments_provider.dart';
+
+import '../../chat/services/clipboard_attachment_service.dart';
 import '../../chat/services/file_attachment_service.dart';
+import '../../chat/widgets/chat_comparison_widgets.dart'
+    show comparisonAdmissionMessage;
 import '../../chat/widgets/model_selector_sheet.dart';
 import '../../chat/widgets/context_attachment_widget.dart';
 import '../../chat/widgets/file_attachment_widget.dart';
 import '../../chat/widgets/modern_chat_input.dart';
 import '../../chat/widgets/server_file_picker_sheet.dart';
 import '../../chat/voice_call/presentation/voice_call_launcher.dart';
-import '../../tools/providers/tools_providers.dart';
+import '../../chat/voice_mode/voice_mode_error_text.dart';
+
+import 'package:conduit_core/features/hermes/models/hermes_config.dart';
+import 'package:conduit_core/features/hermes/providers/hermes_providers.dart';
+import 'package:conduit_core/features/tools/providers/tools_providers.dart';
+
+import '../providers/conversation_selection_provider.dart';
 import '../widgets/conversation_tile.dart';
 import '../widgets/folder_icon.dart';
+import '../widgets/folder_project_settings_sheet.dart';
+
+typedef FolderPastedAttachmentUploader = Future<void> Function(
+  LocalAttachment attachment,
+  int fileSize,
+);
+typedef FolderPastedAttachmentRollback = Future<void> Function(
+  LocalAttachment attachment,
+);
+
+@visibleForTesting
+Future<void> acceptFolderPastedAttachments({
+  required List<LocalAttachment> attachments,
+  required void Function(List<LocalAttachment>) addFiles,
+  required FolderPastedAttachmentUploader upload,
+  required FolderPastedAttachmentRollback rollback,
+}) => acceptPastedAttachments(
+  attachments: attachments,
+  addFiles: addFiles,
+  upload: upload,
+  rollback: rollback,
+  logScope: 'navigation/folder',
+);
 
 /// Displays a folder-focused page with its direct child folders and chats.
 class FolderPage extends ConsumerStatefulWidget {
@@ -62,11 +111,9 @@ class FolderPage extends ConsumerStatefulWidget {
 }
 
 class _FolderPageState extends ConsumerState<FolderPage> {
-  bool _isLoadingConversation = false;
   bool _isSendingComposerMessage = false;
   double _inputHeight = 0;
   int _composerResetNonce = 0;
-  String? _pendingConversationId;
 
   @override
   void initState() {
@@ -92,25 +139,28 @@ class _FolderPageState extends ConsumerState<FolderPage> {
   }
 
   void _primeFolderDraftState({bool resetComposer = false}) {
+    chat.clearSelectedFiltersForConversationBoundary(ref);
     ref.read(pendingFolderIdProvider.notifier).set(widget.folderId);
     ref.read(chat.chatMessagesProvider.notifier).clearMessages();
     ref.read(activeConversationProvider.notifier).clear();
     ref.read(contextAttachmentsProvider.notifier).clear();
-    ref.read(attachedFilesProvider.notifier).clearAll();
+    _clearAttachmentsForConversationBoundary();
     try {
       ref.read(chat.prefilledInputTextProvider.notifier).clear();
     } catch (_) {}
 
-    final settings = ref.read(appSettingsProvider);
-    ref
-        .read(temporaryChatEnabledProvider.notifier)
-        .set(settings.temporaryChatByDefault);
+    ref.read(temporaryChatEnabledProvider.notifier).startNewChat();
 
     if (resetComposer && mounted) {
       setState(() => _composerResetNonce++);
     }
 
-    unawaited(chat.restoreDefaultModel(ref));
+    // The draft's one model resolution: the folder's saved default when the
+    // server still offers one, otherwise the user's own default.
+    ref.read(folderDraftModelNoticeProvider.notifier).clear();
+    ref.read(folderDraftComparisonNoticeProvider.notifier).clear();
+    ref.read(folderDraftComparisonProvider.notifier).clear();
+    unawaited(chat.restoreFolderDraftModel(ref, widget.folderId));
   }
 
   String _formatModelDisplayName(String name) => name.trim();
@@ -121,121 +171,235 @@ class _FolderPageState extends ConsumerState<FolderPage> {
     Folder? folder,
   ) {
     final tintColor = context.conduitTheme.textPrimary;
-    final hasOverflowMenu = folder != null;
-    const leadingGap = kConduitAdaptiveToolbarLeadingGap;
+    final menuItems = folder == null
+        ? const <AdaptivePopupMenuEntry>[]
+        : _buildFolderToolbarMenuItems(folder, l10n);
+    final hasOverflowMenu = menuItems.isNotEmpty;
     final maxModelWidth = resolveConduitAdaptiveLeadingPillWidth(
       context,
       trailingActionCount: hasOverflowMenu ? 3 : 2,
-      maxWidth: kConduitAdaptiveToolbarMaxPillWidth,
+      maxWidth: kConduitAdaptiveToolbarMaxModelSelectorWidth,
     );
-    final leading = _buildFolderToolbarLeading(
+    final title = _buildFolderToolbarTitle(
       context: context,
       l10n: l10n,
-      tintColor: tintColor,
-      leadingGap: leadingGap,
       maxModelWidth: maxModelWidth,
     );
-    final actions = _buildFolderToolbarActionWidgets(context, folder);
-    final leadingWidth = resolveConduitAdaptiveToolbarLeadingWidth(
-      pillWidth: maxModelWidth,
-      leadingGap: leadingGap,
-    );
-    final overlayStyle = Theme.of(context).appBarTheme.systemOverlayStyle;
+    final isTemporary = ref.watch(temporaryChatEnabledProvider);
+    // The server keeps new chats temporary, so there is nothing to toggle.
+    final temporaryChatEnforced = ref.watch(temporaryChatEnforcedProvider);
+    void onMenuSelected(String action) {
+      if (folder != null) {
+        _handleFolderToolbarSelection(folder, action);
+      }
+    }
 
-    return AdaptiveAppBar(
-      useNativeToolbar: false,
+    final actions = _buildFolderToolbarActionWidgets(
+      context,
+      folder: folder,
+      isTemporary: isTemporary,
+      showTemporaryToggle: !temporaryChatEnforced,
+      menuItems: menuItems,
+      onMenuSelected: onMenuSelected,
+    );
+    // The menu holds only what this account may do: Edit Folder for the
+    // owner, Share folder for anyone who may edit access, and Project
+    // settings for anyone who can write (an owner or a write grant). System
+    // Prompt is offered on its own only when Project settings can't edit it.
+    final nativeMenuAction = folder == null || menuItems.isEmpty
+        ? null
+        : buildConduitNativeToolbarMenuAction<String>(
+            iosSymbol: 'ellipsis',
+            accessibilityLabel: l10n.more,
+            tintColor: tintColor,
+            items: menuItems,
+            onSelected: onMenuSelected,
+          );
+    final nativeActions = <ConduitNativeToolbarAction>[
+      if (!temporaryChatEnforced)
+        ConduitNativeToolbarAction(
+          iosSymbol: isTemporary ? 'eye.slash' : 'eye',
+          accessibilityLabel: l10n.temporaryChat,
+          tintColor: isTemporary ? context.conduitTheme.info : tintColor,
+          onPressed: _toggleTemporaryChat,
+        ),
+      // A read-grant shared folder cannot receive new chats.
+      if (folder == null || folder.canWrite)
+        ConduitNativeToolbarAction(
+          iosSymbol: 'square.and.pencil',
+          accessibilityLabel: l10n.newChat,
+          tintColor: tintColor,
+          onPressed: _handleNewChat,
+        ),
+      ?nativeMenuAction,
+    ];
+    final useNativeActionGroup =
+        Platform.isIOS &&
+        conduitSupportsNativeGlass() &&
+        (folder == null || nativeMenuAction != null);
+    return buildConduitCenteredAdaptiveAppBar(
+      context: context,
       tintColor: tintColor,
-      cupertinoNavigationBar: CupertinoNavigationBar(
-        automaticallyImplyLeading: false,
-        border: null,
-        backgroundColor: Colors.transparent,
-        automaticBackgroundVisibility: false,
-        brightness: Theme.of(context).brightness,
-        enableBackgroundFilterBlur: false,
-        leading: leading,
-        trailing: Row(mainAxisSize: MainAxisSize.min, children: actions),
+      leading: ConduitAdaptiveAppBarIconButton(
+        key: const ValueKey<String>('folder-page-drawer-button'),
+        icon: Platform.isIOS ? CupertinoIcons.line_horizontal_3 : Icons.menu,
+        iosSymbol: 'line.3.horizontal',
+        semanticLabel: AppLocalizations.of(context)!.sidebarButtonLabel,
+        onPressed: _toggleDrawer,
+        iconColor: tintColor,
       ),
-      appBar: AppBar(
-        automaticallyImplyLeading: false,
-        backgroundColor: Colors.transparent,
-        surfaceTintColor: Colors.transparent,
-        shadowColor: Colors.transparent,
-        elevation: Elevation.none,
-        scrolledUnderElevation: Elevation.none,
-        toolbarHeight: kTextTabBarHeight,
-        systemOverlayStyle: overlayStyle,
-        centerTitle: false,
-        titleSpacing: Spacing.sm,
-        leadingWidth: leadingWidth,
-        leading: leading,
-        actions: actions,
-      ),
+      title: title,
+      actions: actions,
+      cupertinoTrailing: useNativeActionGroup
+          ? ConduitNativeToolbarActionGroup(actions: nativeActions)
+          : Row(mainAxisSize: MainAxisSize.min, children: actions),
+      centerTitle: false,
     );
   }
 
-  Widget _buildFolderToolbarLeading({
+  Widget _buildFolderToolbarTitle({
     required BuildContext context,
     required AppLocalizations l10n,
-    required Color tintColor,
-    required double leadingGap,
     required double maxModelWidth,
   }) {
-    final label = _formatModelDisplayName(
-      ref.watch(selectedModelProvider)?.name ?? l10n.chooseModel,
-    );
+    // A draft that starts comparing its project's two saved models names both.
+    final comparing = ref.watch(chat.folderDraftComparisonModelsProvider);
+    final label = comparing != null
+        ? comparing
+              .map((model) => _formatModelDisplayName(model.name))
+              .join(' + ')
+        : _formatModelDisplayName(
+            ref.watch(selectedModelProvider)?.name ?? l10n.chooseModel,
+          );
 
-    return buildConduitAdaptiveToolbarLeadingRow(
-      children: [
-        ConduitAdaptiveAppBarIconButton(
-          key: const ValueKey<String>('folder-page-drawer-button'),
-          icon: Platform.isIOS ? CupertinoIcons.line_horizontal_3 : Icons.menu,
-          onPressed: _toggleDrawer,
-          iconColor: tintColor,
-        ),
-        SizedBox(width: leadingGap),
-        ConduitAdaptiveAppBarModelSelector(
-          key: const ValueKey<String>('folder-page-model-selector'),
-          label: label,
-          maxWidth: maxModelWidth,
-          onPressed: _showModelSelector,
-        ),
-      ],
+    return ConduitAdaptiveAppBarModelSelector(
+      key: const ValueKey<String>('folder-page-model-selector'),
+      label: label,
+      maxWidth: maxModelWidth,
+      onPressed: _showModelSelector,
     );
   }
 
   List<Widget> _buildFolderToolbarActionWidgets(
-    BuildContext context,
-    Folder? folder,
-  ) {
-    final isTemporary = ref.watch(temporaryChatEnabledProvider);
+    BuildContext context, {
+    required Folder? folder,
+    required bool isTemporary,
+    required bool showTemporaryToggle,
+    required List<AdaptivePopupMenuEntry> menuItems,
+    required ValueChanged<String> onMenuSelected,
+  }) {
     final actions = buildConduitAdaptiveToolbarActionWidgets([
-      ConduitAdaptiveAppBarIconButton(
-        key: const ValueKey<String>('folder-page-temp-button'),
-        icon: isTemporary
-            ? (Platform.isIOS ? CupertinoIcons.eye_slash : Icons.visibility_off)
-            : (Platform.isIOS ? CupertinoIcons.eye : Icons.visibility_outlined),
-        iconColor: isTemporary ? Colors.blue : context.conduitTheme.textPrimary,
-        onPressed: () {
-          ConduitHaptics.selectionClick();
-          final current = ref.read(temporaryChatEnabledProvider);
-          ref.read(temporaryChatEnabledProvider.notifier).set(!current);
-        },
-      ),
-      ConduitAdaptiveAppBarIconButton(
-        key: const ValueKey<String>('folder-page-new-chat-button'),
-        icon: Platform.isIOS ? CupertinoIcons.create : Icons.add_comment,
-        iconColor: context.conduitTheme.textPrimary,
-        onPressed: _handleNewChat,
-      ),
-      if (folder != null)
+      if (showTemporaryToggle)
+        ConduitAdaptiveAppBarIconButton(
+          key: const ValueKey<String>('folder-page-temp-button'),
+          icon: isTemporary
+              ? (Platform.isIOS
+                    ? CupertinoIcons.eye_slash
+                    : Icons.visibility_off)
+              : (Platform.isIOS
+                    ? CupertinoIcons.eye
+                    : Icons.visibility_outlined),
+          iconColor: isTemporary
+              ? context.conduitTheme.info
+              : context.conduitTheme.textPrimary,
+          onPressed: _toggleTemporaryChat,
+        ),
+      // A read-grant shared folder cannot receive new chats.
+      if (folder == null || folder.canWrite)
+        ConduitAdaptiveAppBarIconButton(
+          key: const ValueKey<String>('folder-page-new-chat-button'),
+          icon: Platform.isIOS ? CupertinoIcons.create : Icons.add_comment,
+          iconColor: context.conduitTheme.textPrimary,
+          onPressed: _handleNewChat,
+        ),
+      if (folder != null && menuItems.isNotEmpty)
         _FolderToolbarPopupButton(
           tintColor: context.conduitTheme.textPrimary,
-          onSelected: (action) => _handleFolderToolbarSelection(folder, action),
+          items: menuItems,
+          onSelected: onMenuSelected,
         ),
     ]);
 
     return actions;
   }
+
+  void _toggleTemporaryChat() {
+    ConduitHaptics.selectionClick();
+    final current = ref.read(temporaryChatEnabledProvider);
+    ref.read(temporaryChatEnabledProvider.notifier).set(!current);
+  }
+
+  /// Share settings is offered for a folder whose access the account may
+  /// edit, when the server lets it share folders: its own, or any folder to an
+  /// admin. Open WebUI 0.12 refuses sharing changes from a write grant, as its
+  /// web client does not offer them.
+  bool _canShareFolder(Folder folder) {
+    if (folder.shared && ref.watch(currentUserProvider2)?.role != 'admin') {
+      return false;
+    }
+    return ref
+            .watch(workspaceCapabilitiesProvider)
+            .value
+            ?.folders
+            .section
+            .share ==
+        true;
+  }
+
+  /// Project settings edits the system prompt too when the account may change
+  /// it there, so the separate System Prompt item is then left out.
+  bool _projectSettingsCoverSystemPrompt(Folder folder) =>
+      folder.canWrite &&
+      (ref
+              .watch(chat.openWebUiChatSettingsAccessProvider)
+              .asData
+              ?.value
+              .canEditSystemPrompt ??
+          false);
+
+  List<AdaptivePopupMenuEntry> _buildFolderToolbarMenuItems(
+    Folder folder,
+    AppLocalizations l10n,
+  ) => [
+    // Edit Folder / System Prompt are owner operations.
+    if (!folder.shared) ...[
+      AdaptivePopupMenuItem<String>(
+        value: 'edit-folder',
+        label: l10n.editFolder,
+        icon: conduitAdaptivePopupMenuIcon(
+          iosSymbol: 'pencil',
+          materialIcon: Icons.edit_outlined,
+        ),
+      ),
+      if (!_projectSettingsCoverSystemPrompt(folder))
+        AdaptivePopupMenuItem<String>(
+          value: 'system-prompt',
+          label: l10n.systemPrompt,
+          icon: conduitAdaptivePopupMenuIcon(
+            iosSymbol: 'text.bubble',
+            materialIcon: Icons.notes_outlined,
+          ),
+        ),
+    ],
+    if (_canShareFolder(folder))
+      AdaptivePopupMenuItem<String>(
+        value: 'share-folder',
+        label: l10n.folderShareSettings,
+        icon: conduitAdaptivePopupMenuIcon(
+          iosSymbol: 'person.badge.plus',
+          materialIcon: Icons.person_add_alt_1_outlined,
+        ),
+      ),
+    if (folder.canWrite)
+      AdaptivePopupMenuItem<String>(
+        value: 'project-settings',
+        label: l10n.folderProjectSettings,
+        icon: conduitAdaptivePopupMenuIcon(
+          iosSymbol: 'slider.horizontal.3',
+          materialIcon: Icons.tune,
+        ),
+      ),
+  ];
 
   void _handleFolderToolbarSelection(Folder folder, String action) {
     ConduitHaptics.selectionClick();
@@ -248,7 +412,32 @@ class _FolderPageState extends ConsumerState<FolderPage> {
       case 'system-prompt':
         _showSystemPromptSheet(folder);
         return;
+      case 'share-folder':
+        // The sheet captures the session and this folder's id now.
+        unawaited(
+          ResourceSharingSheet.show(
+            context,
+            ref,
+            kind: ResourceKind.folder,
+            resourceId: folder.id,
+            resourceName: folder.name,
+            owner: folder.shared
+                ? WorkspaceAccessOwner(name: folder.ownerName)
+                : const WorkspaceAccessOwner(isYou: true),
+          ),
+        );
+        return;
+      case 'project-settings':
+        unawaited(showFolderProjectSettings(context, ref, folder));
+        return;
     }
+  }
+
+  /// A model chosen in the picker is one model: it ends a comparison the draft
+  /// started with, even when it is the first of the two.
+  void _pickSingleModel(Model? model) {
+    ref.read(folderDraftComparisonProvider.notifier).clear();
+    ref.read(selectedModelProvider.notifier).set(model);
   }
 
   Future<void> _showModelSelector() async {
@@ -284,7 +473,7 @@ class _FolderPageState extends ConsumerState<FolderPage> {
                 break;
               }
             }
-            ref.read(selectedModelProvider.notifier).set(selected);
+            _pickSingleModel(selected);
           }
           return;
         } catch (_) {
@@ -297,7 +486,12 @@ class _FolderPageState extends ConsumerState<FolderPage> {
       await ThemedSheets.showCustom<void>(
         context: context,
         isScrollControlled: true,
-        builder: (sheetContext) => ModelSelectorSheet(models: models),
+        builder: (sheetContext) =>
+            ModelSelectorSheet(
+              models: models,
+              selectedModelId: ref.read(selectedModelProvider)?.id,
+              onPick: _pickSingleModel,
+            ),
       );
     } catch (_) {
       return;
@@ -312,8 +506,24 @@ class _FolderPageState extends ConsumerState<FolderPage> {
     }
   }
 
+  void _clearAttachmentsForConversationBoundary() {
+    unawaited(
+      ref.read(mediaUploadControllerProvider).clearAttachments().catchError((
+        Object error,
+        StackTrace stackTrace,
+      ) {
+        DebugLogger.error(
+          'attachment-boundary-cleanup-failed',
+          scope: 'navigation/folder',
+          error: error,
+          stackTrace: stackTrace,
+        );
+      }),
+    );
+  }
+
   void _toggleDrawer() {
-    final layout = ResponsiveDrawerLayout.of(context);
+    final layout = SidebarDrawerControllerScope.maybeOf(context);
     if (layout == null) {
       return;
     }
@@ -327,17 +537,14 @@ class _FolderPageState extends ConsumerState<FolderPage> {
   void _handleNewChat() {
     ConduitHaptics.selectionClick();
     _dismissComposerFocus();
-    ref.read(attachedFilesProvider.notifier).clearAll();
+    _clearAttachmentsForConversationBoundary();
     try {
       ref.read(chat.prefilledInputTextProvider.notifier).clear();
     } catch (_) {}
 
     chat.startNewChat(ref);
 
-    final settings = ref.read(appSettingsProvider);
-    ref
-        .read(temporaryChatEnabledProvider.notifier)
-        .set(settings.temporaryChatByDefault);
+    ref.read(temporaryChatEnabledProvider.notifier).startNewChat();
 
     unawaited(NavigationService.navigateToChat());
   }
@@ -401,6 +608,13 @@ class _FolderPageState extends ConsumerState<FolderPage> {
       return true;
     }
 
+    // A send that outruns the draft's own model resolution takes the same
+    // answer: the folder's saved model first, then the user's default.
+    await chat.restoreFolderDraftModel(container, widget.folderId);
+    if (container.read(selectedModelProvider) != null) {
+      return true;
+    }
+
     try {
       List<Model> models;
       final modelsAsync = container.read(modelsProvider);
@@ -420,12 +634,14 @@ class _FolderPageState extends ConsumerState<FolderPage> {
   }
 
   Future<void> _handleComposerSend(String text) async {
-    if (_isSendingComposerMessage || _isLoadingConversation) {
+    if (_isSendingComposerMessage ||
+        ref.read(conversationSelectionProvider).isLoading) {
       return;
     }
 
     setState(() => _isSendingComposerMessage = true);
     final container = ProviderScope.containerOf(context, listen: false);
+    chat.ChatSendPlaceholderHandle? pendingSend;
 
     try {
       final hasModel = await _ensureSelectedModel(container);
@@ -434,6 +650,11 @@ class _FolderPageState extends ConsumerState<FolderPage> {
       }
 
       final attachedFiles = container.read(attachedFilesProvider);
+      final mediaUploadController = container.read(
+        mediaUploadControllerProvider,
+      );
+      final sentAttachmentOwnership = mediaUploadController
+          .captureAttachmentOwnership();
       final uploadedFileIds = attachedFiles
           .where(
             (file) =>
@@ -445,10 +666,7 @@ class _FolderPageState extends ConsumerState<FolderPage> {
       final toolIds = container.read(selectedToolIdsProvider);
 
       ConduitHaptics.selectionClick();
-      final settings = container.read(appSettingsProvider);
-      container
-          .read(temporaryChatEnabledProvider.notifier)
-          .set(settings.temporaryChatByDefault);
+      container.read(temporaryChatEnabledProvider.notifier).startNewChat();
       container.read(pendingFolderIdProvider.notifier).set(widget.folderId);
       container.read(activeConversationProvider.notifier).clear();
       container.read(chat.chatMessagesProvider.notifier).clearMessages();
@@ -464,9 +682,24 @@ class _FolderPageState extends ConsumerState<FolderPage> {
         uploadedFileIds.isNotEmpty ? uploadedFileIds : null,
         toolIds: toolIds.isNotEmpty ? toolIds : null,
         pendingFolderIdOverride: widget.folderId,
+        onAssistantPlaceholderCreated: (handle) {
+          pendingSend = handle;
+        },
       );
 
-      container.read(attachedFilesProvider.notifier).clearAll();
+      // durableSend has now transferred all message/outbox ownership.
+      unawaited(
+        mediaUploadController
+            .retireAttachmentOwnership(sentAttachmentOwnership)
+            .catchError((Object error, StackTrace stackTrace) {
+              DebugLogger.error(
+                'sent-attachment-cleanup-failed',
+                scope: 'navigation/folder',
+                error: error,
+                stackTrace: stackTrace,
+              );
+            }),
+      );
     } catch (e, stackTrace) {
       // durableSend adds an optimistic streaming placeholder before its
       // throwable DB work; on failure recover the UI by finishing the
@@ -478,7 +711,101 @@ class _FolderPageState extends ConsumerState<FolderPage> {
         error: e,
         stackTrace: stackTrace,
       );
-      container.read(chat.chatMessagesProvider.notifier).finishStreaming();
+      chat.recoverFailedChatSend(container, e, pendingSend);
+    } finally {
+      if (mounted) {
+        setState(() => _isSendingComposerMessage = false);
+      }
+    }
+  }
+
+  /// Sends the composer's message to [models] as one comparison turn that
+  /// starts a chat in this folder. The result names the committed turn, or is
+  /// null when it was refused or not written, so the composer keeps the draft.
+  Future<chat.ChatSendPlaceholderHandle?> _handleCompareSend(
+    String text,
+    List<Model> models,
+  ) async {
+    if (_isSendingComposerMessage ||
+        ref.read(conversationSelectionProvider).isLoading) {
+      return null;
+    }
+
+    setState(() => _isSendingComposerMessage = true);
+    final container = ProviderScope.containerOf(context, listen: false);
+
+    try {
+      final attachedFiles = container.read(attachedFilesProvider);
+      final mediaUploadController = container.read(
+        mediaUploadControllerProvider,
+      );
+      final sentAttachmentOwnership = mediaUploadController
+          .captureAttachmentOwnership();
+      final uploadedFileIds = attachedFiles
+          .where(
+            (file) =>
+                file.status == FileUploadStatus.completed &&
+                file.fileId != null,
+          )
+          .map((file) => file.fileId!)
+          .toList(growable: false);
+      final toolIds = container.read(selectedToolIdsProvider);
+
+      container.read(pendingFolderIdProvider.notifier).set(widget.folderId);
+      container.read(activeConversationProvider.notifier).clear();
+      container.read(chat.chatMessagesProvider.notifier).clearMessages();
+
+      // A comparison refused for its models or settings throws before anything
+      // is written, so the page stays and the draft is kept. Once the turn is
+      // committed the chat takes over, as it does for an ordinary send. The
+      // send can outlast this page, and a page kept behind another route is
+      // still mounted, so only the route on top takes the user to the chat.
+      final handles = await chat.durableCompareSend(
+        container,
+        text,
+        uploadedFileIds.isNotEmpty ? uploadedFileIds : null,
+        models: models,
+        toolIds: toolIds.isNotEmpty ? toolIds : null,
+        onCommitted: () {
+          if (!mounted || !(ModalRoute.isCurrentOf(context) ?? true)) return;
+          ConduitHaptics.selectionClick();
+          NavigationService.router.go(Routes.chat);
+        },
+      );
+
+      unawaited(
+        mediaUploadController
+            .retireAttachmentOwnership(sentAttachmentOwnership)
+            .catchError((Object error, StackTrace stackTrace) {
+              DebugLogger.error(
+                'sent-attachment-cleanup-failed',
+                scope: 'navigation/folder',
+                error: error,
+                stackTrace: stackTrace,
+              );
+            }),
+      );
+      return handles.first;
+    } on chat.ComparisonAdmissionException catch (error) {
+      if (mounted) {
+        UiUtils.showMessage(
+          context,
+          comparisonAdmissionMessage(
+            AppLocalizations.of(context)!,
+            error,
+            models: ref.read(modelsProvider).asData?.value,
+          ),
+        );
+      }
+      return null;
+    } catch (e, stackTrace) {
+      DebugLogger.error(
+        'durable-compare-send-failed',
+        scope: 'navigation/folder',
+        error: e,
+        stackTrace: stackTrace,
+      );
+      return null;
     } finally {
       if (mounted) {
         setState(() => _isSendingComposerMessage = false);
@@ -500,7 +827,17 @@ class _FolderPageState extends ConsumerState<FolderPage> {
     }
 
     try {
-      final attachments = await fileService.pickFiles();
+      final attachments = await fileService.pickFiles(
+        allowedExtensions: localFilePickerExtensionsForModel(
+          ref.read(selectedModelProvider),
+          desktopHermes:
+              ref.read(hermesConfigProvider).mode ==
+              HermesBackendMode.desktopGateway,
+          hermesResponsesFiles:
+              ref.read(hermesCapabilitiesProvider).asData?.value.inputFiles ==
+              true,
+        ),
+      );
       if (attachments.isEmpty) {
         return;
       }
@@ -667,31 +1004,49 @@ class _FolderPageState extends ConsumerState<FolderPage> {
     } catch (_) {}
   }
 
-  Future<void> _handlePastedAttachments(
-    List<LocalAttachment> attachments,
-  ) async {
-    if (attachments.isEmpty) {
-      return;
-    }
-
-    ref.read(attachedFilesProvider.notifier).addFiles(attachments);
-    for (final attachment in attachments) {
-      try {
-        await ref
-            .read(mediaUploadControllerProvider)
-            .upload(
-              filePath: attachment.file.path,
-              fileName: attachment.displayName,
-              fileSize: await attachment.file.length(),
-            );
-      } catch (_) {}
-    }
+  Future<void> _handlePastedAttachments(List<LocalAttachment> attachments) {
+    // Adding the files transfers composer ownership before native paste is
+    // acknowledged. Start every upload concurrently and let the shared
+    // controller retain terminal cleanup responsibility.
+    final mediaUpload = ref.read(mediaUploadControllerProvider);
+    // Deliberately return the helper Future without an `async` boundary so a
+    // synchronous composer-ownership failure reaches the native paste lease.
+    return acceptFolderPastedAttachments(
+      attachments: attachments,
+      addFiles: ref.read(attachedFilesProvider.notifier).addFiles,
+      upload: (attachment, fileSize) => mediaUpload.enqueueUpload(
+        filePath: attachment.file.path,
+        fileName: attachment.displayName,
+        fileSize: fileSize,
+      ),
+      rollback: (attachment) async {
+        await mediaUpload.removeAttachment(attachment.file.path);
+      },
+    );
   }
 
-  void _handleVoiceCall() {
-    unawaited(
-      ref.read(voiceCallLauncherProvider).launch(startNewConversation: false),
-    );
+  Future<void> _handleVoiceCall() async {
+    try {
+      await ref
+          .read(voiceCallLauncherProvider)
+          .launch(startNewConversation: false);
+    } catch (error, stackTrace) {
+      DebugLogger.error(
+        'launch-failed',
+        scope: 'navigation/folder/voice_call',
+        error: error,
+        stackTrace: stackTrace,
+      );
+      if (!mounted) return;
+      final l10n = AppLocalizations.of(context)!;
+      final message = error is VoiceCallStartException
+          ? voiceModeErrorText(l10n, kind: error.kind, message: error.message)!
+          : error is StateError
+          ? error.message.toString()
+          : l10n.errorMessage;
+      ScaffoldMessenger.maybeOf(context)
+          ?.showSnackBar(SnackBar(content: Text(message)));
+    }
   }
 
   void _dismissComposerFocus() {
@@ -1096,84 +1451,39 @@ class _FolderPageState extends ConsumerState<FolderPage> {
     context.goNamed(RouteNames.folder, pathParameters: {'id': folderId});
   }
 
-  Future<void> _selectConversation(String conversationId) async {
-    if (_isLoadingConversation) {
-      return;
-    }
-
-    setState(() => _isLoadingConversation = true);
-    final container = ProviderScope.containerOf(context, listen: false);
-
-    container.read(temporaryChatEnabledProvider.notifier).set(false);
-
-    try {
-      container.read(chat.isLoadingConversationProvider.notifier).set(true);
-      _pendingConversationId = conversationId;
-
-      container.read(activeConversationProvider.notifier).clear();
-      container.read(chat.chatMessagesProvider.notifier).clearMessages();
-      container.read(pendingFolderIdProvider.notifier).clear();
-
-      NavigationService.router.go(Routes.chat);
-
-      // DB-first open (CDT-RFC-001 Phase 1): a synced local row renders
-      // instantly — offline included — and a background pull freshens it.
-      final local = await loadLocalConversation(container, conversationId);
-      if (local != null) {
-        container.read(activeConversationProvider.notifier).set(local);
-        schedulePullChatNow(container, conversationId);
-      } else {
-        Future<void> useCachedConversation() async {
-          final conversations = await container.read(
-            conversationsProvider.future,
-          );
-          Conversation? conversation;
-          for (final item in conversations) {
-            if (item.id == conversationId) {
-              conversation = item;
-              break;
-            }
-          }
-          if (conversation != null) {
-            container
-                .read(activeConversationProvider.notifier)
-                .set(conversation);
-          }
+  Future<void> _selectConversation(Conversation conversation) async {
+    final originRoute = NavigationService.currentRoute;
+    final originRouteRevision = NavigationService.currentRouteRevision;
+    final result = await ref
+        .read(conversationSelectionProvider.notifier)
+        .select(conversation);
+    switch (result.disposition) {
+      case ConversationSelectionDisposition.committed:
+        if (!mounted ||
+            (NavigationService.currentRoute != originRoute ||
+                NavigationService.currentRouteRevision !=
+                    originRouteRevision)) {
+          return;
         }
-
-        final api = container.read(apiServiceProvider);
-        if (api != null) {
-          try {
-            final fullConversation = await api.getConversation(conversationId);
-            container
-                .read(activeConversationProvider.notifier)
-                .set(fullConversation);
-            // Materialize the local row so the next open is DB-first.
-            schedulePullChatNow(container, conversationId);
-          } catch (error, stackTrace) {
-            DebugLogger.error(
-              'folder-conversation-fetch-failed',
-              scope: 'navigation/folder',
-              error: error,
-              stackTrace: stackTrace,
-              data: {'conversationId': conversationId},
-            );
-            await useCachedConversation();
-          }
-        } else {
-          await useCachedConversation();
+        NavigationService.router.go(Routes.chat);
+        return;
+      case ConversationSelectionDisposition.canceled:
+        return;
+      case ConversationSelectionDisposition.failed:
+        if (!mounted ||
+            result.error == null ||
+            (NavigationService.currentRoute != originRoute ||
+                NavigationService.currentRouteRevision !=
+                    originRouteRevision)) {
+          return;
         }
-      }
-
-      container.read(chat.isLoadingConversationProvider.notifier).set(false);
-      _pendingConversationId = null;
-    } catch (_) {
-      container.read(chat.isLoadingConversationProvider.notifier).set(false);
-      _pendingConversationId = null;
-    } finally {
-      if (mounted) {
-        setState(() => _isLoadingConversation = false);
-      }
+        UserFriendlyErrorHandler().showErrorSnackbar(
+          context,
+          result.error,
+          onRetry: () {
+            if (mounted) unawaited(_selectConversation(conversation));
+          },
+        );
     }
   }
 
@@ -1185,14 +1495,23 @@ class _FolderPageState extends ConsumerState<FolderPage> {
       data: (folders) => _folderById(folders, widget.folderId),
       orElse: () => null,
     );
+    // A draft that could not use the folder's saved model says so once.
+    ref.listen<String?>(folderDraftModelNoticeProvider, (previous, next) {
+      if (next != widget.folderId) return;
+      ref.read(folderDraftModelNoticeProvider.notifier).clear();
+      UiUtils.showMessage(context, l10n.folderProjectModelFallbackNotice);
+    });
+    ref.listen<String?>(folderDraftComparisonNoticeProvider, (previous, next) {
+      if (next != widget.folderId) return;
+      ref.read(folderDraftComparisonNoticeProvider.notifier).clear();
+      UiUtils.showMessage(context, l10n.folderProjectComparisonFallbackNotice);
+    });
 
-    return ErrorBoundary(
-      child: AdaptiveRouteShell(
-        backgroundColor: context.conduitTheme.surfaceBackground,
-        extendBodyBehindAppBar: true,
-        appBar: _buildAdaptiveAppBar(context, l10n, folder),
-        body: _buildBody(context, foldersAsync),
-      ),
+    return AdaptiveRouteShell(
+      backgroundColor: context.conduitTheme.surfaceBackground,
+      extendBodyBehindAppBar: true,
+      appBar: _buildAdaptiveAppBar(context, l10n, folder),
+      body: _buildBody(context, foldersAsync),
     );
   }
 
@@ -1245,8 +1564,10 @@ class _FolderPageState extends ConsumerState<FolderPage> {
                     'folder-page-composer-${widget.folderId}-$_composerResetNonce',
                   ),
                   onSendMessage: _handleComposerSend,
+                  onCompareSend: _handleCompareSend,
                   enabled:
-                      !_isLoadingConversation && !_isSendingComposerMessage,
+                      !ref.watch(conversationSelectionProvider).isLoading &&
+                      !_isSendingComposerMessage,
                   bottomPadding: 0,
                   onVoiceCall: _handleVoiceCall,
                   onFileAttachment: _handleFileAttachment,
@@ -1301,7 +1622,9 @@ class _FolderPageState extends ConsumerState<FolderPage> {
         folderConversationsAsync.isLoading && sortedConversations.isEmpty;
 
     final topPadding =
-        MediaQuery.of(context).padding.top + kTextTabBarHeight + Spacing.md;
+        MediaQuery.of(context).padding.top +
+        conduitAdaptiveToolbarHeightOf(context) +
+        Spacing.md;
     final slivers = <Widget>[
       SliverToBoxAdapter(child: SizedBox(height: topPadding)),
       SliverPadding(
@@ -1359,18 +1682,32 @@ class _FolderPageState extends ConsumerState<FolderPage> {
           sliver: SliverList(
             delegate: SliverChildBuilderDelegate((context, index) {
               final conversation = sortedConversations[index];
-              final isLoadingSelected =
-                  (_pendingConversationId == conversation.id) &&
-                  ref.watch(chat.isLoadingConversationProvider);
-
-              return ConduitContextMenu(
-                actions: buildConversationActionsWithFolders(
-                  context: context,
-                  ref: ref,
-                  conversation: conversation,
-                  foldersEnabled: true,
-                  folders: folders,
+              final scopedId = conversationScopedId(conversation);
+              final isLoadingSelected = ref.watch(
+                conversationSelectionProvider.select(
+                  (selection) =>
+                      selection.isLoading &&
+                      selection.pendingConversationId == scopedId,
                 ),
+              );
+
+              // Pin/rename/move/delete all fail server-side on another
+              // user's chat (shared folder).
+              final isReadOnly = isReadOnlySharedConversation(
+                conversation,
+                ref.watch(currentUserProvider2.select((user) => user?.id)),
+              );
+              return ConduitContextMenu(
+                actions: isReadOnly
+                    ? const <ConduitContextMenuAction>[]
+                    : buildConversationActionsWithFolders(
+                        context: context,
+                        ref: ref,
+                        conversation: conversation,
+                        foldersEnabled: true,
+                        folders: folders,
+                      ),
+                previewBuilder: buildConversationTileContextPreview,
                 child: ConversationTile(
                   key: ValueKey<String>('folder-chat-${conversation.id}'),
                   title: conversation.title.isEmpty
@@ -1379,9 +1716,7 @@ class _FolderPageState extends ConsumerState<FolderPage> {
                   pinned: conversation.pinned,
                   selected: false,
                   isLoading: isLoadingSelected,
-                  onTap: _isLoadingConversation
-                      ? null
-                      : () => _selectConversation(conversation.id),
+                  onTap: () => _selectConversation(conversation),
                 ),
               );
             }, childCount: sortedConversations.length),
@@ -1413,7 +1748,9 @@ class _FolderPageState extends ConsumerState<FolderPage> {
     ];
 
     final scrollView = ConduitRefreshIndicator(
-      edgeOffset: MediaQuery.of(context).padding.top + kTextTabBarHeight,
+      edgeOffset:
+          MediaQuery.of(context).padding.top +
+          conduitAdaptiveToolbarHeightOf(context),
       onRefresh: _refreshFolderContents,
       child: CustomScrollView(
         key: ValueKey<String>('folder-page-${widget.folderId}'),
@@ -1440,7 +1777,8 @@ class _FolderPageState extends ConsumerState<FolderPage> {
             top: 0,
             child: ConduitChromeGradientFade.top(
               contentHeight:
-                  MediaQuery.viewPaddingOf(context).top + kTextTabBarHeight,
+                  MediaQuery.viewPaddingOf(context).top +
+                  conduitAdaptiveToolbarHeightOf(context),
             ),
           ),
           Positioned(
@@ -1458,12 +1796,14 @@ class _FolderPageState extends ConsumerState<FolderPage> {
               fadeHeight: Spacing.md,
             ),
           ),
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: _buildComposerOverlay(context, folder),
-          ),
+          // A read-grant shared folder cannot receive new chats.
+          if (folder.canWrite)
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: _buildComposerOverlay(context, folder),
+            ),
         ],
       ),
     );
@@ -1523,13 +1863,34 @@ class _FolderPageHeader extends StatelessWidget {
           ),
           const SizedBox(width: Spacing.md),
           Expanded(
-            child: MiddleEllipsisText(
-              folder.name,
-              style: AppTypography.headlineSmallStyle.copyWith(
-                color: theme.textPrimary,
-                fontWeight: FontWeight.w700,
-              ),
-              semanticsLabel: folder.name,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                MiddleEllipsisText(
+                  folder.name,
+                  style: AppTypography.headlineSmallStyle.copyWith(
+                    color: theme.textPrimary,
+                    fontWeight: FontWeight.w700,
+                  ),
+                  semanticsLabel: folder.name,
+                ),
+                if (folder.shared)
+                  Text(
+                    [
+                      if (folder.ownerName case final owner?)
+                        AppLocalizations.of(context)!.sharedFolderOwner(owner),
+                      if (!folder.canWrite)
+                        AppLocalizations.of(context)!.readOnly,
+                    ].join(' · '),
+                    key: const ValueKey<String>('folder-page-shared-label'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppTypography.captionStyle.copyWith(
+                      color: theme.textSecondary,
+                    ),
+                  ),
+              ],
             ),
           ),
         ],
@@ -1764,9 +2125,14 @@ class _FolderEditSheetState extends ConsumerState<_FolderEditSheet> {
   }
 
   void _showSnackBar(String message) {
-    ScaffoldMessenger.maybeOf(
-      context,
-    )?.showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.maybeOf(context)
+        ?.showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  void _selectIcon(String? alias) {
+    if (_selectedIconAlias == alias) return;
+    ConduitHaptics.selectionClick();
+    setState(() => _selectedIconAlias = alias);
   }
 
   @override
@@ -1836,7 +2202,7 @@ class _FolderEditSheetState extends ConsumerState<_FolderEditSheet> {
             spacing: Spacing.xs,
             runSpacing: Spacing.xs,
             children: [
-              ChoiceChip(
+              AdaptiveChip.choice(
                 label: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -1850,12 +2216,10 @@ class _FolderEditSheetState extends ConsumerState<_FolderEditSheet> {
                   ],
                 ),
                 selected: _selectedIconAlias == null,
-                onSelected: _isSaving
-                    ? null
-                    : (_) => setState(() => _selectedIconAlias = null),
+                onSelected: _isSaving ? null : (_) => _selectIcon(null),
               ),
               for (final option in folderIconOptions)
-                ChoiceChip(
+                AdaptiveChip.choice(
                   label: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -1871,8 +2235,7 @@ class _FolderEditSheetState extends ConsumerState<_FolderEditSheet> {
                   selected: _selectedIconAlias == option.alias,
                   onSelected: _isSaving
                       ? null
-                      : (_) =>
-                            setState(() => _selectedIconAlias = option.alias),
+                      : (_) => _selectIcon(option.alias),
                 ),
             ],
           ),
@@ -1880,20 +2243,16 @@ class _FolderEditSheetState extends ConsumerState<_FolderEditSheet> {
           Row(
             mainAxisAlignment: MainAxisAlignment.end,
             children: [
-              TextButton(
+              ConduitTextButton(
                 onPressed: _isSaving ? null : () => Navigator.of(context).pop(),
-                child: Text(l10n.cancel),
+                text: l10n.cancel,
               ),
               const SizedBox(width: Spacing.sm),
-              FilledButton(
+              ConduitButton(
                 onPressed: _isSaving ? null : _save,
-                child: _isSaving
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : Text(l10n.save),
+                text: l10n.save,
+                isCompact: true,
+                isLoading: _isSaving,
               ),
             ],
           ),
@@ -1979,9 +2338,8 @@ class _FolderSystemPromptSheetState
     final l10n = AppLocalizations.of(context)!;
     final api = ref.read(apiServiceProvider);
     if (api == null) {
-      ScaffoldMessenger.maybeOf(
-        context,
-      )?.showSnackBar(SnackBar(content: Text(l10n.errorMessage)));
+      ScaffoldMessenger.maybeOf(context)
+          ?.showSnackBar(SnackBar(content: Text(l10n.errorMessage)));
       return;
     }
 
@@ -2013,9 +2371,8 @@ class _FolderSystemPromptSheetState
         return;
       }
       setState(() => _isSaving = false);
-      ScaffoldMessenger.maybeOf(
-        context,
-      )?.showSnackBar(SnackBar(content: Text(l10n.errorMessage)));
+      ScaffoldMessenger.maybeOf(context)
+          ?.showSnackBar(SnackBar(content: Text(l10n.errorMessage)));
     }
   }
 
@@ -2055,20 +2412,16 @@ class _FolderSystemPromptSheetState
           Row(
             mainAxisAlignment: MainAxisAlignment.end,
             children: [
-              TextButton(
+              ConduitTextButton(
                 onPressed: _isSaving ? null : () => Navigator.of(context).pop(),
-                child: Text(l10n.cancel),
+                text: l10n.cancel,
               ),
               const SizedBox(width: Spacing.sm),
-              FilledButton(
+              ConduitButton(
                 onPressed: _isSaving ? null : _save,
-                child: _isSaving
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : Text(l10n.save),
+                text: l10n.save,
+                isCompact: true,
+                isLoading: _isSaving,
               ),
             ],
           ),
@@ -2099,7 +2452,9 @@ class _SectionHeader extends StatelessWidget {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
             decoration: BoxDecoration(
-              color: context.sidebarTheme.accent.withValues(alpha: 0.7),
+              color: context.sidebarTheme.tint.withValues(
+                alpha: SidebarThemeExtension.tintMaxOpacity,
+              ),
               borderRadius: BorderRadius.circular(AppBorderRadius.xs),
               border: Border.all(
                 color: context.sidebarTheme.border.withValues(alpha: 0.35),
@@ -2109,7 +2464,7 @@ class _SectionHeader extends StatelessWidget {
             child: Text(
               '$count',
               style: AppTypography.sidebarBadgeStyle.copyWith(
-                color: context.sidebarTheme.foreground.withValues(alpha: 0.8),
+                color: context.sidebarTheme.foreground,
                 decoration: TextDecoration.none,
               ),
             ),
@@ -2123,37 +2478,21 @@ class _SectionHeader extends StatelessWidget {
 class _FolderToolbarPopupButton extends StatelessWidget {
   const _FolderToolbarPopupButton({
     required this.tintColor,
+    required this.items,
     required this.onSelected,
   });
 
   final Color tintColor;
+  final List<AdaptivePopupMenuEntry> items;
   final ValueChanged<String> onSelected;
 
   @override
   Widget build(BuildContext context) {
-    final l10n = AppLocalizations.of(context)!;
     return KeyedSubtree(
       key: const ValueKey<String>('folder-page-overflow-button'),
       child: ConduitAdaptiveToolbarOverflowButton<String>(
         tintColor: tintColor,
-        items: [
-          AdaptivePopupMenuItem<String>(
-            value: 'edit-folder',
-            label: l10n.editFolder,
-            icon: conduitAdaptivePopupMenuIcon(
-              iosSymbol: 'pencil',
-              materialIcon: Icons.edit_outlined,
-            ),
-          ),
-          AdaptivePopupMenuItem<String>(
-            value: 'system-prompt',
-            label: l10n.systemPrompt,
-            icon: conduitAdaptivePopupMenuIcon(
-              iosSymbol: 'text.bubble',
-              materialIcon: Icons.notes_outlined,
-            ),
-          ),
-        ],
+        items: items,
         onSelected: onSelected,
       ),
     );

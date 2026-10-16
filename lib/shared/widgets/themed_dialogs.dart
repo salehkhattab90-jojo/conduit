@@ -1,9 +1,9 @@
 import 'dart:async';
-import 'dart:io' show Platform;
 
-import 'package:adaptive_platform_ui/adaptive_platform_ui.dart';
-import 'package:flutter/material.dart';
+import 'package:conduit/shared/widgets/platform_ui/platform_ui.dart';
+import 'package:material_ui/material_ui.dart';
 
+import 'package:conduit/core/services/native_sheet_bridge.dart';
 import 'package:conduit/l10n/app_localizations.dart';
 
 import '../theme/conduit_input_styles.dart';
@@ -25,6 +25,7 @@ class ThemedDialogs {
     required String title,
     Widget? content,
     List<Widget>? actions,
+    bool scrollable = false,
   }) {
     final theme = context.conduitTheme;
     return AlertDialog(
@@ -48,6 +49,7 @@ class ThemedDialogs {
             )
           : null,
       actions: actions,
+      scrollable: scrollable,
     );
   }
 
@@ -68,7 +70,44 @@ class ThemedDialogs {
     final effectiveConfirmText = confirmText ?? l10n?.confirm ?? 'Confirm';
     final effectiveCancelText = cancelText ?? l10n?.cancel ?? 'Cancel';
 
-    if (Platform.isIOS) {
+    if (PlatformUiCapabilities.usesNativeIOS26 && barrierDismissible) {
+      try {
+        final result = await NativeSheetBridge.instance.presentSheet(
+          rethrowErrors: true,
+          root: NativeSheetDetailConfig(
+            id: 'confirmation-dialog',
+            title: title,
+            subtitle: message,
+            items: [
+              NativeSheetItemConfig(
+                id: 'cancel',
+                title: effectiveCancelText,
+                sfSymbol: 'xmark',
+                dismissOnSelect: true,
+                // Answers the question here; no chevron, since nothing opens.
+                showsDisclosure: false,
+                actionId: 'cancel',
+              ),
+              NativeSheetItemConfig(
+                id: 'confirm',
+                title: effectiveConfirmText,
+                sfSymbol: isDestructive ? 'trash' : 'checkmark',
+                destructive: isDestructive,
+                dismissOnSelect: true,
+                showsDisclosure: false,
+                actionId: 'confirm',
+              ),
+            ],
+          ),
+        );
+        return result?.actionId == 'confirm';
+      } catch (_) {
+        // Fall through to the Flutter Cupertino dialog when the bridge fails.
+      }
+      if (!context.mounted) return false;
+    }
+
+    if (PlatformUiCapabilities.isIOS) {
       final completer = Completer<bool>();
       await AdaptiveAlertDialog.show(
         context: context,
@@ -183,7 +222,40 @@ class ThemedDialogs {
     final effectiveConfirmText = confirmText ?? l10n?.save ?? 'Save';
     final effectiveCancelText = cancelText ?? l10n?.cancel ?? 'Cancel';
 
-    if (Platform.isIOS) {
+    final nativeEditorPreservesInputConfiguration =
+        keyboardType == null &&
+        textCapitalization == TextCapitalization.sentences &&
+        (maxLength == null || maxLength == TextField.noMaxLength);
+    if (PlatformUiCapabilities.usesNativeIOS26 &&
+        nativeEditorPreservesInputConfiguration) {
+      try {
+        final result = await NativeSheetBridge.instance.presentTextEditor(
+          title: title,
+          value: initialValue ?? '',
+          placeholder: hintText,
+          sendLabel: effectiveConfirmText,
+          valueId: 'text',
+          sendActionId: 'confirm',
+          closeActionId: 'cancel',
+          rethrowErrors: true,
+        );
+        if (result?.actionId != 'confirm') return null;
+        final value = result?.values['text'];
+        if (value is! String) return null;
+        final bounded = maxLength == null || maxLength == TextField.noMaxLength
+            ? value
+            : value.characters.take(maxLength).toString();
+        final trimmed = bounded.trim();
+        if (trimmed.isEmpty) return null;
+        if (initialValue != null && trimmed == initialValue.trim()) return null;
+        return trimmed;
+      } catch (_) {
+        // Fall through to the Flutter Cupertino dialog when the bridge fails.
+      }
+      if (!context.mounted) return null;
+    }
+
+    if (PlatformUiCapabilities.isIOS) {
       final result = await AdaptiveAlertDialog.inputShow(
         context: context,
         title: title,

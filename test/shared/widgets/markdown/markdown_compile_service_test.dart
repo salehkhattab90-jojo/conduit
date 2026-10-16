@@ -1,6 +1,11 @@
-import 'package:conduit/core/services/worker_manager.dart';
+import 'dart:async';
+import 'dart:convert';
+
+import 'package:checks/checks.dart';
+import 'package:conduit_core/services/worker_manager.dart';
 import 'package:conduit/shared/widgets/markdown/compiled_markdown_document.dart';
 import 'package:conduit/shared/widgets/markdown/markdown_compile_service.dart';
+import 'package:conduit_core/utils/streaming_markdown_preparation.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class _RecordingBatchMarkdownCompileService extends MarkdownCompileService {
@@ -8,16 +13,65 @@ class _RecordingBatchMarkdownCompileService extends MarkdownCompileService {
     : super(workerManager: WorkerManager());
 
   final List<List<String>> batchCalls = <List<String>>[];
+  final List<bool> synchronousBatchInputs = <bool>[];
+  final List<bool> widgetTestBatchInputs = <bool>[];
+  final List<String> preparedInputs = <String>[];
+  final List<bool> synchronousPreparationInputs = <bool>[];
+  final List<String> events = <String>[];
+
+  @override
+  Future<String> prepareContent(
+    String content, {
+    required bool streaming,
+    bool allowSynchronous = false,
+    bool widgetTest = false,
+  }) async {
+    preparedInputs.add(content);
+    synchronousPreparationInputs.add(allowSynchronous);
+    events.add('prepare:$content');
+    return prepareMarkdownContent(content, streaming: streaming);
+  }
 
   @override
   Future<List<CompiledMarkdownDocument>> compilePreparedBatch(
     Iterable<String> preparedContents, {
     bool allowSynchronous = false,
     bool widgetTest = false,
+    bool cacheResults = true,
   }) async {
     final contents = preparedContents.toList(growable: false);
     batchCalls.add(contents);
+    synchronousBatchInputs.add(allowSynchronous);
+    widgetTestBatchInputs.add(widgetTest);
+    events.add('compile:${contents.join('|')}');
     return contents.map(compilePreparedSynchronously).toList(growable: false);
+  }
+}
+
+class _GatedBatchMarkdownCompileService
+    extends _RecordingBatchMarkdownCompileService {
+  final Completer<void> firstCompileStarted = Completer<void>();
+  final Completer<void> releaseFirstCompile = Completer<void>();
+  var compileCalls = 0;
+
+  @override
+  Future<List<CompiledMarkdownDocument>> compilePreparedBatch(
+    Iterable<String> preparedContents, {
+    bool allowSynchronous = false,
+    bool widgetTest = false,
+    bool cacheResults = true,
+  }) async {
+    compileCalls += 1;
+    if (compileCalls == 1) {
+      firstCompileStarted.complete();
+      await releaseFirstCompile.future;
+    }
+    return super.compilePreparedBatch(
+      preparedContents,
+      allowSynchronous: allowSynchronous,
+      widgetTest: widgetTest,
+      cacheResults: cacheResults,
+    );
   }
 }
 
@@ -42,6 +96,219 @@ List<CompiledMarkdownLatexSegment> _collectLatexSegments(
 void main() {
   setUp(debugResetCompiledMarkdownCache);
   tearDown(debugResetCompiledMarkdownCache);
+
+  test('streaming revisions do not enter the settled markdown cache', () async {
+    final service = MarkdownCompileService(workerManager: WorkerManager());
+    addTearDown(service.dispose);
+    const content = 'A transient **streaming** revision.';
+
+    await service.compilePrepared(
+      content,
+      allowSynchronous: true,
+      widgetTest: true,
+      cacheResult: false,
+    );
+    expect(debugCompiledMarkdownCacheSize(), 0);
+
+    await service.compilePrepared(
+      content,
+      allowSynchronous: true,
+      widgetTest: true,
+    );
+    expect(debugCompiledMarkdownCacheSize(), 1);
+  });
+
+  test('markdown workers retire after the configured idle period', () async {
+    final service = MarkdownCompileService(
+      workerManager: WorkerManager(),
+      workerIdleTimeout: const Duration(milliseconds: 50),
+    );
+    addTearDown(service.dispose);
+    final content = List<String>.filled(
+      200,
+      'worker-backed markdown',
+    ).join(' ');
+
+    await service.compilePrepared(content, cacheResult: false);
+    expect(service.debugCompilerWorkerRunning, isTrue);
+
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    expect(service.debugCompilerWorkerRunning, isFalse);
+
+    await service.prepareContent(content, streaming: true);
+    expect(service.debugPrepareWorkerRunning, isTrue);
+
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    expect(service.debugPrepareWorkerRunning, isFalse);
+  });
+
+  test(
+    'memory pressure clears settled cache and retires idle workers',
+    () async {
+      final service = MarkdownCompileService(
+        workerManager: WorkerManager(),
+        workerIdleTimeout: const Duration(hours: 1),
+      );
+      addTearDown(service.dispose);
+      final content = List<String>.filled(
+        200,
+        'memory-pressure markdown',
+      ).join(' ');
+
+      await service.compilePrepared(content);
+      expect(debugCompiledMarkdownCacheSize(), 1);
+      expect(service.debugCompilerWorkerRunning, isTrue);
+
+      service.handleMemoryPressure();
+
+      expect(debugCompiledMarkdownCacheSize(), 0);
+      expect(service.debugCompilerWorkerRunning, isFalse);
+    },
+  );
+
+  test(
+    'memory pressure fences an in-flight single compile and its followers',
+    () async {
+      final compileStarted = Completer<void>();
+      final releaseCompile = Completer<void>();
+      final service = MarkdownCompileService(
+        workerManager: WorkerManager(),
+        debugCompilePreparedOverride: (preparedContent) async {
+          compileStarted.complete();
+          await releaseCompile.future;
+          return const CompiledMarkdownDocument.empty();
+        },
+      );
+      addTearDown(service.dispose);
+      addTearDown(() {
+        if (!releaseCompile.isCompleted) releaseCompile.complete();
+      });
+      const content = 'Delayed single compile';
+
+      final leader = service.compilePrepared(content);
+      await compileStarted.future;
+      service.handleMemoryPressure();
+      final follower = service.compilePrepared(content);
+      releaseCompile.complete();
+
+      await Future.wait(<Future<CompiledMarkdownDocument>>[leader, follower]);
+      expect(debugCompiledMarkdownCacheSize(), 0);
+
+      await service.compilePrepared(
+        content,
+        allowSynchronous: true,
+        widgetTest: true,
+      );
+      expect(debugCompiledMarkdownCacheSize(), 1);
+    },
+  );
+
+  test(
+    'memory pressure fences in-flight batch writes and batch followers',
+    () async {
+      final compileStarted = Completer<void>();
+      final releaseCompile = Completer<void>();
+      final service = MarkdownCompileService(
+        workerManager: WorkerManager(),
+        debugCompilePreparedBatchOverride: (preparedContents) async {
+          compileStarted.complete();
+          await releaseCompile.future;
+          return List<CompiledMarkdownDocument>.filled(
+            preparedContents.length,
+            const CompiledMarkdownDocument.empty(),
+          );
+        },
+      );
+      addTearDown(service.dispose);
+      addTearDown(() {
+        if (!releaseCompile.isCompleted) releaseCompile.complete();
+      });
+      const contents = <String>['Delayed batch one', 'Delayed batch two'];
+
+      final leader = service.compilePreparedBatch(contents);
+      await compileStarted.future;
+      service.handleMemoryPressure();
+      final followers = service.compilePreparedBatch(contents);
+      releaseCompile.complete();
+
+      await Future.wait(<Future<List<CompiledMarkdownDocument>>>[
+        leader,
+        followers,
+      ]);
+      expect(debugCompiledMarkdownCacheSize(), 0);
+
+      await service.compilePreparedBatch(
+        contents,
+        allowSynchronous: true,
+        widgetTest: true,
+      );
+      expect(debugCompiledMarkdownCacheSize(), 2);
+    },
+  );
+
+  test('dispose fences an in-flight single-compile follower', () async {
+    final compileStarted = Completer<void>();
+    final releaseCompile = Completer<void>();
+    var disposed = false;
+    final service = MarkdownCompileService(
+      workerManager: WorkerManager(),
+      debugCompilePreparedOverride: (preparedContent) async {
+        compileStarted.complete();
+        await releaseCompile.future;
+        return const CompiledMarkdownDocument.empty();
+      },
+    );
+    addTearDown(() {
+      if (!disposed) service.dispose();
+      if (!releaseCompile.isCompleted) releaseCompile.complete();
+    });
+    const content = 'Disposed single follower';
+
+    final leader = service.compilePrepared(content);
+    await compileStarted.future;
+    final follower = service.compilePrepared(content);
+    service.dispose();
+    disposed = true;
+    releaseCompile.complete();
+
+    await Future.wait(<Future<CompiledMarkdownDocument>>[leader, follower]);
+    expect(debugCompiledMarkdownCacheSize(), 0);
+  });
+
+  test('dispose fences in-flight batch followers', () async {
+    final compileStarted = Completer<void>();
+    final releaseCompile = Completer<void>();
+    var disposed = false;
+    final service = MarkdownCompileService(
+      workerManager: WorkerManager(),
+      debugCompilePreparedBatchOverride: (preparedContents) async {
+        compileStarted.complete();
+        await releaseCompile.future;
+        return List<CompiledMarkdownDocument>.filled(
+          preparedContents.length,
+          const CompiledMarkdownDocument.empty(),
+        );
+      },
+    );
+    addTearDown(() {
+      if (!disposed) service.dispose();
+      if (!releaseCompile.isCompleted) releaseCompile.complete();
+    });
+    const contents = <String>['Disposed batch one', 'Disposed batch two'];
+
+    final leader = service.compilePreparedBatch(contents);
+    await compileStarted.future;
+    final followers = service.compilePreparedBatch(contents);
+    service.dispose();
+    disposed = true;
+    releaseCompile.complete();
+
+    await Future.wait(<Future<List<CompiledMarkdownDocument>>>[
+      leader,
+      followers,
+    ]);
+    expect(debugCompiledMarkdownCacheSize(), 0);
+  });
 
   group('compilePreparedMarkdownSync', () {
     test('classifies a plain paragraph as plainText', () {
@@ -158,6 +425,16 @@ void main() {
       );
     });
 
+    test('preserves matrix separators and underbraces in block latex', () {
+      const formula =
+          r'\underbrace{-i\hbar c\,\boldsymbol{\alpha}\cdot\nabla\psi}_{\text{crossed out}}'
+          r'\qquad\begin{pmatrix}1&0\\0&-1\end{pmatrix}';
+      final document = compilePreparedMarkdownSync('\$\$$formula\$\$');
+
+      expect(document.blockLatexExpressions.values.single, formula);
+      expect(_collectLatexSegments(document.nodes).single.tex, formula);
+    });
+
     test('does not treat currency text as latex', () {
       final document = compilePreparedMarkdownSync(
         r'Plain currency text like $65,539 USD is about ~$42.6 million.',
@@ -199,6 +476,32 @@ void main() {
       },
     );
 
+    test('records whether a reasoning block carried a duration', () {
+      final withDuration = compilePreparedMarkdownSync(
+        '<details type="reasoning" done="true" duration="3">\n'
+        '<summary>Thought for 3 seconds</summary>\n'
+        '&gt; why\n</details>',
+      );
+      final withoutDuration = compilePreparedMarkdownSync(
+        '<details type="reasoning" done="true">\n'
+        '<summary>Thinking…</summary>\n'
+        '&gt; why\n</details>',
+      );
+
+      final first =
+          (withDuration.nodes.first as CompiledMarkdownElement).detailsData!;
+      final second =
+          (withoutDuration.nodes.first as CompiledMarkdownElement).detailsData!;
+      expect(first.hasDuration, isTrue);
+      expect(first.durationSeconds, 3);
+      expect(second.hasDuration, isFalse);
+      expect(second.durationSeconds, 0);
+      expect(
+        CompiledMarkdownDetailsData.fromMap(first.toMap()).hasDuration,
+        isTrue,
+      );
+    });
+
     test('compiles semantic tool call detail payloads', () {
       final document = compilePreparedMarkdownSync(
         [
@@ -231,6 +534,130 @@ void main() {
           document.blocks.first as CompiledMarkdownDetailsBlock;
       expect(detailsBlock.detailsData, detailsData);
       expect(detailsBlock.toolCallData, toolCallData);
+    });
+
+    test('tool error results survive worker serialization', () {
+      for (final entry in <(Object, bool)>[
+        ('Error: request failed', true),
+        ('Exception: offline', true),
+        ('Traceback (most recent call last)', true),
+        ('HTTP error! 500', true),
+        (
+          {
+            'error': {'message': 'offline'},
+          },
+          true,
+        ),
+        ({'status': 'failed'}, true),
+        ({'ok': false, 'message': 'offline'}, true),
+        (
+          [
+            {'type': 'text', 'text': 'Error: offline'},
+          ],
+          true,
+        ),
+        ({'error': '', 'ok': true}, false),
+        ({'ok': false, 'message': ''}, false),
+        ('ordinary result', false),
+      ]) {
+        final value = jsonEncode(entry.$1)
+            .replaceAll('&', '&amp;')
+            .replaceAll('"', '&quot;');
+        final compiled = compilePreparedMarkdownSync(
+          '<details type="tool_calls" name="fetch" status="completed" '
+          'done="true" result="$value"><summary>Tool Executed</summary></details>',
+        );
+        final restored = CompiledMarkdownDocument.fromMap(compiled.toMap());
+        final block = restored.blocks.single as CompiledMarkdownDetailsBlock;
+        expect(block.toolCallData!.isError, entry.$2, reason: '${entry.$1}');
+      }
+    });
+
+    // Open WebUI shows a function_call_output as the text of its parts
+    // (getToolResultText), not as the JSON of the part list (issue #677).
+    test('shows a text-part tool result as its joined text', () {
+      String escapeAttribute(String value) => value
+          .replaceAll('&', '&amp;')
+          .replaceAll('"', '&quot;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;');
+      CompiledMarkdownToolCallData compileResult(
+        Object result, {
+        bool structured = false,
+      }) {
+        final document = compilePreparedMarkdownSync(
+          [
+            '<details type="tool_calls" done="true" name="fetch" '
+                '${structured ? 'status="completed" ' : ''}'
+                'result="${escapeAttribute(jsonEncode(result))}">',
+            '<summary>Tool Executed</summary>',
+            '</details>',
+          ].join('\n'),
+        );
+        final details = document.nodes.first as CompiledMarkdownElement;
+        return details.detailsData!.toolCallData!;
+      }
+
+      final parts = compileResult([
+        {'type': 'input_text', 'text': 'line one\n<b>line</b> two'},
+        {'type': 'input_image', 'image_url': 'https://example.com/a.png'},
+        {'text': ' and '},
+        {'type': 'provider_text', 'text': 'more'},
+      ]);
+      expect(parts.resultCode, isEmpty);
+      expect(parts.resultDisplayText, 'line one\n<b>line</b> two and more');
+
+      final mixed = compileResult([
+        {'type': 'input_text', 'text': 'a'},
+        {'title': 'not a content part'},
+      ]);
+      expect(mixed.resultDisplayText, isEmpty);
+      expect(mixed.resultCode, contains('"title": "not a content part"'));
+
+      final imagesOnly = compileResult([
+        {'type': 'input_image', 'image_url': 'https://example.com/a.png'},
+      ]);
+      expect(imagesOnly.resultCode, contains('input_image'));
+
+      final structured = compileResult([
+        {'type': 'input_image', 'image_url': 'https://example.com/a.png'},
+        {'type': 'provider_metadata'},
+        {'text': 'visible'},
+      ], structured: true);
+      expect(structured.resultCode, isEmpty);
+      expect(structured.resultDisplayText, 'visible');
+
+      final structuredImages = compileResult([
+        {'type': 'input_image', 'image_url': 'https://example.com/a.png'},
+      ], structured: true);
+      expect(structuredImages.resultCode, isEmpty);
+      expect(structuredImages.resultDisplayText, isEmpty);
+    });
+
+    // Issue #677: JSON-escaped tool text looks like LaTeX delimiters. Block
+    // extraction inserted blank lines into the opening tag, so the whole tool
+    // call rendered as a raw wall.
+    test('keeps LaTeX extraction out of details attributes', () {
+      const resultText = r'Solve \[x^2\] then $$y$$ and \(z\).';
+      final attribute = jsonEncode(resultText)
+          .replaceAll('&', '&amp;')
+          .replaceAll('"', '&quot;');
+      final document = compilePreparedMarkdownSync(
+        [
+          'Math \\[a+b\\] stays math.',
+          '',
+          '<details type="tool_calls" done="true" name="fetch" '
+              'result="$attribute">',
+          '<summary>Tool Executed</summary>',
+          '</details>',
+        ].join('\n'),
+      );
+
+      final details = document.nodes
+          .whereType<CompiledMarkdownElement>()
+          .singleWhere((node) => node.tag == 'details');
+      expect(details.detailsData!.toolCallData!.resultDisplayText, resultText);
+      expect(document.blockLatexExpressions.values, ['a+b']);
     });
 
     test('stores details bodies as lazy markdown payloads', () {
@@ -313,47 +740,113 @@ void main() {
   );
 
   test(
-    'prepareContent falls back to sync when the async prepare backend fails',
+    'prepareStreamingContent retains a prepared prefix in the isolate',
     () async {
-      MarkdownPrepareExecutionPath? executionPath;
+      final patches = <MarkdownPreparationPatch>[];
       final service = MarkdownCompileService(
         workerManager: WorkerManager(),
-        debugOnPrepareExecution: (path) => executionPath = path,
-        debugPrepareContentOverride: (content, streaming) async {
-          throw StateError(
-            'prepare backend failed: streaming=$streaming length=${content.length}',
-          );
-        },
+        debugOnPreparationPatch: patches.add,
       );
       addTearDown(service.dispose);
+      var prepared = const PreparedMarkdownText.empty();
 
-      final longPrefix = List<String>.filled(220, 'stream chunk').join(' ');
-      final content = [
-        longPrefix,
-        '<details type="tool_calls" name="search">',
-        '<summary>Tool Executed</summary>',
-        '{"q":"cats"}',
-      ].join('\n\n');
+      final first = await service.prepareStreamingContent(
+        const MarkdownPreparationRequest(
+          sessionId: 'message-1',
+          revision: 1,
+          expectedBaseRevision: 0,
+          content: 'First paragraph.\n\nSecond',
+          streaming: true,
+          collectMetrics: true,
+          verifyParity: true,
+        ),
+      );
+      prepared = prepared.applyPatch(first);
+      final second = await service.prepareStreamingContent(
+        const MarkdownPreparationRequest(
+          sessionId: 'message-1',
+          revision: 2,
+          expectedBaseRevision: 1,
+          content: 'First paragraph.\n\nSecond grows 物語',
+          streaming: true,
+          collectMetrics: true,
+          verifyParity: true,
+        ),
+      );
+      prepared = prepared.applyPatch(second);
 
+      expect(first.mode, MarkdownPreparationMode.full);
+      expect(second.mode, MarkdownPreparationMode.incremental);
       expect(
-        service.shouldPrepareSynchronously(content, widgetTest: false),
-        isFalse,
+        second.metrics.processedCharacters,
+        lessThan(second.metrics.inputCharacters),
       );
-
-      final prepared = await service.prepareContent(
-        content,
-        streaming: true,
-        allowSynchronous: true,
-        widgetTest: false,
-      );
-
       expect(
-        prepared,
-        equals(prepareMarkdownContent(content, streaming: true)),
+        second.metrics.inputUtf8Bytes,
+        greaterThan(second.metrics.inputCharacters),
       );
-      expect(executionPath, MarkdownPrepareExecutionPath.fallbackSync);
+      expect(patches, hasLength(2));
+      expect(
+        prepared.materialize(),
+        prepareMarkdownContent(
+          'First paragraph.\n\nSecond grows 物語',
+          streaming: true,
+        ),
+      );
+
+      await service.releaseStreamingPreparationSession('message-1');
+      final reset = await service.prepareStreamingContent(
+        const MarkdownPreparationRequest(
+          sessionId: 'message-1',
+          revision: 3,
+          expectedBaseRevision: 2,
+          content: 'First paragraph.\n\nAfter release',
+          streaming: true,
+          collectMetrics: false,
+          verifyParity: true,
+        ),
+      );
+      expect(reset.mode, MarkdownPreparationMode.resetFull);
+      expect(reset.fallbackReason, 'missingSession');
     },
   );
+
+  test('prepareContent falls back to sync when the async prepare backend fails', () async {
+    MarkdownPrepareExecutionPath? executionPath;
+    final service = MarkdownCompileService(
+      workerManager: WorkerManager(),
+      debugOnPrepareExecution: (path) => executionPath = path,
+      debugPrepareContentOverride: (content, streaming) async {
+        throw StateError(
+          'prepare backend failed: streaming=$streaming length=${content.length}',
+        );
+      },
+    );
+    addTearDown(service.dispose);
+
+    final longPrefix = List<String>.filled(220, 'stream chunk').join(' ');
+    final content = [
+      longPrefix,
+      '<details type="tool_calls" name="search">',
+      '<summary>Tool Executed</summary>',
+      '{"q":"cats"}',
+    ].join('\n\n');
+
+    expect(
+      service.shouldPrepareSynchronously(content, widgetTest: false),
+      isFalse,
+    );
+
+    final prepared = await service.prepareContent(
+      content,
+      streaming: true,
+      allowSynchronous: true,
+      widgetTest: false,
+    );
+
+    expect(prepared, equals(prepareMarkdownContent(content, streaming: true)));
+    expect(executionPath, MarkdownPrepareExecutionPath.fallbackSync);
+  });
 
   test(
     'compilePreparedBatch preserves order and dedupes cache entries',
@@ -391,8 +884,131 @@ void main() {
 
     await Future<void>.delayed(Duration.zero);
 
-    expect(service.batchCalls, <List<String>>[
+    check(service.batchCalls).deepEquals(<List<String>>[
       <String>['first fresh entry', 'second fresh entry'],
     ]);
   });
+
+  test(
+    'prewarmContents prepares raw slices before batch compilation',
+    () async {
+      final service = _RecordingBatchMarkdownCompileService();
+      addTearDown(service.dispose);
+
+      const rawInputs = <String>['first **raw**\r\nentry', 'second raw\rentry'];
+      final preparedInputs = rawInputs
+          .map((value) => prepareMarkdownContent(value, streaming: false))
+          .toList(growable: false);
+      await service.prewarmContents(rawInputs, streaming: false);
+
+      check(service.preparedInputs).deepEquals(rawInputs);
+      check(service.synchronousPreparationInputs).deepEquals([false, false]);
+      check(service.batchCalls).deepEquals(<List<String>>[preparedInputs]);
+      check(service.events).deepEquals(<String>[
+        for (final input in rawInputs) 'prepare:$input',
+        'compile:${preparedInputs.join('|')}',
+      ]);
+    },
+  );
+
+  test('widget-test prewarming keeps batch compilation synchronous', () async {
+    final service = _RecordingBatchMarkdownCompileService();
+    addTearDown(service.dispose);
+
+    await service.prewarmContents(
+      const <String>['widget-test markdown'],
+      streaming: false,
+      widgetTest: true,
+    );
+
+    check(service.synchronousBatchInputs).deepEquals([true]);
+    check(service.widgetTestBatchInputs).deepEquals([true]);
+  });
+
+  test('prewarmContents bounds preparation batches', () async {
+    final service = _RecordingBatchMarkdownCompileService();
+    addTearDown(service.dispose);
+    final contents = List<String>.generate(
+      17,
+      (index) => 'bounded prewarm entry $index',
+    );
+
+    await service.prewarmContents(contents, streaming: false);
+    await Future<void>.delayed(Duration.zero);
+
+    check(service.preparedInputs).deepEquals(contents);
+    check(service.batchCalls.map((batch) => batch.length))
+        .deepEquals([8, 8, 1]);
+  });
+
+  test('prewarmContents yields before admitting the next raw batch', () async {
+    final firstPreparationStarted = Completer<void>();
+    final releaseFirstPreparation = Completer<void>();
+    var preparationCalls = 0;
+    var admittedInputs = 0;
+    final service = MarkdownCompileService(
+      workerManager: WorkerManager(),
+      debugPrepareContentOverride: (content, streaming) async {
+        preparationCalls++;
+        if (preparationCalls == 1) {
+          firstPreparationStarted.complete();
+          await releaseFirstPreparation.future;
+        }
+        return content;
+      },
+    );
+    addTearDown(service.dispose);
+    addTearDown(() {
+      if (!releaseFirstPreparation.isCompleted) {
+        releaseFirstPreparation.complete();
+      }
+    });
+
+    Iterable<String> lazyInputs() sync* {
+      for (var index = 0; index < 17; index++) {
+        admittedInputs++;
+        yield 'lazy prewarm entry $index';
+      }
+    }
+
+    final prewarm = service.prewarmContents(lazyInputs(), streaming: false);
+    await firstPreparationStarted.future;
+
+    check(admittedInputs).equals(8);
+    releaseFirstPreparation.complete();
+    await prewarm;
+    check(admittedInputs).equals(17);
+  });
+
+  test(
+    'prewarmContents waits for each compiled batch before admitting more',
+    () async {
+      final service = _GatedBatchMarkdownCompileService();
+      addTearDown(service.dispose);
+      addTearDown(() {
+        if (!service.releaseFirstCompile.isCompleted) {
+          service.releaseFirstCompile.complete();
+        }
+      });
+      var admittedInputs = 0;
+
+      Iterable<String> lazyInputs() sync* {
+        for (var index = 0; index < 17; index++) {
+          admittedInputs += 1;
+          yield 'compile-gated prewarm entry $index';
+        }
+      }
+
+      final prewarm = service.prewarmContents(lazyInputs(), streaming: false);
+      await service.firstCompileStarted.future;
+
+      check(admittedInputs).equals(8);
+      check(service.compileCalls).equals(1);
+      service.releaseFirstCompile.complete();
+      await prewarm;
+
+      check(admittedInputs).equals(17);
+      check(service.compileCalls).equals(3);
+    },
+  );
 }

@@ -1,22 +1,23 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import 'package:conduit/l10n/app_localizations.dart';
 
-import '../../../../core/utils/reasoning_parser.dart';
+import 'package:conduit_markdown/conduit_markdown.dart';
+
 import '../../assistant_detail_header.dart';
 import '../../themed_sheets.dart';
 import '../../web_content_embed.dart';
 import '../../../theme/theme_extensions.dart';
 import '../compiled_markdown_document.dart';
 import '../markdown_config.dart';
+import 'details_group_widget.dart';
 import 'markdown_style.dart';
 
 /// Builds markdown body content from the current [CompiledMarkdownDetailsData].
-typedef DetailsMarkdownBodyBuilder =
-    Widget Function(
-      BuildContext context,
-      CompiledMarkdownDetailsData detailsData,
-    );
+typedef DetailsMarkdownBodyBuilder = Widget Function(
+  BuildContext context,
+  CompiledMarkdownDetailsData detailsData,
+);
 
 /// Upstream-style collapsible renderer for markdown `<details>` blocks.
 class MarkdownDetailsBlock extends StatefulWidget {
@@ -63,9 +64,18 @@ class _MarkdownDetailsBlockState extends State<MarkdownDetailsBlock> {
 
   bool get _usesInlineExpansion => _supportsInlineExpansion && _isPending;
 
-  bool get _canExpand => _detailsData.canExpand;
+  bool get _canExpand {
+    if (!_isToolCall) {
+      return _detailsData.canExpand;
+    }
+
+    final data = _toolCallData;
+    return data.hasExpandableContent || data.hasImages || _detailsData.hasBody;
+  }
 
   bool get _deferHeavyContent => widget.deferHeavyContent;
+
+  bool get _canRenderToolCallEmbeds => !_deferHeavyContent && !_isPending;
 
   CompiledMarkdownToolCallData get _toolCallData {
     final data = _detailsData.toolCallData;
@@ -115,6 +125,20 @@ class _MarkdownDetailsBlockState extends State<MarkdownDetailsBlock> {
 
   @override
   Widget build(BuildContext context) {
+    final groupRenderMode = MarkdownDetailsGroupRenderScope.maybeOf(context);
+    if (groupRenderMode == MarkdownDetailsGroupRenderMode.previewsOnly) {
+      if (!_canRenderToolCallEmbeds) {
+        return const SizedBox.shrink();
+      }
+      final embeds = _buildToolCallEmbeds(context);
+      return embeds.isEmpty
+          ? const SizedBox.shrink()
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: embeds,
+            );
+    }
+
     final title = _headerTitle(context);
     final showInlineChevron = _usesInlineExpansion && _canExpand;
     final inlineBody = showInlineChevron && _isInlineExpanded
@@ -138,6 +162,8 @@ class _MarkdownDetailsBlockState extends State<MarkdownDetailsBlock> {
             ),
           ),
           if (inlineBody != null) _buildInlineBody(context, inlineBody),
+          if (groupRenderMode == null && _canRenderToolCallEmbeds)
+            ..._buildToolCallEmbeds(context),
         ],
       ),
     );
@@ -165,9 +191,8 @@ class _MarkdownDetailsBlockState extends State<MarkdownDetailsBlock> {
       return;
     }
 
-    final restored = PageStorage.maybeOf(
-      context,
-    )?.readState(context, identifier: stateId);
+    final restored = PageStorage.maybeOf(context)
+        ?.readState(context, identifier: stateId);
     if (_usesInlineExpansion && restored is bool) {
       _isInlineExpanded = restored;
     } else if (!_usesInlineExpansion) {
@@ -182,9 +207,8 @@ class _MarkdownDetailsBlockState extends State<MarkdownDetailsBlock> {
       return;
     }
 
-    PageStorage.maybeOf(
-      context,
-    )?.writeState(context, _isInlineExpanded, identifier: stateId);
+    PageStorage.maybeOf(context)
+        ?.writeState(context, _isInlineExpanded, identifier: stateId);
   }
 
   Widget _buildInlineBody(BuildContext context, Widget body) {
@@ -269,39 +293,49 @@ class _MarkdownDetailsBlockState extends State<MarkdownDetailsBlock> {
                     return const SizedBox.shrink();
                   }
 
-                  return CustomScrollView(
-                    key: _isReasoning
-                        ? const ValueKey<String>('reasoning-details-sheet-body')
-                        : null,
-                    controller: controller,
-                    slivers: [
-                      SliverToBoxAdapter(
-                        child: KeyedSubtree(
-                          key: _isReasoning
-                              ? const ValueKey<String>(
-                                  'reasoning-details-sheet-header',
-                                )
-                              : null,
-                          child: _buildSheetHeader(
-                            sheetContext,
-                            theme: liveTheme,
-                            markdownStyle: markdownStyle,
-                            title: _modalTitle(sheetContext),
+                  return Column(
+                    children: [
+                      KeyedSubtree(
+                        key: _isReasoning
+                            ? const ValueKey<String>(
+                                'reasoning-details-sheet-header',
+                              )
+                            : null,
+                        child: ConduitModalSheetHeader(
+                          leading: _buildLeadingIcon(
+                            liveTheme,
+                            iconSize: IconSize.md,
+                            spinnerSize: IconSize.md,
                           ),
+                          title: _modalTitle(sheetContext),
+                          titleStyle: markdownStyle.sheetTitle,
+                          onClose: () => Navigator.of(sheetContext).pop(),
                         ),
                       ),
-                      SliverPadding(
-                        padding: EdgeInsets.fromLTRB(
-                          Spacing.lg,
-                          Spacing.sm,
-                          Spacing.lg,
-                          Spacing.lg + bottomSafePadding,
-                        ),
-                        sliver: SliverToBoxAdapter(
-                          child: KeyedSubtree(
-                            key: ValueKey<int>(value),
-                            child: liveBody,
-                          ),
+                      Expanded(
+                        child: CustomScrollView(
+                          key: _isReasoning
+                              ? const ValueKey<String>(
+                                  'reasoning-details-sheet-body',
+                                )
+                              : null,
+                          controller: controller,
+                          slivers: [
+                            SliverPadding(
+                              padding: EdgeInsets.fromLTRB(
+                                Spacing.lg,
+                                Spacing.sm,
+                                Spacing.lg,
+                                Spacing.lg + bottomSafePadding,
+                              ),
+                              sliver: SliverToBoxAdapter(
+                                child: KeyedSubtree(
+                                  key: ValueKey<int>(value),
+                                  child: liveBody,
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ],
@@ -312,57 +346,6 @@ class _MarkdownDetailsBlockState extends State<MarkdownDetailsBlock> {
           );
         },
       ),
-    );
-  }
-
-  Widget _buildSheetHeader(
-    BuildContext sheetContext, {
-    required ConduitThemeExtension theme,
-    required ConduitMarkdownStyle markdownStyle,
-    required String title,
-  }) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Padding(
-          padding: const EdgeInsets.only(top: Spacing.sm),
-          child: Container(
-            width: 36,
-            height: 4,
-            decoration: BoxDecoration(
-              color: theme.dividerColor.withValues(alpha: 0.4),
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.symmetric(
-            horizontal: Spacing.lg,
-            vertical: Spacing.sm,
-          ),
-          child: Row(
-            children: [
-              _buildLeadingIcon(
-                theme,
-                iconSize: IconSize.md,
-                spinnerSize: IconSize.md,
-              ),
-              const SizedBox(width: Spacing.sm),
-              Expanded(
-                child: Text(
-                  title,
-                  overflow: TextOverflow.ellipsis,
-                  style: markdownStyle.sheetTitle,
-                ),
-              ),
-              SheetCloseButton(
-                onPressed: () => Navigator.of(sheetContext).pop(),
-                color: theme.textSecondary,
-              ),
-            ],
-          ),
-        ),
-      ],
     );
   }
 
@@ -394,10 +377,14 @@ class _MarkdownDetailsBlockState extends State<MarkdownDetailsBlock> {
     }
 
     if (_isToolCall) {
+      final failed =
+          _toolCallData.isError ||
+          _detailsData.status == 'rejected' ||
+          _detailsData.status == 'incomplete';
       return Icon(
-        Icons.check_circle_outline_rounded,
+        failed ? Icons.cancel_outlined : Icons.check_circle_outline_rounded,
         size: iconSize,
-        color: theme.statusPalette.success.base,
+        color: failed ? theme.error : theme.statusPalette.success.base,
       );
     }
 
@@ -420,7 +407,16 @@ class _MarkdownDetailsBlockState extends State<MarkdownDetailsBlock> {
     if (_isToolCall) {
       final name = _detailsData.name.trim();
       final safeName = name.isEmpty ? 'tool' : name;
-      return _isPending ? 'Executing $safeName…' : 'View Result from $safeName';
+      if (_toolCallData.hasEmbeds) {
+        return safeName;
+      }
+      final status = _detailsData.status;
+      if (status == 'pending') return 'Tool Approval Needed: $safeName';
+      if (status == 'rejected') return 'Denied $safeName';
+      if (!_isPending) return 'View Result from $safeName';
+      return status != null && status != 'completed'
+          ? 'Preparing $safeName…'
+          : 'Executing $safeName…';
     }
 
     if (_isReasoning) {
@@ -435,6 +431,12 @@ class _MarkdownDetailsBlockState extends State<MarkdownDetailsBlock> {
     if (_isToolCall) {
       final name = _detailsData.name.trim();
       final safeName = name.isEmpty ? 'tool' : name;
+      if (_isPending && _detailsData.status != null) {
+        return _headerTitle(context);
+      }
+      if (_detailsData.status == 'rejected') return 'Denied $safeName';
+      if (_detailsData.status == 'incomplete') return 'Incomplete $safeName';
+      if (!_isPending && _toolCallData.isError) return 'Failed $safeName';
       return _isPending ? 'Running $safeName…' : 'Used $safeName';
     }
 
@@ -443,38 +445,17 @@ class _MarkdownDetailsBlockState extends State<MarkdownDetailsBlock> {
 
   String _reasoningHeaderText(BuildContext context) {
     final l10n = AppLocalizations.of(context)!;
-    final summary = _detailsData.summaryText.trim();
-    final summaryLower = summary.toLowerCase();
-    final isDone = _detailsData.isDone;
-    final duration = _detailsData.durationSeconds;
-
-    final isThinkingSummary =
-        summaryLower == 'thinking…' ||
-        summaryLower == 'thinking...' ||
-        summaryLower.startsWith('thinking');
-
-    final hasDurationInSummary = RegExp(
-      r'\(\d+s\)|\bfor \d+ seconds?\b',
-      caseSensitive: false,
-    ).hasMatch(summary);
-
     if (_isCodeInterpreter) {
-      return isDone ? l10n.analyzed : l10n.analyzing;
+      return _detailsData.isDone ? l10n.analyzed : l10n.analyzing;
     }
-
-    if (!isDone) {
-      return summary.isNotEmpty && !isThinkingSummary ? summary : l10n.thinking;
-    }
-
-    if (duration > 0 || hasDurationInSummary || isThinkingSummary) {
-      return l10n.thoughtForDuration(ReasoningParser.formatDuration(duration));
-    }
-
-    if (summary.isNotEmpty && !isThinkingSummary) {
-      return summary;
-    }
-
-    return l10n.thoughts;
+    return switch (resolveReasoningHeader(_detailsData)) {
+      ReasoningHeaderThinking() => l10n.thinking,
+      ReasoningHeaderThoughtFor(:final seconds) => l10n.thoughtForDuration(
+        ReasoningParser.formatDuration(seconds),
+      ),
+      ReasoningHeaderSummary(:final summary) => summary,
+      ReasoningHeaderThoughts() => l10n.thoughts,
+    };
   }
 
   Widget? _buildToolCallBody(
@@ -483,10 +464,8 @@ class _MarkdownDetailsBlockState extends State<MarkdownDetailsBlock> {
   ) {
     final builder = widget.bodyBuilder;
     final hasExtraBody = builder != null && _detailsData.hasBody;
-    final isHeavyPreviewDeferred =
-        _deferHeavyContent && data.hasDeferredPreviewContent;
-    final hasDeferredPreviewContent =
-        !_deferHeavyContent && data.hasDeferredPreviewContent;
+    final isHeavyPreviewDeferred = _deferHeavyContent && data.hasImages;
+    final hasDeferredPreviewContent = !_deferHeavyContent && data.hasImages;
     if (!data.hasExpandableContent &&
         !hasExtraBody &&
         !hasDeferredPreviewContent &&
@@ -616,14 +595,6 @@ class _MarkdownDetailsBlockState extends State<MarkdownDetailsBlock> {
         }
 
         if (!_deferHeavyContent) {
-          final embedWidgets = _buildToolCallEmbeds(context);
-          if (embedWidgets.isNotEmpty) {
-            if (children.isNotEmpty) {
-              children.add(const SizedBox(height: Spacing.sm));
-            }
-            children.addAll(embedWidgets);
-          }
-
           final imageWidgets = _buildToolCallImages(context);
           if (imageWidgets.isNotEmpty) {
             if (children.isNotEmpty) {
@@ -712,4 +683,69 @@ class _MarkdownDetailsBlockState extends State<MarkdownDetailsBlock> {
       ),
     ];
   }
+}
+
+/// Header state for a reasoning details block.
+sealed class ReasoningHeader {
+  const ReasoningHeader();
+}
+
+final class ReasoningHeaderThinking extends ReasoningHeader {
+  const ReasoningHeaderThinking();
+}
+
+final class ReasoningHeaderThoughtFor extends ReasoningHeader {
+  const ReasoningHeaderThoughtFor(this.seconds);
+  final int seconds;
+}
+
+final class ReasoningHeaderSummary extends ReasoningHeader {
+  const ReasoningHeaderSummary(this.summary);
+  final String summary;
+}
+
+final class ReasoningHeaderThoughts extends ReasoningHeader {
+  const ReasoningHeaderThoughts();
+}
+
+/// Mirrors upstream `Collapsible.svelte`: a reasoning block reads
+/// "Thought for…" only once it is done AND carries a duration. A pending
+/// block always reads "Thinking…"; a finished block with no timing at all
+/// reads "Thoughts" rather than inventing a duration.
+ReasoningHeader resolveReasoningHeader(CompiledMarkdownDetailsData data) {
+  final summary = data.summaryText.trim();
+  final summaryLower = summary.toLowerCase();
+  final isThinkingSummary =
+      summaryLower == 'thinking…' ||
+      summaryLower == 'thinking...' ||
+      summaryLower.startsWith('thinking');
+  final summaryDuration = RegExp(
+    r'\((\d+)s\)|\bfor (\d+) seconds?\b',
+    caseSensitive: false,
+  ).firstMatch(summary);
+
+  if (!data.isDone) {
+    return summary.isNotEmpty && !isThinkingSummary
+        ? ReasoningHeaderSummary(summary)
+        : const ReasoningHeaderThinking();
+  }
+
+  if (data.hasDuration) {
+    return ReasoningHeaderThoughtFor(data.durationSeconds);
+  }
+  if (summaryDuration != null) {
+    // Legacy content carried the timing only in its summary text.
+    final seconds = int.tryParse(
+      summaryDuration.group(1) ?? summaryDuration.group(2) ?? '',
+    );
+    return ReasoningHeaderThoughtFor(seconds ?? data.durationSeconds);
+  }
+
+  // Done without any timing: upstream would keep reading "Thinking…", which
+  // misreads a finished block. Fall back to the neutral "Thoughts" label.
+  if (summary.isNotEmpty && !isThinkingSummary) {
+    return ReasoningHeaderSummary(summary);
+  }
+
+  return const ReasoningHeaderThoughts();
 }

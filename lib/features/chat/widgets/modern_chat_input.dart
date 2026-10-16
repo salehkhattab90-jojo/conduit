@@ -1,64 +1,387 @@
-import 'package:adaptive_platform_ui/adaptive_platform_ui.dart';
-import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:flutter/material.dart';
-import 'package:flutter/cupertino.dart';
+import 'package:conduit/shared/widgets/platform_ui/platform_ui.dart';
+import 'package:flutter/foundation.dart'
+    show ValueNotifier, kIsWeb, visibleForTesting;
+import 'package:material_ui/material_ui.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:conduit/core/services/haptic_service.dart';
+
 import '../../../shared/theme/conduit_input_styles.dart';
 import '../../../shared/theme/theme_extensions.dart';
+
 // app_theme not required here; using theme extension tokens
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'dart:io' show Platform;
 import 'dart:async';
-import '../providers/chat_providers.dart';
+import 'dart:math' as math;
+import 'dart:ui' as ui;
+
+import 'package:conduit_core/features/chat/composer/composer_commands.dart';
+import 'package:conduit_core/features/chat/providers/chat_providers.dart';
+import 'package:conduit_core/features/chat/services/chat_draft_queue.dart';
+import 'package:conduit_core/features/chat/providers/personal_valves_providers.dart';
+import 'package:conduit_core/features/integrations/providers/personal_connections_providers.dart';
+import 'package:conduit_core/features/terminal/providers/terminal_providers.dart';
+
 import '../services/clipboard_attachment_service.dart';
 import '../services/file_attachment_service.dart';
 import '../services/ios_native_paste_service.dart';
 import '../services/ios_keyboard_attachment_bridge.dart';
-import '../providers/context_attachments_provider.dart';
-import '../providers/knowledge_cache_provider.dart';
+
+import 'package:conduit_core/features/chat/providers/context_attachments_provider.dart';
+import 'package:conduit_core/features/chat/providers/knowledge_cache_provider.dart';
+
 import '../../notes/providers/notes_providers.dart';
-import '../../tools/providers/tools_providers.dart';
+
+import 'package:conduit_core/features/tools/providers/tools_providers.dart';
+
 import '../../prompts/providers/prompts_providers.dart';
-import '../../../core/models/tool.dart';
-import '../../../core/models/model.dart';
-import '../../../core/models/prompt.dart';
-import '../../../core/models/toggle_filter.dart';
-import '../../../core/providers/app_providers.dart';
-import '../../../core/services/navigation_service.dart';
+
+import 'package:conduit_core/features/hermes/controllers/hermes_busy_turn_controller.dart';
+
+import 'package:conduit_core/features/hermes/models/hermes_model.dart';
+import 'package:conduit_core/features/hermes/models/hermes_config.dart';
+import 'package:conduit_core/features/hermes/providers/hermes_providers.dart';
+import 'package:conduit_core/features/hermes/services/hermes_local_document_service.dart';
+import 'package:conduit_core/features/direct_connections/direct_connections.dart';
+import 'package:conduit_core/features/direct_connections/providers/direct_mcp_providers.dart';
+import 'package:conduit_core/features/direct_connections/controllers/direct_mcp_content_insertion.dart'
+    as core
+    show directMcpInsertionFitsComposer;
+import 'package:conduit_core/features/direct_connections/controllers/direct_mcp_content_insertion.dart'
+    show insertContentAtSelection;
+
+import '../../direct_connections/views/direct_mcp_content_sheet.dart';
+
+import 'package:conduit_core/features/workspace/models/workspace_resources.dart';
+
+import 'package:conduit_core/models/tool.dart';
+import 'package:conduit_core/models/model.dart';
+import 'package:conduit_core/models/prompt.dart';
+import 'package:conduit_core/models/toggle_filter.dart';
+
+import 'package:conduit_core/providers/app_providers.dart';
+
+import '../../../shared/services/navigation_service.dart';
 import '../../../core/services/native_sheet_bridge.dart';
-import '../../../core/services/location_service.dart';
-import '../../../core/services/settings_service.dart';
+
+import 'package:conduit_core/services/location_service.dart';
+
+import 'package:conduit_core/services/settings_service.dart';
+import 'package:conduit_core/utils/debug_logger.dart';
+
 import '../../chat/services/voice_input_service.dart';
-import '../../../core/models/knowledge_base.dart';
-import '../../../core/models/knowledge_base_file.dart';
+
+import 'package:conduit_core/models/knowledge_base.dart';
+import 'package:conduit_core/models/knowledge_base_file.dart';
 
 import '../../../shared/utils/platform_utils.dart';
 import '../../../shared/utils/adaptive_glass.dart';
-import '../../../shared/utils/ask_conduit_context_menu.dart';
+
 import 'package:conduit/l10n/app_localizations.dart';
+import 'package:conduit_core/providers/host_ports.dart';
+
 import '../../../shared/widgets/modal_safe_area.dart';
 import '../../../shared/widgets/model_avatar.dart';
+import '../../../shared/widgets/adaptive_toolbar_components.dart';
 import '../../../shared/widgets/themed_sheets.dart';
-import '../../../core/utils/prompt_variable_parser.dart';
+import '../../../shared/widgets/horizontal_gesture_ownership.dart';
+import '../../../shared/widgets/horizontal_overflow_fade.dart';
+
+import 'package:conduit_core/utils/prompt_variable_parser.dart';
+
 import '../../prompts/widgets/prompt_variable_dialog.dart';
-import '../../auth/providers/unified_auth_providers.dart';
+
+import 'package:conduit_core/features/auth/providers/unified_auth_providers.dart';
+
+import 'chat_draft_queue_sheet.dart';
 import 'chat_input_intents.dart';
 import 'expanded_text_editor.dart';
+import 'chat_comparison_widgets.dart';
 import 'composer_overflow_items.dart';
 import 'composer_overflow_menu.dart';
 import 'mention_text_controller.dart';
+import 'personal_valves_sheet.dart';
 import 'model_suggestion_overlay.dart';
 import 'prompt_suggestion_overlay.dart';
+import 'skill_suggestion_overlay.dart';
+
+/// Native platform views are recomposited for every animated cursor-opacity
+/// frame. Keep the normal animated caret everywhere else, but use a discrete
+/// blink while the iOS 26 glass view is present.
+@visibleForTesting
+bool composerCursorOpacityAnimates({required bool usesNativePlatformView}) =>
+    !usesNativePlatformView;
+
+/// Whether the composer should delegate its edit menu to UIKit.
+@visibleForTesting
+bool composerUsesNativeSystemSelectionMenu({
+  required bool isIOS,
+  required bool systemMenuSupported,
+}) => isIOS && systemMenuSupported;
+
+@visibleForTesting
+TextEditingValue composerTextValueAfterInsertion(
+  TextEditingValue current,
+  String content,
+) {
+  final selection = current.selection;
+  final inserted = insertContentAtSelection(
+    current.text,
+    selectionStart: selection.isValid ? selection.start : null,
+    selectionEnd: selection.isValid ? selection.end : null,
+    content: content,
+  );
+  return TextEditingValue(
+    text: inserted.text,
+    selection: TextSelection.collapsed(offset: inserted.caret),
+    composing: TextRange.empty,
+  );
+}
+
+@visibleForTesting
+bool directMcpInsertionFitsComposer(TextEditingValue current, String content) {
+  final selection = current.selection;
+  return core.directMcpInsertionFitsComposer(
+    current.text,
+    selectionStart: selection.isValid ? selection.start : null,
+    selectionEnd: selection.isValid ? selection.end : null,
+    content: content,
+  );
+}
+
+/// Returns a stable UIKit edit-menu model for the composer.
+///
+/// Keep composer actions limited to operations that mutate the editable field.
+/// In particular, "Ask Conduit" belongs to selected response text: adding it
+/// here both reinserted the selection into the same field and created a fresh
+/// callback identity whenever selection handles moved, forcing UIKit to
+/// re-present the menu.
+@visibleForTesting
+List<IOSSystemContextMenuItem> buildComposerSystemContextMenuItems({
+  required List<IOSSystemContextMenuItem> defaultItems,
+  required bool ensurePaste,
+}) {
+  final items = List<IOSSystemContextMenuItem>.from(defaultItems);
+  if (!ensurePaste ||
+      items.any((item) => item is IOSSystemContextMenuItemPaste)) {
+    return items;
+  }
+
+  final insertionIndex = items.indexWhere(
+    (item) =>
+        item is IOSSystemContextMenuItemSelectAll ||
+        item is IOSSystemContextMenuItemLookUp ||
+        item is IOSSystemContextMenuItemSearchWeb ||
+        item is IOSSystemContextMenuItemShare ||
+        item is IOSSystemContextMenuItemLiveText,
+  );
+  const pasteItem = IOSSystemContextMenuItemPaste();
+  if (insertionIndex >= 0) {
+    items.insert(insertionIndex, pasteItem);
+  } else {
+    items.add(pasteItem);
+  }
+  return items;
+}
+
+/// Whether the selected model may accept locally pasted/picked images.
+/// Reserved direct identities fail closed when their mutable registry binding
+/// has been removed or replaced.
+bool directModelAcceptsImageInput(Model? model, DirectModelRegistry registry) {
+  if (model == null || !hasReservedDirectIdentity(model)) return true;
+  return registry.resolve(model) != null && model.isMultimodal == true;
+}
+
+/// Restricts local file picking to what the selected transport can consume.
+///
+/// OpenWebUI performs server-backed document ingestion, while Hermes and
+/// Direct perform bounded local extraction. Direct also accepts image payloads
+/// when the selected model advertises multimodal input.
+List<String>? localFilePickerExtensionsForModel(
+  Model? selectedModel, {
+  bool desktopHermes = false,
+  bool hermesResponsesFiles = false,
+}) {
+  if (selectedModel == null) return null;
+  if (isHermesModel(selectedModel)) {
+    if (desktopHermes) return null;
+    final extensions = <String>{...kHermesLocalDocumentPickerExtensions};
+    if (hermesResponsesFiles) extensions.add('pdf');
+    return extensions.toList(growable: false)..sort();
+  }
+  if (hasReservedDirectIdentity(selectedModel)) {
+    final extensions = <String>{...kDirectLocalDocumentPickerExtensions};
+    if (selectedModel.capabilities?['pdf_input'] == true) {
+      extensions.add('pdf');
+    }
+    if (selectedModel.isMultimodal == true) {
+      extensions.addAll(
+        allSupportedImageFormats.map((extension) => extension.substring(1)),
+      );
+    }
+    return extensions.toList(growable: false)..sort();
+  }
+  return null;
+}
+
+/// Computes the height of the panel that replaces the visible IME.
+///
+/// The chat's outer safe area becomes active when Android hides the IME. The
+/// panel excludes that newly reserved region while retaining the small overlap
+/// needed to keep the composer on the same physical baseline.
+double fallbackAttachmentPanelHeight({
+  required double keyboardHeight,
+  required double bottomSafeInset,
+  required double retainedSafeAreaOverlap,
+  required double availableHeight,
+}) {
+  final effectiveSafeInset = (bottomSafeInset - retainedSafeAreaOverlap)
+      .clamp(0.0, double.infinity)
+      .toDouble();
+  if (keyboardHeight > 0) {
+    return (keyboardHeight - effectiveSafeInset)
+        .clamp(0.0, double.infinity)
+        .toDouble();
+  }
+
+  final preferredHeight = (availableHeight * 0.38)
+      .clamp(260.0, 320.0)
+      .toDouble();
+  return (preferredHeight - effectiveSafeInset)
+      .clamp(0.0, double.infinity)
+      .toDouble();
+}
+
+/// Shared visibility rule used by both compact and expanded '+' branches.
+bool shouldShowComposerOverflowButton({
+  required bool isHermesComposer,
+  required bool isDirectComposer,
+  required bool directSupportsImages,
+  bool directHasOverflowActions = false,
+  bool hermesHasLocalAttachmentActions = false,
+}) {
+  if (isHermesComposer) return hermesHasLocalAttachmentActions;
+  return !isDirectComposer || directSupportsImages || directHasOverflowActions;
+}
+
+/// Builds the actions rendered by the iOS keyboard attachment panel.
+///
+/// Kept platform-independent so its model-specific restrictions and action
+/// payload can be covered by widget tests without an iOS host process.
+List<IosKeyboardAttachmentActionConfig> buildIosKeyboardAttachmentActions({
+  required AppLocalizations l10n,
+  required ComposerOverflowAttachmentAvailability attachmentAvailability,
+  required bool hermesMode,
+  required bool directMode,
+  required bool webSearchAvailable,
+  required bool webSearchEnabled,
+  required bool imageGenerationAvailable,
+  required bool imageGenerationEnabled,
+  required List<Tool> availableTools,
+  required List<String> selectedToolIds,
+  required List<ToggleFilter> availableFilters,
+  required List<String> selectedFilterIds,
+  ComposerPersonalConnections connections = ComposerPersonalConnections.none,
+  bool toolSettingsAvailable = false,
+  bool compareModelsAvailable = false,
+  bool hasMessage = true,
+  CodeInterpreterOffer? codeInterpreter,
+}) {
+  final items = buildComposerOverflowItems(
+    l10n: l10n,
+    attachmentAvailability: attachmentAvailability,
+    // Web search is also a native Ollama Cloud capability. The availability
+    // provider has already resolved whether the active direct model can use it.
+    webSearchAvailable: !hermesMode && webSearchAvailable,
+    webSearchEnabled: webSearchEnabled,
+    imageGenerationAvailable: !hermesMode && imageGenerationAvailable,
+    imageGenerationEnabled: imageGenerationEnabled,
+    availableTools: hermesMode ? const <Tool>[] : availableTools,
+    selectedToolIds: selectedToolIds,
+    availableFilters: hermesMode || directMode
+        ? const <ToggleFilter>[]
+        : availableFilters,
+    selectedFilterIds: selectedFilterIds,
+    // Personal tool servers and terminals belong to the Open WebUI account.
+    connections: hermesMode || directMode
+        ? ComposerPersonalConnections.none
+        : connections,
+    // Personal valves are an Open WebUI server feature.
+    toolSettingsAvailable: !hermesMode && !directMode && toolSettingsAvailable,
+    // Comparing models is an Open WebUI server feature.
+    compareModelsAvailable:
+        !hermesMode && !directMode && compareModelsAvailable,
+    hasMessage: hasMessage,
+    codeInterpreter: codeInterpreter,
+  );
+
+  return items
+      .where((item) {
+        if (hermesMode) {
+          return item.enabled &&
+              (item.id == ComposerOverflowActionIds.file ||
+                  item.id == ComposerOverflowActionIds.photo ||
+                  item.id == ComposerOverflowActionIds.camera);
+        }
+        if (!directMode) {
+          return item.id != ComposerOverflowActionIds.mcpContent;
+        }
+        return item.enabled &&
+            (item.section == ComposerOverflowSection.tools ||
+                item.id == ComposerOverflowActionIds.file ||
+                item.id == ComposerOverflowActionIds.photo ||
+                item.id == ComposerOverflowActionIds.camera ||
+                item.id == ComposerOverflowActionIds.mcpContent ||
+                item.id == ComposerOverflowActionIds.webSearch ||
+                item.id == ComposerOverflowActionIds.imageGeneration);
+      })
+      .map(
+        (item) => IosKeyboardAttachmentActionConfig(
+          id: item.id,
+          label: item.label,
+          subtitle: item.subtitle,
+          sfSymbol: item.sfSymbol,
+          section: item.section.nativeValue,
+          // Headings come from the app's strings, never the native side.
+          sectionTitle: item.section.titleFor(l10n),
+          kind: item.kind == ComposerOverflowItemKind.toggle
+              ? IosKeyboardAttachmentActionKind.toggle
+              : IosKeyboardAttachmentActionKind.command,
+          stateLabel: item.kind == ComposerOverflowItemKind.toggle
+              ? (item.selected ? l10n.switchOnLabel : l10n.switchOffLabel)
+              : null,
+          enabled: item.enabled,
+          selected: item.selected,
+          dismissesKeyboard: item.dismissesKeyboard,
+        ),
+      )
+      .toList(growable: false);
+}
 
 class ModernChatInput extends ConsumerStatefulWidget {
   final Function(String) onSendMessage;
+
+  /// Sends the composer's message to several models as one comparison turn.
+  /// Null where the host cannot run one. Completes with the committed turn, or
+  /// null if it was not durably admitted; the composer keeps its draft unless
+  /// it was, and clears it only while it still shows the chat the turn is in.
+  final Future<ChatSendPlaceholderHandle?> Function(
+    String text,
+    List<Model> models,
+  )?
+  onCompareSend;
   final bool enabled;
   final double? bottomPadding;
+
+  /// Keeps the Android IME and attachment keyboard in one fixed bottom region.
+  ///
+  /// The containing scaffold must set [Scaffold.resizeToAvoidBottomInset] to
+  /// false when this is enabled.
+  final bool managesSystemKeyboardInset;
 
   /// Optional placeholder text shown when the input is empty.
   /// Falls back to the localised default ("Ask anything...").
@@ -66,8 +389,9 @@ class ModernChatInput extends ConsumerStatefulWidget {
 
   /// Builder that replaces the default overflow (+) button entirely.
   /// Receives the button size so the replacement can match layout.
-  /// When provided, the default [ComposerOverflowSheet] is not used.
+  /// When provided, the default [ComposerAttachmentKeyboard] is not used.
   final Widget Function(double size)? overflowButtonBuilder;
+  final Widget? attachedOverlay;
 
   final Function()? onVoiceInput;
   final Function()? onVoiceCall;
@@ -90,10 +414,13 @@ class ModernChatInput extends ConsumerStatefulWidget {
   const ModernChatInput({
     super.key,
     required this.onSendMessage,
+    this.onCompareSend,
     this.enabled = true,
     this.bottomPadding,
+    this.managesSystemKeyboardInset = false,
     this.placeholder,
     this.overflowButtonBuilder,
+    this.attachedOverlay,
     this.onVoiceInput,
     this.onVoiceCall,
     this.onFileAttachment,
@@ -105,18 +432,139 @@ class ModernChatInput extends ConsumerStatefulWidget {
     this.composerTextInsertionTargetId,
   });
 
+  @visibleForTesting
+  static TextStyle debugComposerInputTextStyle({required bool isRecording}) =>
+      _composerInputTextStyle(isRecording);
+
   @override
   ConsumerState<ModernChatInput> createState() => _ModernChatInputState();
 }
 
 // (Removed legacy _MicButton; inline mic logic now lives in primary button)
 
+TextStyle _composerInputTextStyle(bool isRecording) =>
+    AppTypography.chatMessageStyle.copyWith(
+      fontWeight: isRecording ? FontWeight.w500 : FontWeight.w400,
+      fontStyle: isRecording ? FontStyle.italic : FontStyle.normal,
+    );
+
+const double _maxCompactComposerControlScale = 1.25;
+const double _cupertinoComposerOverflowIconExtent = IconSize.large;
+const double _materialComposerOverflowIconExtent = 28;
+
+/// The account and the chat a comparison send was started in.
+typedef _ComparisonOwner = ({
+  Object? api,
+  Object? epoch,
+  ChatMutationOwnerToken chat,
+});
+
+typedef _ComposerTypography = ({
+  ui.TextDirection direction,
+  TextScaler textScaler,
+  Locale? locale,
+  TextStyle style,
+  double scaledFontSize,
+  bool isRtl,
+});
+
+typedef _ComposerLayoutMetrics = ({
+  double width,
+  double scaledFontSize,
+  bool isRtl,
+  Locale? locale,
+  bool isRecording,
+});
+
+typedef _ComposerLineMeasurement = ({
+  String text,
+  _ComposerLayoutMetrics layout,
+  int lineCount,
+});
+
+typedef _CompactComposerControls = ({bool showLeading, bool showMic});
+
+/// Keeps a native composer button's platform-view widget stable while only
+/// unrelated composer state changes. The callback deliberately dereferences
+/// the latest widget so a new closure does not force UIKit reconfiguration.
+class _StableNativeComposerIconButton extends StatefulWidget {
+  const _StableNativeComposerIconButton({
+    super.key,
+    required this.onPressed,
+    required this.enabled,
+    required this.symbol,
+    required this.style,
+    required this.color,
+    required this.size,
+    required this.dimension,
+  });
+
+  final VoidCallback? onPressed;
+  final bool enabled;
+  final SFSymbol symbol;
+  final AdaptiveButtonStyle style;
+  final Color color;
+  final AdaptiveButtonSize size;
+  final double dimension;
+
+  @override
+  State<_StableNativeComposerIconButton> createState() =>
+      _StableNativeComposerIconButtonState();
+}
+
+class _StableNativeComposerIconButtonState
+    extends State<_StableNativeComposerIconButton> {
+  late Widget _nativeControl = _buildNativeControl();
+
+  @override
+  void didUpdateWidget(covariant _StableNativeComposerIconButton oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.enabled != widget.enabled ||
+        oldWidget.symbol.name != widget.symbol.name ||
+        oldWidget.symbol.size != widget.symbol.size ||
+        oldWidget.symbol.color != widget.symbol.color ||
+        oldWidget.style != widget.style ||
+        oldWidget.color != widget.color ||
+        oldWidget.size != widget.size ||
+        oldWidget.dimension != widget.dimension) {
+      _nativeControl = _buildNativeControl();
+    }
+  }
+
+  void _handlePressed() => widget.onPressed?.call();
+
+  Widget _buildNativeControl() {
+    return AdaptiveButton.sfSymbol(
+      onPressed: _handlePressed,
+      enabled: widget.enabled,
+      sfSymbol: widget.symbol,
+      style: widget.style,
+      color: widget.color,
+      size: widget.size,
+      minSize: Size.square(widget.dimension),
+      padding: EdgeInsets.zero,
+      borderRadius: BorderRadius.circular(widget.dimension),
+      useSmoothRectangleBorder: false,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) => _nativeControl;
+}
+
 class _ModernChatInputState extends ConsumerState<ModernChatInput>
     with TickerProviderStateMixin {
   static const Duration _contextSuggestionDelay = Duration(milliseconds: 250);
   static const int _maxContextSuggestionsPerType = 4;
 
-  static const double _composerRadius = AppBorderRadius.card;
+  // The expanded composer keeps a soft, pill-like corner.
+  static const double _composerRadius = AppBorderRadius.xl;
+  static const double _composerHorizontalInset = Spacing.sm;
+  static const double _composerControlSize = TouchTarget.minimum;
+  static const double _composerPrimaryVisualSize = 32;
+  static const double _composerActionRowBottomInset = 0;
+  static const double _composerTrailingAccessoryInset =
+      Spacing.xs + Spacing.xxs;
   static int _nextGeneratedInsertionTargetId = 0;
 
   final MentionTextEditingController _controller =
@@ -131,20 +579,40 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
   /// Without this, different parent ValueKeys cause Flutter to unmount and
   /// remount the TextField, losing focus and keyboard state.
   final GlobalKey _textFieldKey = GlobalKey();
+  double _compactTextFieldWidth = 0;
+  _ComposerLayoutMetrics? _composerLayoutMetrics;
+  _ComposerLayoutMetrics? _pendingComposerLayoutMetrics;
+  bool _composerLayoutMeasurementScheduled = false;
+  _ComposerLineMeasurement? _composerLineMeasurement;
+  BorderRadius? _cachedComposerGlassRadius;
+  Widget? _cachedComposerGlassBackdrop;
   bool _pendingFocus = false;
   bool _isRecording = false;
+  // Server STT transcribes after the recording stops (manually or by voice
+  // activity detection); show that instead of leaving the composer stuck on
+  // "Recording…" (issue #707). Mirrors VoiceInputService.transcribing.
+  bool _isTranscribing = false;
+  ValueNotifier<bool>? _transcribingListenable;
   bool _hasText = false; // track locally without rebuilding on each keystroke
+  bool _hasComposerFocus = false;
   bool _isMultiline = false; // track multiline for dynamic border radius
   /// Tracks the last time the user edited text, used to detect unexpected
   /// focus loss during active typing (e.g. from widget tree restructures).
   DateTime _lastEditTime = DateTime(0);
+
+  /// Counts edits to the composer text. A send that completes later may clear
+  /// the composer only if nothing was edited since it took the draft, even
+  /// when the text was typed back to what it was.
+  int _editGeneration = 0;
+  String _observedText = '';
   StreamSubscription<String>? _voiceStreamSubscription;
-  StreamSubscription<IosNativePastePayload>? _pasteSubscription;
+  final Object _nativePasteHandlerOwner = Object();
   StreamSubscription<IosKeyboardAttachmentEvent>?
   _keyboardAttachmentSubscription;
-  late VoiceInputService _voiceService;
+  VoiceInputService? _voiceService;
   StreamSubscription<String>? _textSub;
   Timer? _contextSuggestionDebounce;
+  Timer? _skillSuggestionDebounce;
   String _baseTextAtStart = '';
   bool _isDeactivated = false;
   int _lastHandledFocusTick = 0;
@@ -158,7 +626,27 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
   List<_ComposerContextSuggestion> _contextSuggestions =
       const <_ComposerContextSuggestion>[];
   int _contextSuggestionRequestId = 0;
+  int _skillSuggestionRequestId = 0;
+  AsyncValue<List<WorkspaceSkillSummary>> _skillSuggestions = const AsyncData(
+    <WorkspaceSkillSummary>[],
+  );
   bool _isNativeAttachmentPanelVisible = false;
+  // Account the personal connection rows in the native panel were built for,
+  // and the one the latest build produced. A native tap is applied only while
+  // the panel's account is still the signed-in one.
+  ComposerConnectionsOwner? _nativeConnectionsOwner;
+  ComposerConnectionsOwner? _builtNativeConnectionsOwner;
+  bool _nativeConnectionToggleBusy = false;
+  bool _isFallbackAttachmentPanelVisible = false;
+  bool _fallbackPanelReplacedKeyboard = false;
+  double _fallbackAttachmentPanelHeight = 300;
+  bool _fallbackPanelWaitingForKeyboard = false;
+  bool _desktopQueueActionBusy = false;
+
+  bool get _isRouteVisible =>
+      !ThemedSheets.isCoveredBySheet(context) &&
+      TickerMode.valuesOf(context).enabled &&
+      (ModalRoute.isCurrentOf(context) ?? true);
 
   /// Service for handling clipboard paste operations.
   final ClipboardAttachmentService _clipboardService =
@@ -167,7 +655,7 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
   @override
   void initState() {
     super.initState();
-    _voiceService = ref.read(voiceInputServiceProvider);
+    ThemedSheets.activeSheetListenable.addListener(_handleActiveSheetChanged);
 
     // Apply any prefilled text on first frame (focus handled via inputFocusTrigger)
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -184,14 +672,14 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
     // Removed ref.listen here; it must be used from build in this Riverpod version
 
     // Listen for text and selection changes in the composer
+    _observedText = _controller.text;
     _controller.addListener(_handleComposerChanged);
 
     if (!kIsWeb && Platform.isIOS) {
-      _pasteSubscription = IosNativePasteService.instance.onPaste.listen((
-        payload,
-      ) {
-        unawaited(_handleNativePastePayload(payload));
-      });
+      IosNativePasteService.instance.registerHandler(
+        owner: _nativePasteHandlerOwner,
+        handler: _handleNativePastePayload,
+      );
       _keyboardAttachmentSubscription = IosKeyboardAttachmentBridge
           .instance
           .events
@@ -201,12 +689,21 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
     // Publish focus changes to listeners and guard against unexpected loss
     // during active editing (e.g. widget tree restructure on expansion).
     _focusNode.addListener(() {
+      if (!mounted || _isDeactivated) return;
+      final hasFocus = _focusNode.hasFocus;
+      if (hasFocus != _hasComposerFocus) {
+        setState(() {
+          _hasComposerFocus = hasFocus;
+        });
+      }
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted || _isDeactivated) return;
         final hasFocus = _focusNode.hasFocus;
         // Publish composer focus state
         try {
-          ref.read(composerHasFocusProvider.notifier).set(hasFocus);
+          ref
+              .read(composerHasFocusProvider.notifier)
+              .set(hasFocus || _isFallbackAttachmentPanelVisible);
         } catch (_) {}
 
         // Dismissing the keyboard by tapping outside does not go through our
@@ -228,6 +725,7 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
         if (!hasFocus &&
             widget.enabled &&
             !_expandModalOpen &&
+            !_isFallbackAttachmentPanelVisible &&
             _controller.text.isNotEmpty &&
             DateTime.now().difference(_lastEditTime).inMilliseconds < 500) {
           final autofocusEnabled = ref.read(composerAutofocusEnabledProvider);
@@ -241,24 +739,74 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
     // Do not auto-focus on mount; only focus on explicit user intent
   }
 
+  VoiceInputService get _voiceInputService {
+    final VoiceInputService service =
+        _voiceService ?? ref.read(voiceInputServiceProvider);
+    _voiceService = service;
+    return service;
+  }
+
   @override
   void dispose() {
     // Note: Avoid using ref in dispose as per Riverpod best practices
     // The focus state will be naturally cleared when the widget is disposed
     _controller.removeListener(_handleComposerChanged);
+    ThemedSheets.activeSheetListenable.removeListener(
+      _handleActiveSheetChanged,
+    );
     _controller.dispose();
     _focusNode.dispose();
     _pendingFocus = false;
     _voiceStreamSubscription?.cancel();
-    _pasteSubscription?.cancel();
+    _transcribingListenable?.removeListener(_handleTranscribingChanged);
+    if (!kIsWeb && Platform.isIOS) {
+      IosNativePasteService.instance.unregisterHandler(
+        _nativePasteHandlerOwner,
+      );
+    }
     _keyboardAttachmentSubscription?.cancel();
     _textSub?.cancel();
     _contextSuggestionDebounce?.cancel();
+    _skillSuggestionDebounce?.cancel();
     if (!kIsWeb && Platform.isIOS) {
       unawaited(IosKeyboardAttachmentBridge.instance.hide());
     }
-    _voiceService.stopListening();
+    _voiceService?.stopListening();
     super.dispose();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!_fallbackPanelWaitingForKeyboard ||
+        !_isFallbackAttachmentPanelVisible) {
+      return;
+    }
+
+    final keyboardHeight = MediaQuery.viewInsetsOf(context).bottom;
+    final expectedKeyboardHeight = _fallbackAttachmentPanelHeight - Spacing.sm;
+    if (keyboardHeight + 1 < expectedKeyboardHeight) {
+      return;
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          !_fallbackPanelWaitingForKeyboard ||
+          !_isFallbackAttachmentPanelVisible) {
+        return;
+      }
+      _dismissFallbackAttachmentPanel();
+    });
+  }
+
+  void _handleActiveSheetChanged() {
+    if (!mounted) return;
+    if (ThemedSheets.isCoveredBySheet(context) &&
+        _isFallbackAttachmentPanelVisible) {
+      _dismissFallbackAttachmentPanel();
+      return;
+    }
+    setState(() {});
   }
 
   void _ensureFocusedIfEnabled() {
@@ -309,6 +857,9 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
     if (!widget.enabled && oldWidget.enabled) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted || _isDeactivated) return;
+        if (_isFallbackAttachmentPanelVisible) {
+          _dismissFallbackAttachmentPanel();
+        }
         if (_focusNode.hasFocus) {
           _focusNode.unfocus();
         }
@@ -316,9 +867,50 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
     }
   }
 
+  /// Whether the typed message would be queued behind the running response
+  /// rather than sent. Enter, the expanded editor's Send and the Queue action
+  /// all follow it, so none of them starts a second turn mid-response.
+  bool get _queuesInsteadOfSending => ref.read(chatDraftQueueOfferProvider);
+
+  /// Queues what is typed, with the composer's files, and clears the composer.
+  /// A draft the queue refuses (the response just ended) leaves it untouched.
+  /// Queueing is a send, so it is felt once, as one, whichever way it came.
+  void _queueDraft() {
+    final text = _controller.text.trim();
+    if (text.isEmpty || !widget.enabled) return;
+    final wireText = _controller.toWireFormat().trim();
+    final queue = ref.read(chatDraftQueueProvider.notifier);
+    if (queue.enqueue(wireText) == null) return;
+    ConduitHaptics.mediumImpact();
+    _controller.clearMentions();
+    _controller.clear();
+    _focusNode.requestFocus();
+    // Drafts do not survive a restart, so say so once per session.
+    if (queue.takeLifetimeNotice() && mounted) {
+      AdaptiveSnackBar.show(
+        context,
+        message: AppLocalizations.of(context)!.queuedDraftsSessionNote,
+        type: AdaptiveSnackBarType.info,
+        duration: const Duration(seconds: 5),
+      );
+    }
+  }
+
   void _sendMessage() {
     final text = _controller.text.trim();
     if (text.isEmpty || !widget.enabled) return;
+    if (_queuesInsteadOfSending) {
+      _queueDraft();
+      return;
+    }
+    // A project draft that starts with two saved models sends to both, through
+    // the same committed-turn path as the Compare command. A host that cannot
+    // admit a comparison sends the message the ordinary way.
+    final saved = ref.read(folderDraftComparisonModelsProvider);
+    if (saved != null && widget.onCompareSend != null) {
+      unawaited(_sendComparison(saved, _captureComparisonOwner()));
+      return;
+    }
 
     // Convert @mentions to OpenWebUI wire format
     // (e.g. @GPT-4 → <@M:gpt-4|GPT-4>) before sending.
@@ -328,13 +920,36 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
     _controller.clearMentions();
     _controller.clear();
     _focusNode.unfocus();
-    if (!kIsWeb && Platform.isIOS) {
-      unawaited(_hideNativeKeyboardAttachmentPanel());
-    }
+    unawaited(_hideAttachmentPanels());
     try {
       SystemChannels.textInput.invokeMethod('TextInput.hide');
     } catch (_) {
       // Silently handle if keyboard dismissal fails
+    }
+  }
+
+  Future<void> _sendDesktopBusyMessage({required bool steer}) async {
+    if (!widget.enabled || _isRecording || _desktopQueueActionBusy) return;
+    final text = _controller.toWireFormat().trim();
+    if (text.isEmpty) return;
+    setState(() => _desktopQueueActionBusy = true);
+    try {
+      final accepted = await ref
+          .read(hermesBusyTurnControllerProvider)
+          .submit(
+            action: steer
+                ? HermesBusyTurnAction.steer
+                : HermesBusyTurnAction.sendNext,
+            text: text,
+            localStreaming: ref.read(isChatStreamingProvider),
+          );
+      if (!mounted || !accepted) return;
+      if (_controller.toWireFormat().trim() != text) return;
+      _controller.clearMentions();
+      _controller.clear();
+      _focusNode.requestFocus();
+    } finally {
+      if (mounted) setState(() => _desktopQueueActionBusy = false);
     }
   }
 
@@ -353,26 +968,63 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
 
   void _handleNativeKeyboardAttachmentAction(String id) {
     if (!mounted || _isDeactivated) return;
+    final availability = _overflowAttachmentAvailability;
 
     switch (id) {
       case ComposerOverflowActionIds.file:
-        widget.onFileAttachment?.call();
+        if (availability.file) widget.onFileAttachment?.call();
         return;
       case ComposerOverflowActionIds.serverFile:
-        widget.onServerFileAttachment?.call();
+        if (availability.serverFile) widget.onServerFileAttachment?.call();
         return;
       case ComposerOverflowActionIds.photo:
-        widget.onImageAttachment?.call();
+        if (availability.photo) widget.onImageAttachment?.call();
         return;
       case ComposerOverflowActionIds.camera:
-        widget.onCameraCapture?.call();
+        if (availability.camera) widget.onCameraCapture?.call();
         return;
       case ComposerOverflowActionIds.web:
-        widget.onWebAttachment?.call();
+        if (availability.web) widget.onWebAttachment?.call();
+        return;
+      case ComposerOverflowActionIds.mcpContent:
+        if (availability.mcpContent) unawaited(_openDirectMcpContent());
+        return;
+      case ComposerOverflowActionIds.toolSettings:
+        _openToolSettings();
+        return;
+      case ComposerOverflowActionIds.compareModels:
+        // The same command the Flutter menu runs: one controller for both.
+        unawaited(_openCompareModels());
         return;
       default:
+        if (isComposerConnectionAction(id)) {
+          unawaited(_toggleNativeConnection(id));
+          return;
+        }
         toggleComposerOverflowSelection(ref, id);
         return;
+    }
+  }
+
+  Future<void> _toggleNativeConnection(String id) async {
+    // A second tap while a terminal change is still being saved would read the
+    // old selection and repeat the same change, so it is ignored.
+    if (_nativeConnectionToggleBusy) return;
+    _nativeConnectionToggleBusy = true;
+    try {
+      await toggleComposerConnectionSelection(
+        ref,
+        id,
+        opened: _nativeConnectionsOwner,
+      );
+    } catch (error) {
+      DebugLogger.error(
+        'native-connection-toggle-failed',
+        scope: 'chat/composer',
+        error: error,
+      );
+    } finally {
+      _nativeConnectionToggleBusy = false;
     }
   }
 
@@ -381,7 +1033,7 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
   /// This is called when the user pastes rich content into the text field
   /// on iOS and Android.
   Future<void> _handleContentInserted(KeyboardInsertedContent content) async {
-    if (!widget.enabled) return;
+    if (!widget.enabled || !_selectedModelAcceptsImageInput) return;
 
     // Check if we have a callback to handle pasted attachments
     final onPasted = widget.onPastedAttachments;
@@ -426,34 +1078,65 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
     }
   }
 
-  Future<void> _handleNativePastePayload(IosNativePastePayload payload) async {
-    if (!mounted || !widget.enabled || !_focusNode.hasFocus) {
+  Future<void> _handleNativePastePayload(
+    IosNativePastePayload payload,
+    IosNativePasteDispatchLease lease,
+  ) async {
+    if (!mounted ||
+        _isDeactivated ||
+        !widget.enabled ||
+        !_focusNode.hasFocus ||
+        !_selectedModelAcceptsImageInput) {
       return;
     }
 
-    final onPasted = widget.onPastedAttachments;
-    if (onPasted == null) {
+    if (widget.onPastedAttachments == null) {
       return;
     }
 
     switch (payload) {
       case IosNativeTextPaste():
         return;
-      case IosNativeImagePaste(:final items):
-        final attachments = <LocalAttachment>[];
-        for (final item in items) {
-          final attachment = await _clipboardService
-              .createAttachmentFromImageData(
-                imageData: item.data,
-                mimeType: item.mimeType,
-              );
-          if (attachment != null) {
-            attachments.add(attachment);
-          }
+      case IosNativeImagePaste(:final deliveryId, :final items):
+        if (!isValidIosNativePasteDeliveryId(deliveryId)) return;
+        final prepared = await _clipboardService.prepareNativePasteAttachments(
+          deliveryId: deliveryId!,
+          items: items,
+        );
+        // Native still owns every file and will reclaim the complete delivery
+        // when any marker, path, link, item name, or size is invalid.
+        if (prepared == null) return;
+        if (!mounted ||
+            _isDeactivated ||
+            !widget.enabled ||
+            !_focusNode.hasFocus ||
+            !_selectedModelAcceptsImageInput) {
+          return;
         }
-        if (attachments.isNotEmpty) {
-          await onPasted(attachments);
-        }
+        final currentOnPasted = widget.onPastedAttachments;
+        if (currentOnPasted == null) return;
+
+        // `Future.timeout` does not cancel this handler. Cross the ownership
+        // boundary only through the delivery lease, immediately before the
+        // callback synchronously adds the files to composer state. Once that
+        // transfer succeeds, upload preparation may safely continue in the
+        // background without delaying the native acknowledgement.
+        lease.tryCommit(() {
+          _clipboardService.claimNativePasteSync(prepared, (attachments) {
+            unawaited(
+              currentOnPasted(attachments)
+                  .catchError((Object error, StackTrace stackTrace) {
+                    DebugLogger.error(
+                      'Native pasted attachment processing failed',
+                      scope: 'clipboard/native-paste',
+                      error: error,
+                      stackTrace: stackTrace,
+                    );
+                  }),
+            );
+          });
+        });
+        return;
       case IosNativeUnsupportedPaste():
         return;
     }
@@ -463,10 +1146,30 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
     BuildContext context,
     EditableTextState editableTextState,
   ) {
-    // iOS 26 can assert when Flutter tries to show overlapping system edit
-    // menus while focus is changing. Use the Flutter-rendered toolbar until
-    // the platform SystemContextMenu path is reliable again.
+    final useSystemMenu = composerUsesNativeSystemSelectionMenu(
+      isIOS: !kIsWeb && Platform.isIOS,
+      systemMenuSupported: SystemContextMenu.isSupportedByField(
+        editableTextState,
+      ),
+    );
+    if (useSystemMenu) {
+      return SystemContextMenu.editableText(
+        editableTextState: editableTextState,
+        items: _buildIosSystemContextMenuItems(editableTextState),
+      );
+    }
+
     return _buildFallbackContextMenu(context, editableTextState);
+  }
+
+  List<IOSSystemContextMenuItem> _buildIosSystemContextMenuItems(
+    EditableTextState editableTextState,
+  ) {
+    return buildComposerSystemContextMenuItems(
+      defaultItems: SystemContextMenu.getDefaultItems(editableTextState),
+      ensurePaste:
+          widget.onPastedAttachments != null && _selectedModelAcceptsImageInput,
+    );
   }
 
   /// Builds a Flutter-rendered fallback text editing menu.
@@ -492,7 +1195,10 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
       editableTextState.contextMenuButtonItems,
     );
 
-    if (!kIsWeb && Platform.isIOS && widget.onPastedAttachments != null) {
+    if (!kIsWeb &&
+        Platform.isIOS &&
+        widget.onPastedAttachments != null &&
+        _selectedModelAcceptsImageInput) {
       final pasteIndex = items.indexWhere(
         (item) => item.type == ContextMenuButtonType.paste,
       );
@@ -523,13 +1229,7 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
       }
     }
 
-    return withAskConduitContextMenuItem(
-      items: items,
-      ref: ref,
-      selectedText: selectedTextFromEditableTextState(editableTextState),
-      composerTargetId: _composerTextInsertionTargetId,
-      hideToolbar: () => editableTextState.hideToolbar(false),
-    );
+    return items;
   }
 
   Future<void> _handleFallbackPaste(
@@ -537,6 +1237,11 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
     VoidCallback? defaultPaste,
   }) async {
     if (!mounted || !widget.enabled) {
+      return;
+    }
+
+    if (!_selectedModelAcceptsImageInput) {
+      defaultPaste?.call();
       return;
     }
 
@@ -572,47 +1277,305 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
       return;
     }
 
-    final text = _controller.text;
-    final selection = _controller.selection;
-    final int start = selection.isValid
-        ? selection.start.clamp(0, text.length).toInt()
-        : text.length;
-    final int end = selection.isValid
-        ? selection.end.clamp(0, text.length).toInt()
-        : text.length;
-    final before = text.substring(0, start);
-    final after = text.substring(end);
-    final caret = before.length + content.length;
-
-    _controller.value = TextEditingValue(
-      text: '$before$content$after',
-      selection: TextSelection.collapsed(offset: caret),
-      composing: TextRange.empty,
+    _controller.value = composerTextValueAfterInsertion(
+      _controller.value,
+      content,
     );
     _ensureFocusedIfEnabled();
   }
 
-  static final RegExp _promptCommandBoundary = RegExp(r'\s');
+  /// Opens personal tool settings for both the native iOS keyboard menu and
+  /// the Flutter overflow panel. The account owner is captured inside
+  /// [showPersonalToolSettings] before anything here awaits or dismisses.
+  /// The chosen code interpreter cannot run this turn: says why, and offers to
+  /// turn it off, which a tap on a working pill does directly.
+  void _explainBlockedCodeInterpreter(String reason) {
+    final l10n = AppLocalizations.of(context)!;
+    AdaptiveSnackBar.show(
+      context,
+      message: reason,
+      type: AdaptiveSnackBarType.warning,
+      action: l10n.codeInterpreterTurnOff,
+      onActionPressed: () => setComposerOverflowSelection(
+        ref,
+        actionId: ComposerOverflowActionIds.codeInterpreter,
+        selected: false,
+      ),
+    );
+  }
+
+  void _openToolSettings() {
+    if (!mounted || _isDeactivated) return;
+    unawaited(showPersonalToolSettings(context, ref));
+    _dismissFallbackAttachmentPanel();
+  }
+
+  /// Whether this composer offers "Compare models": the command is available,
+  /// and the screen hosting it can admit a comparison turn. [read] is
+  /// `ref.read` or `ref.watch`.
+  bool _comparisonCommandAvailable(dynamic read) =>
+      widget.onCompareSend != null &&
+      (read(comparisonCommandAvailableProvider) as bool);
+
+  /// "Compare models": asks which models, then sends the composer's message to
+  /// all of them as one turn. Both the Flutter menu and the native iOS panel
+  /// land here.
+  Future<void> _openCompareModels() async {
+    if (!mounted || _isDeactivated || !widget.enabled) return;
+    if (!_comparisonCommandAvailable(ref.read)) return;
+    final l10n = AppLocalizations.of(context)!;
+    _dismissFallbackAttachmentPanel();
+    final draft = _controller.text.trim();
+    if (draft.isEmpty) {
+      AdaptiveSnackBar.show(
+        context,
+        message: l10n.chatCompareNeedsMessage,
+        type: AdaptiveSnackBarType.info,
+      );
+      return;
+    }
+    await _hideNativeKeyboardAttachmentPanel();
+    if (!mounted || _isDeactivated) return;
+    final owner = _captureComparisonOwner();
+    final models = await showComparisonSetupSheet(context, ref);
+    await _sendComparison(models, owner);
+  }
+
+  /// The account and the chat this composer is showing, named before anything
+  /// awaits. A new chat has no conversation yet.
+  _ComparisonOwner _captureComparisonOwner() => (
+    api: ref.read(apiServiceProvider),
+    epoch: ref.read(openWebUiAuthSessionEpochProvider),
+    chat: captureChatMutationOwner(ref, ref.read(activeConversationProvider)),
+  );
+
+  /// Sends the composer's message to [models] as one comparison turn and clears
+  /// the composer once that turn is committed. [models] is null when the user
+  /// chose none. The setup command and a project draft that starts with saved
+  /// models both send through here.
+  Future<void> _sendComparison(
+    List<Model>? models,
+    _ComparisonOwner owner,
+  ) async {
+    bool sameAccount() =>
+        mounted &&
+        !_isDeactivated &&
+        identical(ref.read(apiServiceProvider), owner.api) &&
+        identical(ref.read(openWebUiAuthSessionEpochProvider), owner.epoch);
+    // The turn goes to whichever chat is active when it is sent, so the chat
+    // the user composed in must still be it.
+    if (models == null ||
+        !sameAccount() ||
+        !chatMutationTokenStillActive(ref, owner.chat)) {
+      return;
+    }
+    final wireText = _controller.toWireFormat().trim();
+    if (wireText.isEmpty || !widget.enabled) return;
+    final send = widget.onCompareSend;
+    if (send == null) return;
+    // Edits made after this point belong to a newer draft.
+    final draftGeneration = _editGeneration;
+    // The draft is the user's until the turn is durably admitted: a refusal
+    // leaves its text, mentions and attachments exactly where they are.
+    final committed = await send(wireText, models);
+    // Clear only the composer that sent the turn: same account, showing the
+    // chat the turn went into, and not edited since.
+    if (committed == null ||
+        !sameAccount() ||
+        !committed.ownsActiveChat(ref) ||
+        draftGeneration != _editGeneration) {
+      return;
+    }
+    _controller.clearMentions();
+    _controller.clear();
+    _focusNode.unfocus();
+    unawaited(_hideAttachmentPanels());
+    try {
+      SystemChannels.textInput.invokeMethod('TextInput.hide');
+    } catch (_) {
+      // Silently handle if keyboard dismissal fails
+    }
+  }
+
+  Future<void> _openDirectMcpContent() async {
+    if (!widget.enabled) return;
+    final selection = _controller.selection;
+    _dismissFallbackAttachmentPanel();
+    await _hideNativeKeyboardAttachmentPanel();
+    if (!mounted || _isDeactivated) return;
+    final content = await DirectMcpContentSheet.show(context);
+    if (!mounted ||
+        _isDeactivated ||
+        !widget.enabled ||
+        content == null ||
+        content.isEmpty) {
+      return;
+    }
+    final restored = _controller.value.copyWith(selection: selection);
+    if (!directMcpInsertionFitsComposer(restored, content)) {
+      AdaptiveSnackBar.show(
+        context,
+        message: AppLocalizations.of(context)!.directMcpContentComposerTooLarge,
+        type: AdaptiveSnackBarType.error,
+      );
+      return;
+    }
+    _controller.value = composerTextValueAfterInsertion(restored, content);
+    _ensureFocusedIfEnabled();
+  }
+
+  _ComposerTypography _composerTypography(BuildContext context) {
+    final direction = Directionality.of(context);
+    final textScaler = MediaQuery.textScalerOf(context);
+    final locale = Localizations.maybeLocaleOf(context);
+    final style = _composerInputTextStyle(_isRecording);
+    return (
+      direction: direction,
+      textScaler: textScaler,
+      locale: locale,
+      style: style,
+      scaledFontSize: textScaler.scale(style.fontSize ?? 14),
+      isRtl: direction == ui.TextDirection.rtl,
+    );
+  }
+
+  bool _shouldShowComposerExpandButton(int lineCount) => lineCount >= 4;
+
+  _CompactComposerControls _compactComposerControls({
+    required bool showOverflowButton,
+    required bool voiceAvailable,
+    required bool isGenerating,
+  }) => (
+    showLeading: _isRecording || showOverflowButton,
+    showMic: !_isRecording && !_hasText && voiceAvailable && !isGenerating,
+  );
+
+  void _scheduleComposerLineMeasurement(
+    BuildContext context,
+    double compactTextFieldWidth,
+  ) {
+    if (!compactTextFieldWidth.isFinite || compactTextFieldWidth <= 0) return;
+
+    final typography = _composerTypography(context);
+    final metrics = (
+      width: compactTextFieldWidth,
+      scaledFontSize: typography.scaledFontSize,
+      isRtl: typography.isRtl,
+      locale: typography.locale,
+      isRecording: _isRecording,
+    );
+    if (metrics == _composerLayoutMetrics &&
+        _pendingComposerLayoutMetrics == null) {
+      return;
+    }
+
+    _pendingComposerLayoutMetrics = metrics;
+    if (_composerLayoutMeasurementScheduled) return;
+    _composerLayoutMeasurementScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _composerLayoutMeasurementScheduled = false;
+      final pendingMetrics = _pendingComposerLayoutMetrics;
+      _pendingComposerLayoutMetrics = null;
+      if (!mounted || _isDeactivated || pendingMetrics == null) return;
+
+      _composerLayoutMetrics = pendingMetrics;
+      _compactTextFieldWidth = pendingMetrics.width;
+      _recomputeComposerLineState();
+    });
+  }
+
+  void _recomputeComposerLineState() {
+    final text = _controller.text;
+    final l10n = AppLocalizations.of(context)!;
+    final layoutText = text.isNotEmpty
+        ? text
+        : _isTranscribing
+        ? l10n.transcribingAudio
+        : _isRecording
+        ? l10n.recordingAudio
+        : widget.placeholder ?? l10n.messageHintText;
+    final lineCount = _composerTextLineCount(layoutText);
+    final isMultiline = lineCount > 1;
+    final showExpand = _shouldShowComposerExpandButton(lineCount);
+    if (isMultiline == _isMultiline && showExpand == _showExpandButton) {
+      return;
+    }
+
+    setState(() {
+      _isMultiline = isMultiline;
+      _showExpandButton = showExpand;
+    });
+  }
+
+  int _composerTextLineCount(String text) {
+    if (text.isEmpty) return 0;
+    if (_compactTextFieldWidth <= 0) return text.split('\n').length;
+
+    final typography = _composerTypography(context);
+    final layout = (
+      width: _compactTextFieldWidth,
+      scaledFontSize: typography.scaledFontSize,
+      isRtl: typography.isRtl,
+      locale: typography.locale,
+      isRecording: _isRecording,
+    );
+    final cached = _composerLineMeasurement;
+    if (cached != null && cached.text == text && cached.layout == layout) {
+      return cached.lineCount;
+    }
+
+    final painter = TextPainter(
+      text: TextSpan(text: text, style: typography.style),
+      textDirection: typography.direction,
+      textScaler: typography.textScaler,
+      locale: typography.locale,
+      maxLines: 4,
+    );
+    try {
+      painter.layout(maxWidth: _compactTextFieldWidth);
+      final lineCount = painter.didExceedMaxLines
+          ? 4
+          : painter.computeLineMetrics().length;
+      _composerLineMeasurement = (
+        text: text,
+        layout: layout,
+        lineCount: lineCount,
+      );
+      return lineCount;
+    } finally {
+      painter.dispose();
+    }
+  }
 
   void _handleComposerChanged() {
+    if (_controller.text != _observedText) {
+      _observedText = _controller.text;
+      _editGeneration++;
+    }
     if (!mounted || _isDeactivated) return;
     _lastEditTime = DateTime.now();
 
     final String text = _controller.text;
     final TextSelection selection = _controller.selection;
     final bool hasText = text.trim().isNotEmpty;
-    // Consider multiline if text contains newlines or exceeds ~50 chars
-    final bool isMultiline = text.contains('\n') || text.length > 50;
-    // Show the expand button when content is tall enough
-    // (~4 lines: 3+ explicit newlines or ~160 wrapped chars).
-    final bool showExpand =
-        isMultiline && (text.split('\n').length >= 4 || text.length > 160);
+    final l10n = AppLocalizations.of(context)!;
+    final layoutText = text.isNotEmpty
+        ? text
+        : _isTranscribing
+        ? l10n.transcribingAudio
+        : _isRecording
+        ? l10n.recordingAudio
+        : widget.placeholder ?? l10n.messageHintText;
+    final int lineCount = _composerTextLineCount(layoutText);
+    final bool isMultiline = lineCount > 1;
+    final bool showExpand = _shouldShowComposerExpandButton(lineCount);
     final PromptCommandMatch? match = _resolvePromptCommand(
       text,
       selection,
       widget.enabled,
     );
     final bool isContextTrigger = match?.command.startsWith('#') ?? false;
+    final bool isSkillTrigger = match?.command.startsWith('\$') ?? false;
     final bool shouldShow = match != null;
     final bool wasShowing = _showPromptOverlay;
     final String previousCommand = _currentPromptCommand;
@@ -657,8 +1620,12 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
         if (!isContextTrigger) {
           _clearContextSuggestions();
         }
+        if (!isSkillTrigger) {
+          _clearSkillSuggestions();
+        }
       } else {
         _clearContextSuggestions();
+        _clearSkillSuggestions();
         _currentPromptCommand = '';
         _currentPromptRange = null;
         _promptSelectionIndex = 0;
@@ -673,14 +1640,48 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
       _contextSuggestionDebounce = null;
     }
 
+    if (isSkillTrigger) {
+      _scheduleSkillSuggestionSearch(match!.command);
+    } else {
+      _skillSuggestionDebounce?.cancel();
+      _skillSuggestionDebounce = null;
+    }
+
     if (!wasShowing && shouldShow) {
       // Trigger data fetch lazily when overlay first appears.
       if (_currentPromptCommand.startsWith('/')) {
-        ref.read(promptsListProvider.future);
+        if (_hermesCommandsActive) {
+          ref.read(hermesSkillPromptsProvider.future);
+        } else {
+          ref.read(promptsListProvider.future);
+        }
       } else if (_currentPromptCommand.startsWith('@')) {
         ref.read(modelsProvider.future);
       }
     }
+  }
+
+  /// Whether the active model routes `/` commands to Hermes skills instead of
+  /// OpenWebUI prompts. Requires the server to advertise the skills capability
+  /// (optimistic default while capabilities load).
+  bool get _hermesCommandsActive {
+    final model = ref.read(selectedModelProvider);
+    if (model == null || !isHermesModel(model)) return false;
+    final caps = ref.read(hermesCapabilitiesProvider).asData?.value;
+    return caps?.skills ?? true;
+  }
+
+  /// The current base prompt list for the `/` overlay, from the source matching
+  /// the active model (Hermes skills or OpenWebUI prompts).
+  List<Prompt>? get _activePromptListValue => _hermesCommandsActive
+      ? ref.read(hermesSkillPromptsProvider).value
+      : ref.read(promptsListProvider).value;
+
+  bool get _openWebUiSkillsAvailable {
+    if (!ref.read(openWebUiAccountAvailableProvider)) return false;
+    final model = ref.read(selectedModelProvider);
+    return model == null ||
+        (!isHermesModel(model) && !isLocallyMintedDirectModel(model));
   }
 
   PromptCommandMatch? _resolvePromptCommand(
@@ -689,30 +1690,25 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
     bool enabled,
   ) {
     if (!enabled) return null;
-    if (!selection.isValid || !selection.isCollapsed) return null;
-
-    final int cursor = selection.start;
-    if (cursor < 0 || cursor > text.length) return null;
-    if (cursor == 0) return null;
-
-    int start = cursor;
-    while (start > 0) {
-      final String previous = text.substring(start - 1, start);
-      if (_promptCommandBoundary.hasMatch(previous)) {
-        break;
-      }
-      start--;
-    }
-
-    final String candidate = text.substring(start, cursor);
-    if (candidate.isEmpty ||
-        !(candidate.startsWith('/') ||
-            candidate.startsWith('#') ||
-            candidate.startsWith('@'))) {
-      return null;
-    }
-
-    return PromptCommandMatch(command: candidate, start: start, end: cursor);
+    if (!selection.isValid) return null;
+    final model = ref.read(selectedModelProvider);
+    // The token rules are conduit_core's (composer_commands.dart). `$` needs
+    // Open WebUI skills; `#` suggestions are Open WebUI knowledge and
+    // server-file resources, which a Hermes session cannot resolve, so the
+    // control is not offered there.
+    final match = resolveComposerCommand(
+      text,
+      selectionStart: selection.start,
+      selectionEnd: selection.end,
+      allowSkills: _openWebUiSkillsAvailable,
+      allowContext: model == null || !isHermesModel(model),
+    );
+    if (match == null) return null;
+    return PromptCommandMatch(
+      command: match.command,
+      start: match.start,
+      end: match.end,
+    );
   }
 
   List<Prompt> _filterPrompts(List<Prompt> prompts) {
@@ -742,22 +1738,83 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
     return filtered;
   }
 
-  List<Model> _filterModels(List<Model> models) {
-    if (models.isEmpty) return const <Model>[];
-    final String query = _currentPromptCommand.toLowerCase().trim();
-    final String searchQuery = query.startsWith('@')
-        ? query.substring(1)
-        : query;
+  List<Model> _filterModels(List<Model> models) =>
+      filterModelsForMention(models, _currentPromptCommand);
 
-    if (searchQuery.isEmpty) return models;
+  void _clearSkillSuggestions() {
+    _skillSuggestionDebounce?.cancel();
+    _skillSuggestionDebounce = null;
+    _skillSuggestionRequestId++;
+    _skillSuggestions = const AsyncData(<WorkspaceSkillSummary>[]);
+  }
 
-    return models
-        .where(
-          (m) =>
-              m.name.toLowerCase().contains(searchQuery) ||
-              m.id.toLowerCase().contains(searchQuery),
-        )
-        .toList();
+  void _scheduleSkillSuggestionSearch(String command) {
+    _skillSuggestionDebounce?.cancel();
+    final requestId = ++_skillSuggestionRequestId;
+    setState(() {
+      _skillSuggestions = const AsyncLoading();
+      _promptSelectionIndex = 0;
+    });
+
+    final query = command.length > 1 ? command.substring(1).trim() : '';
+    _skillSuggestionDebounce = Timer(_contextSuggestionDelay, () {
+      unawaited(_loadSkillSuggestions(command, query, requestId));
+    });
+  }
+
+  Future<void> _loadSkillSuggestions(
+    String command,
+    String query,
+    int requestId,
+  ) async {
+    final api = ref.read(apiServiceProvider);
+    final token = ref.read(authTokenProvider3);
+    if (api == null || !_openWebUiSkillsAvailable) {
+      if (mounted && !_isDeactivated) _hidePromptOverlay();
+      return;
+    }
+
+    try {
+      final skills = await searchComposerSkills(api, query: query);
+      if (!_skillSuggestionRequestIsCurrent(command, requestId, api, token)) {
+        return;
+      }
+      setState(() {
+        _skillSuggestions = AsyncData(skills);
+        _promptSelectionIndex = skills.isEmpty
+            ? 0
+            : _promptSelectionIndex.clamp(0, skills.length - 1);
+      });
+    } catch (error, stackTrace) {
+      if (!_skillSuggestionRequestIsCurrent(command, requestId, api, token)) {
+        return;
+      }
+      DebugLogger.warning(
+        'skill suggestion search failed',
+        scope: 'chat/skills',
+        data: {'errorType': error.runtimeType.toString()},
+      );
+      setState(() {
+        _skillSuggestions = AsyncError(error, stackTrace);
+        _promptSelectionIndex = 0;
+      });
+    }
+  }
+
+  bool _skillSuggestionRequestIsCurrent(
+    String command,
+    int requestId,
+    Object api,
+    String? token,
+  ) {
+    return mounted &&
+        !_isDeactivated &&
+        requestId == _skillSuggestionRequestId &&
+        _currentPromptCommand == command &&
+        _currentPromptCommand.startsWith('\$') &&
+        identical(ref.read(apiServiceProvider), api) &&
+        ref.read(authTokenProvider3) == token &&
+        _openWebUiSkillsAvailable;
   }
 
   void _clearContextSuggestions() {
@@ -805,143 +1862,56 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
     }
 
     final l10n = AppLocalizations.of(context)!;
-    final normalizedQuery = query.isEmpty ? null : query;
-    final notesEnabled = ref.read(notesFeatureEnabledProvider);
-
-    List<Map<String, dynamic>> noteResults = const <Map<String, dynamic>>[];
-    List<Map<String, dynamic>> baseResults = const <Map<String, dynamic>>[];
-    List<Map<String, dynamic>> fileResults = const <Map<String, dynamic>>[];
-
-    Future<List<Map<String, dynamic>>> safeSearch(
-      Future<List<Map<String, dynamic>>> Function() loader,
-    ) async {
-      try {
-        return await loader();
-      } catch (_) {
-        return const <Map<String, dynamic>>[];
-      }
-    }
-
-    await Future.wait<void>([
-      if (notesEnabled)
-        () async {
-          try {
-            noteResults = await api.searchNotes(query: normalizedQuery);
-          } on DioException catch (error) {
-            final statusCode = error.response?.statusCode;
-            if ((statusCode == 401 || statusCode == 403) &&
-                mounted &&
-                !_isDeactivated &&
-                identical(ref.read(apiServiceProvider), api) &&
-                ref.read(authTokenProvider3) == token) {
-              ref.read(notesFeatureEnabledProvider.notifier).setEnabled(false);
-            }
-            noteResults = const <Map<String, dynamic>>[];
-          } catch (_) {
-            noteResults = const <Map<String, dynamic>>[];
-          }
-        }(),
-      () async {
-        baseResults = await safeSearch(
-          () => api.searchKnowledgeBases(query: normalizedQuery),
-        );
-      }(),
-      () async {
-        fileResults = await safeSearch(
-          () => api.searchKnowledgeFiles(query: normalizedQuery),
-        );
-      }(),
-    ]);
+    final isIOS = Theme.of(context).platform == TargetPlatform.iOS;
+    // The searches and the rows they become are conduit_core's
+    // (composer_commands.dart); this adds the icons.
+    final search = await searchComposerContext(
+      api,
+      query: query,
+      includeNotes: ref.read(notesFeatureEnabledProvider),
+      // As soon as the notes search is refused, not after the slower ones.
+      onNotesForbidden: () {
+        if (mounted &&
+            !_isDeactivated &&
+            identical(ref.read(apiServiceProvider), api) &&
+            ref.read(authTokenProvider3) == token) {
+          ref.read(notesFeatureEnabledProvider.notifier).setEnabled(false);
+        }
+      },
+    );
 
     if (!mounted || _isDeactivated) return;
     if (requestId != _contextSuggestionRequestId) return;
     if (!_currentPromptCommand.startsWith('#')) return;
     if (_currentPromptCommand != command) return;
 
-    String titleForNote(Map<String, dynamic> json) {
-      final title = _ComposerContextSuggestion.stringValue(json['title']);
-      return title ?? l10n.untitled;
-    }
-
-    String titleForBase(Map<String, dynamic> json) {
-      return _ComposerContextSuggestion.stringValue(json['name']) ??
-          _ComposerContextSuggestion.stringValue(json['title']) ??
-          l10n.knowledgeBase;
-    }
-
-    String titleForFile(Map<String, dynamic> json) {
-      final meta = _ComposerContextSuggestion.mapValue(json['meta']);
-      return _ComposerContextSuggestion.stringValue(meta?['name']) ??
-          _ComposerContextSuggestion.stringValue(meta?['filename']) ??
-          _ComposerContextSuggestion.stringValue(json['filename']) ??
-          _ComposerContextSuggestion.stringValue(json['name']) ??
-          l10n.file;
-    }
-
-    String? fileCollectionName(Map<String, dynamic> json) {
-      final collection = _ComposerContextSuggestion.mapValue(
-        json['collection'],
-      );
-      return _ComposerContextSuggestion.stringValue(collection?['name']) ??
-          _ComposerContextSuggestion.stringValue(json['collection_name']);
-    }
-
-    String? fileSource(Map<String, dynamic> json) {
-      final meta = _ComposerContextSuggestion.mapValue(json['meta']);
-      return _ComposerContextSuggestion.stringValue(meta?['source']) ??
-          _ComposerContextSuggestion.stringValue(json['source']);
-    }
-
-    final List<_ComposerContextSuggestion> suggestions =
-        <_ComposerContextSuggestion>[
-          ...noteResults.take(_maxContextSuggestionsPerType).map((json) {
-            final id = _ComposerContextSuggestion.stringValue(json['id']);
-            if (id == null) return null;
-            return _ComposerContextSuggestion(
-              type: _ComposerContextSuggestionType.note,
-              id: id,
-              displayName: titleForNote(json),
-              icon: Theme.of(context).platform == TargetPlatform.iOS
-                  ? CupertinoIcons.doc_text
-                  : Icons.sticky_note_2_outlined,
-            );
-          }).whereType<_ComposerContextSuggestion>(),
-          ...baseResults.take(_maxContextSuggestionsPerType).map((json) {
-            final id = _ComposerContextSuggestion.stringValue(json['id']);
-            if (id == null) return null;
-            return _ComposerContextSuggestion(
-              type: _ComposerContextSuggestionType.knowledgeBase,
-              id: id,
-              displayName: titleForBase(json),
-              subtitle: _ComposerContextSuggestion.stringValue(
-                json['description'],
-              ),
-              icon: Theme.of(context).platform == TargetPlatform.iOS
-                  ? CupertinoIcons.folder
-                  : Icons.folder_outlined,
-            );
-          }).whereType<_ComposerContextSuggestion>(),
-          ...fileResults.take(_maxContextSuggestionsPerType).map((json) {
-            final id = _ComposerContextSuggestion.stringValue(json['id']);
-            if (id == null) return null;
-
-            final collectionName = fileCollectionName(json);
-            final source = fileSource(json);
-            final subtitle = collectionName ?? source;
-
-            return _ComposerContextSuggestion(
-              type: _ComposerContextSuggestionType.knowledgeFile,
-              id: id,
-              displayName: titleForFile(json),
-              subtitle: subtitle,
-              collectionName: collectionName,
-              source: source,
-              icon: Theme.of(context).platform == TargetPlatform.iOS
-                  ? CupertinoIcons.doc
-                  : Icons.description_outlined,
-            );
-          }).whereType<_ComposerContextSuggestion>(),
-        ];
+    final List<_ComposerContextSuggestion> suggestions = [
+      for (final suggestion in buildComposerContextSuggestions(
+        notes: search.notes,
+        bases: search.bases,
+        files: search.files,
+        untitledLabel: l10n.untitled,
+        knowledgeBaseLabel: l10n.knowledgeBase,
+        fileLabel: l10n.file,
+        perType: _maxContextSuggestionsPerType,
+      ))
+        _ComposerContextSuggestion(
+          type: suggestion.type,
+          id: suggestion.id,
+          displayName: suggestion.displayName,
+          subtitle: suggestion.subtitle,
+          collectionName: suggestion.collectionName,
+          source: suggestion.source,
+          icon: switch (suggestion.type) {
+            _ComposerContextSuggestionType.note =>
+              isIOS ? CupertinoIcons.doc_text : Icons.sticky_note_2_outlined,
+            _ComposerContextSuggestionType.knowledgeBase =>
+              isIOS ? CupertinoIcons.folder : Icons.folder_outlined,
+            _ComposerContextSuggestionType.knowledgeFile =>
+              isIOS ? CupertinoIcons.doc : Icons.description_outlined,
+          },
+        ),
+    ];
 
     setState(() {
       _isContextSuggestionLoading = false;
@@ -954,51 +1924,20 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
     });
   }
 
-  ({String text, int cursorOffset}) _removeCommandToken(
-    String text,
-    TextRange range,
-  ) {
-    final String before = text.substring(0, range.start);
-
-    int tokenEnd = range.end;
-    while (tokenEnd < text.length) {
-      final nextCharacter = text.substring(tokenEnd, tokenEnd + 1);
-      if (_promptCommandBoundary.hasMatch(nextCharacter)) {
-        break;
-      }
-      tokenEnd++;
-    }
-
-    String after = text.substring(tokenEnd);
-    final String? previousBoundary = before.isEmpty
-        ? null
-        : before.substring(before.length - 1);
-    final String? nextBoundary = after.isEmpty ? null : after.substring(0, 1);
-
-    if (previousBoundary != null &&
-        nextBoundary != null &&
-        _promptCommandBoundary.hasMatch(previousBoundary) &&
-        _promptCommandBoundary.hasMatch(nextBoundary)) {
-      after = after.substring(1);
-    } else if (before.isEmpty &&
-        nextBoundary != null &&
-        _promptCommandBoundary.hasMatch(nextBoundary)) {
-      after = after.substring(1);
-    }
-
-    return (text: '$before$after', cursorOffset: before.length);
-  }
-
   void _applyContextSuggestion(_ComposerContextSuggestion suggestion) {
     final TextRange? range = _currentPromptRange;
     if (range == null) return;
 
     ConduitHaptics.selectionClick();
 
-    final result = _removeCommandToken(_controller.text, range);
+    final result = removeComposerCommandToken(
+      _controller.text,
+      range.start,
+      range.end,
+    );
     _controller.value = TextEditingValue(
       text: result.text,
-      selection: TextSelection.collapsed(offset: result.cursorOffset),
+      selection: TextSelection.collapsed(offset: result.caret),
       composing: TextRange.empty,
     );
 
@@ -1036,24 +1975,29 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
     if (range == null) return;
 
     // Replace the @query with @ModelName (keep it visible like OpenWebUI).
-    final String text = _controller.text;
-    final String before = text.substring(0, range.start);
-    final String after = text.substring(range.end);
-    final String mention = '@${model.name} ';
-    final String newText = '$before$mention$after';
-    final int newCursor = before.length + mention.length;
+    final inserted = insertComposerMention(
+      _controller.text,
+      ComposerCommandMatch(
+        command: _currentPromptCommand,
+        start: range.start,
+        end: range.end,
+      ),
+      prefix: '@',
+      label: model.name,
+    );
+    final String newText = inserted.text;
 
     _controller.value = TextEditingValue(
       text: newText,
-      selection: TextSelection.collapsed(offset: newCursor),
+      selection: TextSelection.collapsed(offset: inserted.caret),
     );
 
     // Track the mention range for styled rendering
     // (exclude trailing space) and store the model ID
     // so we can convert to OpenWebUI wire format on send.
     _controller.addMention(
-      range.start,
-      range.start + mention.trimRight().length,
+      inserted.mentionStart,
+      inserted.mentionEnd,
       idType: 'M',
       id: model.id,
       label: model.name,
@@ -1069,6 +2013,45 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
       _currentPromptRange = null;
       _promptSelectionIndex = 0;
     });
+  }
+
+  void _applySkill(WorkspaceSkillSummary skill) {
+    final range = _currentPromptRange;
+    if (range == null) return;
+
+    final inserted = insertComposerMention(
+      _controller.text,
+      ComposerCommandMatch(
+        command: _currentPromptCommand,
+        start: range.start,
+        end: range.end,
+      ),
+      prefix: '\$',
+      label: skill.name,
+    );
+    final newText = inserted.text;
+
+    _controller.value = TextEditingValue(
+      text: newText,
+      selection: TextSelection.collapsed(offset: inserted.caret),
+    );
+    _controller.addMention(
+      inserted.mentionStart,
+      inserted.mentionEnd,
+      id: skill.id,
+      label: skill.name,
+      kind: ComposerMentionKind.skill,
+    );
+
+    setState(() {
+      _hasText = newText.trim().isNotEmpty;
+      _clearSkillSuggestions();
+      _showPromptOverlay = false;
+      _currentPromptCommand = '';
+      _currentPromptRange = null;
+      _promptSelectionIndex = 0;
+    });
+    _ensureFocusedIfEnabled();
   }
 
   void _movePromptSelection(int delta) {
@@ -1092,12 +2075,14 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
 
     // Determine filtered list length based on trigger type.
     final int filteredLength;
-    if (_currentPromptCommand.startsWith('@')) {
+    if (_currentPromptCommand.startsWith('\$')) {
+      filteredLength = _skillSuggestions.asData?.value.length ?? 0;
+    } else if (_currentPromptCommand.startsWith('@')) {
       final List<Model>? models = ref.read(modelsProvider).value;
       if (models == null || models.isEmpty) return;
       filteredLength = _filterModels(models).length;
     } else {
-      final List<Prompt>? prompts = ref.read(promptsListProvider).value;
+      final List<Prompt>? prompts = _activePromptListValue;
       if (prompts == null || prompts.isEmpty) return;
       filteredLength = _filterPrompts(prompts).length;
     }
@@ -1141,8 +2126,16 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
       return;
     }
 
-    final AsyncValue<List<Prompt>> promptsAsync = ref.read(promptsListProvider);
-    final List<Prompt>? prompts = promptsAsync.value;
+    if (_currentPromptCommand.startsWith('\$')) {
+      final skills =
+          _skillSuggestions.asData?.value ?? const <WorkspaceSkillSummary>[];
+      if (skills.isEmpty) return;
+      final index = _promptSelectionIndex.clamp(0, skills.length - 1);
+      _applySkill(skills[index]);
+      return;
+    }
+
+    final List<Prompt>? prompts = _activePromptListValue;
     if (prompts == null || prompts.isEmpty) return;
 
     final List<Prompt> filtered = _filterPrompts(prompts);
@@ -1214,6 +2207,7 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
       userName: user?.name ?? user?.email,
       userLanguage: locale.languageCode,
       userLocation: userLocation,
+      clipboard: ref.read(clipboardPortProvider),
     );
     final processor = PromptProcessor(
       parser: parser,
@@ -1274,11 +2268,29 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
     if (!_showPromptOverlay) return;
     setState(() {
       _clearContextSuggestions();
+      _clearSkillSuggestions();
       _showPromptOverlay = false;
       _currentPromptCommand = '';
       _currentPromptRange = null;
       _promptSelectionIndex = 0;
     });
+  }
+
+  bool get _shouldShowPromptOverlay {
+    if (!_showPromptOverlay) return false;
+    if (_currentPromptCommand.startsWith('\$')) {
+      return _openWebUiSkillsAvailable;
+    }
+    final model = ref.read(selectedModelProvider);
+    return !(model != null &&
+        isHermesModel(model) &&
+        _currentPromptCommand.startsWith('#'));
+  }
+
+  bool get _canConfirmPromptSelection {
+    if (!_shouldShowPromptOverlay) return false;
+    if (!_currentPromptCommand.startsWith('\$')) return true;
+    return _skillSuggestions.asData?.value.isNotEmpty ?? false;
   }
 
   Future<void> _openKnowledgePicker({String? initialBaseId}) async {
@@ -1421,82 +2433,89 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
                       ),
                       boxShadow: ConduitShadows.modal(innerContext),
                     ),
-                    child: SizedBox(
-                      height: MediaQuery.of(innerContext).size.height * 0.6,
-                      child: Row(
-                        children: [
-                          Expanded(
-                            flex: 1,
-                            child: ListView.builder(
-                              itemCount: bases.length,
-                              itemBuilder: (context, index) {
-                                final base = bases[index];
-                                final isSelected = selectedBaseId == base.id;
-                                return AdaptiveListTile(
-                                  selected: isSelected,
-                                  title: Text(base.name),
-                                  onTap: () => loadFiles(base),
-                                );
-                              },
+                    child: Material(
+                      color: Colors.transparent,
+                      borderRadius: const BorderRadius.vertical(
+                        top: Radius.circular(AppBorderRadius.modal),
+                      ),
+                      clipBehavior: Clip.antiAlias,
+                      child: SizedBox(
+                        height: MediaQuery.of(innerContext).size.height * 0.6,
+                        child: Row(
+                          children: [
+                            Expanded(
+                              flex: 1,
+                              child: ListView.builder(
+                                itemCount: bases.length,
+                                itemBuilder: (context, index) {
+                                  final base = bases[index];
+                                  final isSelected = selectedBaseId == base.id;
+                                  return AdaptiveListTile(
+                                    selected: isSelected,
+                                    title: Text(base.name),
+                                    onTap: () => loadFiles(base),
+                                  );
+                                },
+                              ),
                             ),
-                          ),
-                          const VerticalDivider(width: 1),
-                          Expanded(
-                            flex: 2,
-                            child: loading
-                                ? const Center(
-                                    child: CircularProgressIndicator(),
-                                  )
-                                : ListView.builder(
-                                    itemCount: files.length,
-                                    itemBuilder: (context, index) {
-                                      final file = files[index];
-                                      final KnowledgeBase? selectedBase =
-                                          bases.isEmpty
-                                          ? null
-                                          : bases.firstWhere(
-                                              (b) => b.id == selectedBaseId,
-                                              orElse: () => bases.first,
-                                            );
-                                      return AdaptiveListTile(
-                                        title: Text(
-                                          file.meta?['name']?.toString() ??
-                                              file.filename,
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                        subtitle: Text(
-                                          file.meta?['source']?.toString() ??
-                                              file.filename,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                        onTap: () {
-                                          innerRef
-                                              .read(
-                                                contextAttachmentsProvider
-                                                    .notifier,
-                                              )
-                                              .addKnowledge(
-                                                displayName:
-                                                    file.meta?['name']
-                                                        ?.toString() ??
-                                                    file.filename,
-                                                fileId: file.id,
-                                                collectionName:
-                                                    selectedBase?.name ??
-                                                    'Unknown',
-                                                url: file.meta?['source']
-                                                    ?.toString(),
+                            const VerticalDivider(width: 1),
+                            Expanded(
+                              flex: 2,
+                              child: loading
+                                  ? const Center(
+                                      child: CircularProgressIndicator(),
+                                    )
+                                  : ListView.builder(
+                                      itemCount: files.length,
+                                      itemBuilder: (context, index) {
+                                        final file = files[index];
+                                        final KnowledgeBase? selectedBase =
+                                            bases.isEmpty
+                                            ? null
+                                            : bases.firstWhere(
+                                                (b) => b.id == selectedBaseId,
+                                                orElse: () => bases.first,
                                               );
-                                          if (modalContext.mounted) {
-                                            Navigator.of(modalContext).pop();
-                                          }
-                                        },
-                                      );
-                                    },
-                                  ),
-                          ),
-                        ],
+                                        return AdaptiveListTile(
+                                          title: Text(
+                                            file.meta?['name']?.toString() ??
+                                                file.filename,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                          subtitle: Text(
+                                            file.meta?['source']?.toString() ??
+                                                file.filename,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                          onTap: () {
+                                            innerRef
+                                                .read(
+                                                  contextAttachmentsProvider
+                                                      .notifier,
+                                                )
+                                                .addKnowledge(
+                                                  displayName:
+                                                      file.meta?['name']
+                                                          ?.toString() ??
+                                                      file.filename,
+                                                  fileId: file.id,
+                                                  collectionName:
+                                                      selectedBase?.name ??
+                                                      'Unknown',
+                                                  url: file.meta?['source']
+                                                      ?.toString(),
+                                                );
+                                            if (modalContext.mounted) {
+                                              Navigator.of(modalContext).pop();
+                                            }
+                                          },
+                                        );
+                                      },
+                                    ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   );
@@ -1515,6 +2534,15 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
     final borderColor = context.conduitTheme.cardBorder.withValues(
       alpha: Theme.of(context).brightness == Brightness.dark ? 0.6 : 0.4,
     );
+    final selectedModel = ref.watch(selectedModelProvider);
+    final hermesCapabilities = ref
+        .watch(hermesCapabilitiesProvider)
+        .asData
+        ?.value;
+    final useHermesSkills =
+        selectedModel != null &&
+        isHermesModel(selectedModel) &&
+        (hermesCapabilities?.skills ?? true);
 
     if (_currentPromptCommand.startsWith('#')) {
       return _buildContextSuggestionOverlay(context, overlayColor, borderColor);
@@ -1526,7 +2554,15 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
         onModelSelected: _applyModel,
       );
     }
+    if (_currentPromptCommand.startsWith('\$')) {
+      return SkillSuggestionOverlay(
+        skills: _skillSuggestions,
+        selectionIndex: _promptSelectionIndex,
+        onSkillSelected: _applySkill,
+      );
+    }
     return PromptSuggestionOverlay(
+      useHermesSkills: useHermesSkills,
       filteredPrompts: _filterPrompts,
       selectionIndex: _promptSelectionIndex,
       onPromptSelected: _applyPrompt,
@@ -1724,7 +2760,12 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
           ),
         ],
       ),
-      child: child,
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(AppBorderRadius.card),
+        clipBehavior: Clip.antiAlias,
+        child: child,
+      ),
     );
   }
 
@@ -1747,13 +2788,62 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
     );
   }
 
+  bool get _selectedModelAcceptsImageInput {
+    final model = ref.read(selectedModelProvider);
+    if (model == null) return false;
+    if (isHermesModel(model)) {
+      // Hermes image input is opt-in. Older servers and capabilities still in
+      // flight must remain text-only rather than accepting an attachment the
+      // transport cannot faithfully deliver.
+      return ref.read(hermesCapabilitiesProvider).asData?.value.inputImages ==
+          true;
+    }
+    return ref.read(visionCapableModelsProvider).contains(model.id);
+  }
+
   ComposerOverflowAttachmentAvailability get _overflowAttachmentAvailability {
+    final model = ref.read(selectedModelProvider);
+    final hermesMode = model != null && isHermesModel(model);
+    if (hermesMode) {
+      final inputImages =
+          ref.read(hermesCapabilitiesProvider).asData?.value.inputImages ==
+          true;
+      return ComposerOverflowAttachmentAvailability(
+        // Hermes documents are ingested locally and sent as text, so this is
+        // deliberately independent of the remote image-input capability.
+        file: widget.onFileAttachment != null,
+        serverFile: false,
+        photo: inputImages && widget.onImageAttachment != null,
+        camera: inputImages && widget.onCameraCapture != null,
+        web: false,
+      );
+    }
+
+    final directMode = model != null && hasReservedDirectIdentity(model);
+    final imageInputAvailable =
+        model != null &&
+        ref.read(visionCapableModelsProvider).contains(model.id);
+    final fileInputAvailable =
+        model != null &&
+        ref.read(fileUploadCapableModelsProvider).contains(model.id);
+    final mcpContentAvailable =
+        directMode &&
+        ref
+            .read(directMcpServersProvider)
+            .maybeWhen(
+              data: (servers) => servers.any((server) => server.enabled),
+              orElse: () => false,
+            );
     return ComposerOverflowAttachmentAvailability(
-      file: widget.onFileAttachment != null,
-      serverFile: widget.onServerFileAttachment != null,
-      photo: widget.onImageAttachment != null,
-      camera: widget.onCameraCapture != null,
-      web: widget.onWebAttachment != null,
+      file: fileInputAvailable && widget.onFileAttachment != null,
+      serverFile:
+          !directMode &&
+          fileInputAvailable &&
+          widget.onServerFileAttachment != null,
+      photo: imageInputAvailable && widget.onImageAttachment != null,
+      camera: imageInputAvailable && widget.onCameraCapture != null,
+      web: !directMode && widget.onWebAttachment != null,
+      mcpContent: mcpContentAvailable,
     );
   }
 
@@ -1765,46 +2855,79 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
     required bool imageGenerationEnabled,
     required List<Tool> availableTools,
     required List<String> selectedToolIds,
+    required List<ToggleFilter> availableFilters,
+    required List<String> selectedFilterIds,
+    required ComposerPersonalConnections connections,
+    required bool toolSettingsAvailable,
+    required bool compareModelsAvailable,
+    required bool hasMessage,
+    required CodeInterpreterOffer? codeInterpreter,
   }) {
     if (kIsWeb || !Platform.isIOS) {
       return const <IosKeyboardAttachmentActionConfig>[];
     }
 
-    return buildComposerOverflowItems(
+    final selectedModel = ref.read(selectedModelProvider);
+    final hermesMode = selectedModel != null && isHermesModel(selectedModel);
+
+    final directMode =
+        selectedModel != null && hasReservedDirectIdentity(selectedModel);
+
+    return buildIosKeyboardAttachmentActions(
       l10n: l10n,
       attachmentAvailability: _overflowAttachmentAvailability,
+      hermesMode: hermesMode,
+      directMode: directMode,
       webSearchAvailable: webSearchAvailable,
       webSearchEnabled: webSearchEnabled,
       imageGenerationAvailable: imageGenerationAvailable,
       imageGenerationEnabled: imageGenerationEnabled,
       availableTools: availableTools,
       selectedToolIds: selectedToolIds,
-    ).map(_nativeKeyboardAttachmentActionFromItem).toList(growable: false);
-  }
-
-  IosKeyboardAttachmentActionConfig _nativeKeyboardAttachmentActionFromItem(
-    ComposerOverflowItem item,
-  ) {
-    return IosKeyboardAttachmentActionConfig(
-      id: item.id,
-      label: item.label,
-      subtitle: item.subtitle,
-      sfSymbol: item.sfSymbol,
-      section: item.section.nativeValue,
-      enabled: item.enabled,
-      selected: item.selected,
-      dismissesKeyboard: item.dismissesKeyboard,
+      availableFilters: availableFilters,
+      selectedFilterIds: selectedFilterIds,
+      connections: connections,
+      toolSettingsAvailable: toolSettingsAvailable,
+      compareModelsAvailable: compareModelsAvailable,
+      hasMessage: hasMessage,
+      codeInterpreter: codeInterpreter,
     );
   }
 
+  /// Personal connections for the native panel; none for the model families
+  /// that have no Open WebUI account behind them.
+  ComposerPersonalConnections _currentNativeConnections() {
+    final selectedModel = ref.read(selectedModelProvider);
+    if (selectedModel != null &&
+        (isHermesModel(selectedModel) ||
+            hasReservedDirectIdentity(selectedModel))) {
+      return ComposerPersonalConnections.none;
+    }
+    return readComposerPersonalConnections(ref.read);
+  }
+
   List<IosKeyboardAttachmentActionConfig>
-  _currentNativeKeyboardAttachmentActions({required AppLocalizations l10n}) {
-    final availableTools = ref
-        .read(toolsListProvider)
-        .maybeWhen<List<Tool>>(
-          data: (tools) => tools,
-          orElse: () => const <Tool>[],
+  _currentNativeKeyboardAttachmentActions({
+    required AppLocalizations l10n,
+    required ComposerPersonalConnections connections,
+  }) {
+    final selectedModel = ref.read(selectedModelProvider);
+    final directMode =
+        selectedModel != null && hasReservedDirectIdentity(selectedModel);
+    final directToolsAvailable =
+        directMode &&
+        directBindingSupportsLocalMcp(
+          ref.read(directModelRegistryProvider).resolve(selectedModel),
         );
+    final tools = directMode
+        ? (directToolsAvailable
+              ? ref.read(directMcpToolsProvider)
+              : const AsyncData<List<Tool>>([]))
+        : ref.read(toolsListProvider);
+    final availableTools = tools.maybeWhen<List<Tool>>(
+      data: (tools) => tools,
+      orElse: () => const <Tool>[],
+    );
 
     return _nativeKeyboardAttachmentActions(
       l10n: l10n,
@@ -1814,6 +2937,14 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
       imageGenerationEnabled: ref.read(imageGenerationEnabledProvider),
       availableTools: availableTools,
       selectedToolIds: ref.read(selectedToolIdsProvider),
+      availableFilters:
+          ref.read(selectedModelProvider)?.filters ?? const <ToggleFilter>[],
+      selectedFilterIds: ref.read(selectedFilterIdsProvider),
+      connections: connections,
+      toolSettingsAvailable: ref.read(personalValvesCommandAvailableProvider),
+      compareModelsAvailable: _comparisonCommandAvailable(ref.read),
+      hasMessage: _controller.text.trim().isNotEmpty,
+      codeInterpreter: ref.read(codeInterpreterOfferProvider),
     );
   }
 
@@ -1832,11 +2963,21 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
         return;
       }
 
-      final actions = _currentNativeKeyboardAttachmentActions(l10n: l10n);
+      final connections = _currentNativeConnections();
+      final actions = _currentNativeKeyboardAttachmentActions(
+        l10n: l10n,
+        connections: connections,
+      );
       if (actions.isEmpty) {
+        // An empty configuration is intentionally ignored by the bridge. Hide
+        // an already-open panel when the newly selected model (for example,
+        // Hermes) supports no native attachment actions.
+        _nativeConnectionsOwner = null;
+        unawaited(IosKeyboardAttachmentBridge.instance.hide());
         return;
       }
 
+      _nativeConnectionsOwner = connections.owner;
       unawaited(
         IosKeyboardAttachmentBridge.instance.configure(actions: actions),
       );
@@ -1849,6 +2990,8 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
     ConduitHaptics.selectionClick();
 
     if (!kIsWeb && Platform.isIOS && nativeActions.isNotEmpty) {
+      // These actions were built by the latest build, for its account.
+      _nativeConnectionsOwner = _builtNativeConnectionsOwner;
       final handled = await _toggleNativeKeyboardAttachmentPanel(nativeActions);
       if (handled) {
         return;
@@ -1856,8 +2999,101 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
     }
 
     if (mounted && !_isDeactivated) {
-      _showOverflowSheet();
+      _toggleFallbackAttachmentPanel();
     }
+  }
+
+  void _toggleFallbackAttachmentPanel() {
+    if (!widget.enabled || _isRecording) return;
+
+    if (_isFallbackAttachmentPanelVisible) {
+      final restoreKeyboard = _fallbackPanelReplacedKeyboard;
+      if (restoreKeyboard) {
+        if (widget.managesSystemKeyboardInset) {
+          setState(() {
+            _fallbackPanelWaitingForKeyboard = true;
+          });
+        }
+        _restoreSystemKeyboard(preferImmediate: true);
+      }
+      if (!restoreKeyboard || !widget.managesSystemKeyboardInset) {
+        _dismissFallbackAttachmentPanel();
+      }
+      return;
+    }
+
+    final keyboardHeight = MediaQuery.viewInsetsOf(context).bottom;
+    final platformView = View.of(context);
+    final bottomSafeInset =
+        platformView.viewPadding.bottom / platformView.devicePixelRatio;
+    final availableHeight = MediaQuery.sizeOf(context).height;
+    final preferredHeight = fallbackAttachmentPanelHeight(
+      keyboardHeight: keyboardHeight,
+      bottomSafeInset: bottomSafeInset,
+      retainedSafeAreaOverlap: Spacing.xxs,
+      availableHeight: availableHeight,
+    );
+
+    setState(() {
+      _fallbackPanelReplacedKeyboard = _focusNode.hasFocus;
+      _fallbackAttachmentPanelHeight = widget.managesSystemKeyboardInset
+          ? (keyboardHeight > 0 ? keyboardHeight + Spacing.sm : preferredHeight)
+          : preferredHeight;
+      _isFallbackAttachmentPanelVisible = true;
+      _fallbackPanelWaitingForKeyboard = false;
+    });
+    try {
+      ref.read(composerHasFocusProvider.notifier).set(true);
+    } catch (_) {}
+    // Preserve the EditableText input connection while replacing the IME
+    // region. This mirrors iOS input-view swapping and avoids a visible
+    // focus loss when the attachment keyboard opens.
+    if (_fallbackPanelReplacedKeyboard) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_isFallbackAttachmentPanelVisible) return;
+        try {
+          unawaited(
+            SystemChannels.textInput.invokeMethod<void>('TextInput.hide'),
+          );
+        } catch (_) {}
+      });
+    }
+  }
+
+  void _dismissFallbackAttachmentPanel() {
+    if (!_isFallbackAttachmentPanelVisible) return;
+    setState(() {
+      _isFallbackAttachmentPanelVisible = false;
+      _fallbackPanelReplacedKeyboard = false;
+      _fallbackPanelWaitingForKeyboard = false;
+    });
+    try {
+      ref.read(composerHasFocusProvider.notifier).set(_focusNode.hasFocus);
+    } catch (_) {}
+  }
+
+  void _restoreSystemKeyboard({bool preferImmediate = false}) {
+    if (!mounted || _isDeactivated || !widget.enabled) return;
+    try {
+      ref.read(composerAutofocusEnabledProvider.notifier).set(true);
+    } catch (_) {}
+    _ensureFocusedIfEnabled();
+    if (preferImmediate && _focusNode.hasFocus) {
+      try {
+        unawaited(
+          SystemChannels.textInput.invokeMethod<void>('TextInput.show'),
+        );
+      } catch (_) {}
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _isDeactivated || !widget.enabled) return;
+      try {
+        unawaited(
+          SystemChannels.textInput.invokeMethod<void>('TextInput.show'),
+        );
+      } catch (_) {}
+    });
   }
 
   Future<bool> _toggleNativeKeyboardAttachmentPanel(
@@ -1888,13 +3124,39 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
     await IosKeyboardAttachmentBridge.instance.hide();
   }
 
+  Future<void> _hideAttachmentPanels({
+    bool restoreFallbackKeyboard = false,
+  }) async {
+    final shouldRestoreFallbackKeyboard =
+        restoreFallbackKeyboard && _isFallbackAttachmentPanelVisible;
+    if (shouldRestoreFallbackKeyboard) {
+      if (widget.managesSystemKeyboardInset && _fallbackPanelReplacedKeyboard) {
+        setState(() {
+          _fallbackPanelWaitingForKeyboard = true;
+        });
+      }
+      _restoreSystemKeyboard(preferImmediate: true);
+    }
+    if (_isFallbackAttachmentPanelVisible &&
+        (!_fallbackPanelWaitingForKeyboard ||
+            !widget.managesSystemKeyboardInset)) {
+      _dismissFallbackAttachmentPanel();
+    }
+    await _hideNativeKeyboardAttachmentPanel();
+  }
+
   @override
   Widget build(BuildContext context) {
     ref.listen<bool>(composerAutofocusEnabledProvider, (previous, next) {
-      if ((previous ?? true) && !next && _focusNode.hasFocus) {
+      if ((previous ?? true) && !next) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (!mounted || _isDeactivated) return;
-          _focusNode.unfocus();
+          if (_focusNode.hasFocus) {
+            _focusNode.unfocus();
+          }
+          if (_isFallbackAttachmentPanelVisible) {
+            _dismissFallbackAttachmentPanel();
+          }
         });
       }
     });
@@ -1942,15 +3204,30 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
     ref.listen<bool>(imageGenerationEnabledProvider, (previous, next) {
       _scheduleNativeKeyboardAttachmentSync();
     });
+    ref.listen<CodeInterpreterOffer?>(codeInterpreterOfferProvider, (
+      previous,
+      next,
+    ) {
+      _scheduleNativeKeyboardAttachmentSync();
+    });
     ref.listen<List<String>>(selectedToolIdsProvider, (previous, next) {
+      _scheduleNativeKeyboardAttachmentSync();
+    });
+    ref.listen<List<String>>(selectedFilterIdsProvider, (previous, next) {
       _scheduleNativeKeyboardAttachmentSync();
     });
     ref.listen<AsyncValue<List<Tool>>>(toolsListProvider, (previous, next) {
       _scheduleNativeKeyboardAttachmentSync();
     });
+    ref.listen<Model?>(selectedModelProvider, (previous, next) {
+      _scheduleNativeKeyboardAttachmentSync();
+    });
+    ref.listen(hermesCapabilitiesProvider, (previous, next) {
+      _scheduleNativeKeyboardAttachmentSync();
+    });
 
     // Use dedicated streaming provider to avoid rebuilding on every message change
-    final isGenerating = ref.watch(isChatStreamingProvider);
+    final localTurnIsGenerating = ref.watch(isChatStreamingProvider);
     final stopGeneration = ref.read(stopGenerationProvider);
 
     // Watch only upload send-state booleans so metadata/progress churn does not
@@ -1976,6 +3253,7 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
     final webSearchAvailable = ref.watch(webSearchAvailableProvider);
     final imageGenEnabled = ref.watch(imageGenerationEnabledProvider);
     final imageGenAvailable = ref.watch(imageGenerationAvailableProvider);
+    final codeInterpreterOffer = ref.watch(codeInterpreterOfferProvider);
     final l10n = AppLocalizations.of(context)!;
     final notesEnabled = ref.watch(notesFeatureEnabledProvider);
     final isCreatingDraftNote = ref.watch(
@@ -1987,11 +3265,48 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
     final sendOnEnter = ref.watch(
       appSettingsProvider.select((s) => s.sendOnEnter),
     );
-    final toolsAsync = ref.watch(toolsListProvider);
-    final List<Tool> availableTools = toolsAsync.maybeWhen<List<Tool>>(
-      data: (t) => t,
-      orElse: () => const <Tool>[],
-    );
+    final selectedComposerModel = ref.watch(selectedModelProvider);
+    final isDirectComposer =
+        selectedComposerModel != null &&
+        hasReservedDirectIdentity(selectedComposerModel);
+    final directToolsAvailable =
+        isDirectComposer &&
+        directBindingSupportsLocalMcp(
+          ref.watch(directModelRegistryProvider).resolve(selectedComposerModel),
+        );
+    final toolsAsync = isDirectComposer
+        ? const AsyncData<List<Tool>>([])
+        : ref.watch(toolsListProvider);
+    final directMcpToolsAsync = directToolsAvailable
+        ? ref.watch(directMcpToolsProvider)
+        : const AsyncData<List<Tool>>([]);
+    if (isDirectComposer) {
+      ref.listen<AsyncValue<List<Tool>>>(directMcpToolsProvider, (
+        previous,
+        next,
+      ) {
+        _scheduleNativeKeyboardAttachmentSync();
+      });
+      ref.watch(directMcpServersProvider);
+    } else if (!kIsWeb &&
+        Platform.isIOS &&
+        !(selectedComposerModel != null &&
+            isHermesModel(selectedComposerModel))) {
+      // The native panel offers the account's personal tool servers and
+      // terminals, so it follows their settings, availability and owner.
+      ref.listen(personalConnectionsSessionProvider, (previous, next) {
+        _scheduleNativeKeyboardAttachmentSync();
+      });
+      ref.listen(personalConnectionsProvider, (previous, next) {
+        _scheduleNativeKeyboardAttachmentSync();
+      });
+      ref.listen(terminalAvailableServersProvider, (previous, next) {
+        _scheduleNativeKeyboardAttachmentSync();
+      });
+      ref.listen<String?>(selectedTerminalIdProvider, (previous, next) {
+        _scheduleNativeKeyboardAttachmentSync();
+      });
+    }
     final bool showWebPill = selectedQuickPills.contains('web');
     final bool showImagePillPref = selectedQuickPills.contains('image');
     final voiceAvailableAsync = ref.watch(voiceInputAvailableProvider);
@@ -2000,7 +3315,6 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
       orElse: () => false,
     );
     final selectedToolIds = ref.watch(selectedToolIdsProvider);
-    final selectedTerminalId = ref.watch(selectedTerminalIdProvider);
     final selectedFilterIds = ref.watch(selectedFilterIdsProvider);
 
     // Get filters from the selected model for quick pills
@@ -2009,10 +3323,75 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
         (model) => model?.filters ?? const <ToggleFilter>[],
       ),
     );
-    final terminalModelSupported = ref.watch(
-      selectedModelProvider.select(modelSupportsTerminal),
+    // Hermes uses its own `/` skills and only exposes local attachment actions.
+    // Keep OpenWebUI quick pills hidden while allowing the attachment button to
+    // follow the server's explicit image-input capability.
+    final bool isHermesComposer = ref.watch(
+      selectedModelProvider.select((m) => m != null && isHermesModel(m)),
     );
-    final terminalActive = selectedTerminalId != null && terminalModelSupported;
+    final bool isDesktopHermesComposer =
+        isHermesComposer &&
+        ref.watch(hermesConfigProvider.select((config) => config.mode)) ==
+            HermesBackendMode.desktopGateway;
+    final desktopTurnState = ref
+        .watch(hermesDesktopTurnStateProvider)
+        .asData
+        ?.value;
+    final isGenerating =
+        localTurnIsGenerating ||
+        (isDesktopHermesComposer &&
+            desktopTurnState == HermesDesktopTurnState.running);
+    final desktopTurnControlsSupported =
+        !isDesktopHermesComposer ||
+        desktopTurnState != HermesDesktopTurnState.unsupportedGateway;
+    // Watching the capabilities value makes a loading -> data transition
+    // rebuild the composer. Attachment access still fails closed below.
+    ref.watch(hermesCapabilitiesProvider);
+    final visionCapableModelIds = ref.watch(visionCapableModelsProvider);
+    ref.watch(fileUploadCapableModelsProvider);
+    final attachmentAvailability = _overflowAttachmentAvailability;
+    final List<Tool> availableTools =
+        (isDirectComposer ? directMcpToolsAsync : toolsAsync)
+            .maybeWhen<List<Tool>>(
+              data: (tools) => tools,
+              orElse: () => const <Tool>[],
+            );
+    final directSupportsImages =
+        !isDirectComposer ||
+        (visionCapableModelIds.contains(selectedComposerModel.id) &&
+            (attachmentAvailability.photo || attachmentAvailability.camera));
+    final showOverflowButton = shouldShowComposerOverflowButton(
+      isHermesComposer: isHermesComposer,
+      isDirectComposer: isDirectComposer,
+      directSupportsImages: directSupportsImages,
+      directHasOverflowActions:
+          attachmentAvailability.file ||
+          attachmentAvailability.mcpContent ||
+          webSearchAvailable ||
+          imageGenAvailable ||
+          (isDirectComposer && availableTools.isNotEmpty),
+      hermesHasLocalAttachmentActions:
+          attachmentAvailability.file ||
+          attachmentAvailability.photo ||
+          attachmentAvailability.camera,
+    );
+    final compactControls = _compactComposerControls(
+      showOverflowButton: showOverflowButton,
+      voiceAvailable: voiceAvailable,
+      isGenerating: isGenerating,
+    );
+    if (_isFallbackAttachmentPanelVisible && !showOverflowButton) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && !_isDeactivated) {
+          _dismissFallbackAttachmentPanel();
+        }
+      });
+    }
+    final nativeConnections =
+        !kIsWeb && Platform.isIOS && !isHermesComposer && !isDirectComposer
+        ? readComposerPersonalConnections(ref.watch)
+        : ComposerPersonalConnections.none;
+    _builtNativeConnectionsOwner = nativeConnections.owner;
     final nativeAttachmentActions = _nativeKeyboardAttachmentActions(
       l10n: l10n,
       webSearchAvailable: webSearchAvailable,
@@ -2021,6 +3400,13 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
       imageGenerationEnabled: imageGenEnabled,
       availableTools: availableTools,
       selectedToolIds: selectedToolIds,
+      availableFilters: availableFilters,
+      selectedFilterIds: selectedFilterIds,
+      connections: nativeConnections,
+      toolSettingsAvailable: ref.watch(personalValvesCommandAvailableProvider),
+      compareModelsAvailable: _comparisonCommandAvailable(ref.watch),
+      hasMessage: _hasText,
+      codeInterpreter: codeInterpreterOffer,
     );
 
     final focusTick = ref.watch(inputFocusTriggerProvider);
@@ -2040,8 +3426,8 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
     _controller.mentionColor = mentionColor;
     _controller.mentionBackground = mentionColor.withValues(alpha: 0.12);
 
-    final bool hasComposerFocus = _focusNode.hasFocus;
-    final bool isActive = hasComposerFocus || _hasText;
+    final bool hasComposerFocus = _hasComposerFocus;
+    final bool isActive = hasComposerFocus || _hasText || _isRecording;
     final Color placeholderColor = context.conduitTheme.textSecondary
         .withValues(alpha: 0.5);
     final Color placeholderBase = placeholderColor;
@@ -2049,6 +3435,10 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
     final List<Widget> quickPills = <Widget>[];
 
     for (final id in selectedQuickPills) {
+      if (isHermesComposer || isDirectComposer) {
+        break;
+      }
+      final filterId = ComposerOverflowActionIds.filterIdFrom(id);
       if (id == 'web' && showWebPill && webSearchAvailable) {
         final String label = AppLocalizations.of(context)!.web;
         final IconData icon = Platform.isIOS
@@ -2074,8 +3464,11 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
             ? CupertinoIcons.photo
             : Icons.image;
         void handleTap() {
-          final notifier = ref.read(imageGenerationEnabledProvider.notifier);
-          notifier.set(!imageGenEnabled);
+          setComposerOverflowSelection(
+            ref,
+            actionId: ComposerOverflowActionIds.imageGeneration,
+            selected: !imageGenEnabled,
+          );
         }
 
         quickPills.add(
@@ -2087,9 +3480,8 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
             onTap: widget.enabled && !_isRecording ? handleTap : null,
           ),
         );
-      } else if (id.startsWith('filter:')) {
+      } else if (filterId != null) {
         // Handle filter quick pills
-        final filterId = id.substring(7); // Remove 'filter:' prefix
         ToggleFilter? filter;
         for (final f in availableFilters) {
           if (f.id == filterId) {
@@ -2158,125 +3550,232 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
       }
     }
 
-    final bool showCompactComposer = quickPills.isEmpty;
+    // A chosen code interpreter stays in view, and can be turned off here,
+    // even when it can no longer run. Then it reads as inactive, with a
+    // warning glyph, and a tap says why before offering to turn it off.
+    if (codeInterpreterOffer?.selected == true &&
+        !isHermesComposer &&
+        !isDirectComposer) {
+      final block = codeInterpreterOffer!.block;
+      final blockReason = block == null
+          ? null
+          : codeInterpreterBlockReason(l10n, block);
+      quickPills.add(
+        _buildPillButton(
+          key: const ValueKey<String>('composer-code-interpreter-pill'),
+          icon: blockReason != null
+              ? (Platform.isIOS
+                    ? CupertinoIcons.exclamationmark_triangle
+                    : Icons.warning_amber_rounded)
+              : (Platform.isIOS
+                    ? CupertinoIcons.chevron_left_slash_chevron_right
+                    : Icons.code),
+          iconColor: blockReason != null ? context.conduitTheme.warning : null,
+          label: l10n.codeInterpreter,
+          isActive: blockReason == null,
+          dense: true,
+          semanticsHint: blockReason,
+          onTap: !widget.enabled || _isRecording
+              ? null
+              : blockReason != null
+              ? () => _explainBlockedCodeInterpreter(blockReason)
+              : () => setComposerOverflowSelection(
+                  ref,
+                  actionId: ComposerOverflowActionIds.codeInterpreter,
+                  selected: false,
+                ),
+        ),
+      );
+    }
+
+    // Keep focused single-line input compact. Move to the two-tier shell only
+    // when the text becomes multiline or selected quick pills need a row.
+    // At accessibility text sizes, keeping the growing controls and editable
+    // text in one row can leave too little width for even the placeholder.
+    // Use the existing two-tier layout so Dynamic Type remains uncapped and
+    // every control keeps its full touch target.
+    // A message typed during a response can be queued, which needs room for the
+    // Queue action beside Stop, as Hermes's turn actions do.
+    final bool showQueueAction =
+        _hasText && isGenerating && ref.watch(chatDraftQueueOfferProvider);
+    final bool showCompactComposer =
+        conduitSystemControlScaleOf(context) <=
+            _maxCompactComposerControlScale &&
+        quickPills.isEmpty &&
+        !_isMultiline &&
+        !showQueueAction &&
+        !(isDesktopHermesComposer && isGenerating && _hasText);
     final bool showCreateDraftNoteAction =
         !showCompactComposer &&
         notesEnabled &&
         _hasText &&
         !isGenerating &&
         !_isRecording;
+    final bool showInlineMicAction =
+        !_isRecording && !_hasText && voiceAvailable && !isGenerating;
 
-    // Keep iOS 26 single-line composer as capsule.
-    final double compactRadius = _isMultiline
-        ? AppBorderRadius.xl
-        : AppBorderRadius.round;
+    const double compactRadius = AppBorderRadius.round;
     const double expandedRadius = _composerRadius;
     final BorderRadius shellRadius = BorderRadius.circular(
       showCompactComposer ? compactRadius : expandedRadius,
     );
 
-    final List<Widget> composerChildren = <Widget>[
-      if (_showPromptOverlay)
-        Padding(
-          key: const ValueKey('prompt-overlay'),
-          padding: const EdgeInsets.fromLTRB(
-            Spacing.sm,
-            0,
-            Spacing.sm,
-            Spacing.xs,
+    late final Widget shellContent;
+    Widget? compactPromptOverlay;
+
+    if (!showCompactComposer) {
+      final List<Widget> composerChildren = <Widget>[
+        if (_shouldShowPromptOverlay)
+          Padding(
+            key: const ValueKey('prompt-overlay'),
+            padding: const EdgeInsets.fromLTRB(
+              Spacing.sm,
+              0,
+              Spacing.sm,
+              Spacing.xs,
+            ),
+            child: _buildActiveOverlay(),
           ),
-          child: _buildActiveOverlay(),
-        ),
-      if (!showCompactComposer) ...[
         Padding(
           key: const ValueKey('composer-expanded-input'),
           padding: const EdgeInsets.fromLTRB(
-            Spacing.md,
+            _composerHorizontalInset,
             Spacing.sm,
-            Spacing.md,
+            _composerHorizontalInset,
             Spacing.sm,
           ),
           child: Stack(
-            clipBehavior: Clip.none,
             children: [
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  Expanded(
-                    child: _buildComposerTextField(
-                      brightness: brightness,
-                      sendOnEnter: sendOnEnter,
-                      voiceAvailable: voiceAvailable,
-                      isGenerating: isGenerating,
-                      allUploadsComplete: allUploadsComplete,
-                      placeholderBase: placeholderBase,
-                      placeholderFocused: placeholderFocused,
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: Spacing.sm,
-                        vertical: Spacing.xs,
-                      ),
-                      isActive: isActive,
-                    ),
+              Padding(
+                padding: EdgeInsetsDirectional.only(
+                  end: _showExpandButton && !_expandModalOpen
+                      ? conduitScaledIconExtent(context, IconSize.large) +
+                            (Spacing.xs * 3)
+                      : 0,
+                ),
+                child: _buildComposerTextField(
+                  brightness: brightness,
+                  sendOnEnter: sendOnEnter,
+                  voiceAvailable: voiceAvailable,
+                  isGenerating: isGenerating,
+                  desktopTurnRunning:
+                      isDesktopHermesComposer &&
+                      desktopTurnState == HermesDesktopTurnState.running,
+                  allUploadsComplete: allUploadsComplete,
+                  placeholderBase: placeholderBase,
+                  placeholderFocused: placeholderFocused,
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: Spacing.sm,
+                    vertical: Spacing.xs,
                   ),
-                ],
-              ),
-              Positioned(
-                top: Spacing.xs,
-                right: Spacing.xs,
-                child: AnimatedOpacity(
-                  opacity: (_showExpandButton && !_expandModalOpen) ? 1.0 : 0.0,
-                  duration: const Duration(milliseconds: 160),
-                  child: IgnorePointer(
-                    ignoring: !_showExpandButton || _expandModalOpen,
-                    child: _buildExpandButton(_showExpandTextModal),
-                  ),
+                  isActive: isActive,
                 ),
               ),
+              if (_showExpandButton && !_expandModalOpen)
+                PositionedDirectional(
+                  top: Spacing.xs,
+                  end: Spacing.xs,
+                  child: _buildExpandButton(_showExpandTextModal),
+                ),
             ],
           ),
         ),
         Padding(
           key: const ValueKey('composer-expanded-buttons'),
           padding: const EdgeInsets.fromLTRB(
-            Spacing.inputPadding,
+            _composerHorizontalInset,
             0,
-            Spacing.sm,
-            Spacing.sm,
+            _composerHorizontalInset,
+            _composerActionRowBottomInset,
           ),
           child: Row(
             children: [
-              _buildOverflowButton(
-                tooltip: l10n.more,
-                webSearchActive: webSearchEnabled && webSearchAvailable,
-                imageGenerationActive: imageGenEnabled && imageGenAvailable,
-                toolsActive: selectedToolIds.isNotEmpty,
-                terminalActive: terminalActive,
-                filtersActive: selectedFilterIds.isNotEmpty,
-                dense: true,
-                nativeActions: nativeAttachmentActions,
-              ),
-              const SizedBox(width: Spacing.xs),
-              Expanded(
-                child: ClipRect(
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    physics: const BouncingScrollPhysics(),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: _withHorizontalSpacing(quickPills, Spacing.xxs),
+              if (_isRecording) ...[
+                _buildDictationStopButton(size: _composerControlSize),
+                const SizedBox(width: Spacing.xs),
+              ] else if (showOverflowButton) ...[
+                _buildOverflowButton(
+                  tooltip: l10n.more,
+                  dense: true,
+                  nativeActions: nativeAttachmentActions,
+                ),
+                const SizedBox(width: Spacing.xs),
+              ],
+              if (quickPills.isNotEmpty)
+                Expanded(
+                  child: HorizontalOverflowFade(
+                    child: HorizontalScrollGestureBoundary(
+                      child: SingleChildScrollView(
+                        key: const ValueKey('composer-quick-pills'),
+                        scrollDirection: Axis.horizontal,
+                        physics: const BouncingScrollPhysics(),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: _withHorizontalSpacing(
+                            quickPills,
+                            Spacing.xxs,
+                          ),
+                        ),
+                      ),
                     ),
                   ),
+                )
+              else
+                const Spacer(),
+              if (isDesktopHermesComposer &&
+                  desktopTurnControlsSupported &&
+                  desktopTurnState == HermesDesktopTurnState.running &&
+                  _hasText) ...[
+                _buildPillButton(
+                  icon: Icons.turn_right_rounded,
+                  label: l10n.hermesTurnSteer,
+                  isActive: true,
+                  dense: true,
+                  onTap:
+                      widget.enabled &&
+                          !_isRecording &&
+                          !_desktopQueueActionBusy
+                      ? () => unawaited(_sendDesktopBusyMessage(steer: true))
+                      : null,
                 ),
-              ),
+                const SizedBox(width: Spacing.xs),
+                _buildPillButton(
+                  icon: Icons.queue_rounded,
+                  label: l10n.hermesTurnSendNext,
+                  isActive: false,
+                  dense: true,
+                  onTap:
+                      widget.enabled &&
+                          !_isRecording &&
+                          !_desktopQueueActionBusy
+                      ? () => unawaited(_sendDesktopBusyMessage(steer: false))
+                      : null,
+                ),
+              ],
+              if (showQueueAction) ...[
+                _buildPillButton(
+                  icon: Platform.isIOS
+                      ? CupertinoIcons.list_bullet
+                      : Icons.queue_rounded,
+                  label: l10n.queueDraftAction,
+                  isActive: true,
+                  dense: true,
+                  // _queueDraft gives the one haptic, and only if it queued.
+                  haptic: false,
+                  onTap: widget.enabled && !_isRecording ? _queueDraft : null,
+                ),
+                const SizedBox(width: Spacing.xs),
+              ],
               if (showCreateDraftNoteAction) ...[
                 const SizedBox(width: Spacing.xs),
                 _buildCreateDraftNoteButton(isLoading: isCreatingDraftNote),
               ],
-              if (!_hasText && voiceAvailable && !isGenerating) ...[
+              if (showInlineMicAction) ...[
                 const SizedBox(width: Spacing.xs),
                 _buildInlineMicAction(voiceAvailable),
               ],
-              const SizedBox(width: Spacing.xs),
+              if (!showCreateDraftNoteAction && !showInlineMicAction)
+                const SizedBox(width: Spacing.xs),
               _buildPrimaryButton(
                 _hasText,
                 isGenerating,
@@ -2289,68 +3788,96 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
             ],
           ),
         ),
-      ],
-    ];
+      ];
 
-    // For compact mode, render text field shell with floating buttons on sides
-    if (showCompactComposer) {
-      final textFieldContent = Container(
-        padding: EdgeInsets.fromLTRB(
-          Spacing.md,
-          0,
-          Spacing.sm,
-          Platform.isIOS && _isMultiline ? Spacing.sm : 0,
+      // Multiline and quick-pill states use the full two-tier shell.
+      shellContent = KeyedSubtree(
+        key: const ValueKey('expanded-composer-shell'),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.4,
+          ),
+          // Keep text-entry height changes direct. AnimatedSize here runs on
+          // each new or removed line, making the composer trail the user's
+          // typing and repeatedly relaying out the chat viewport.
+          child: SingleChildScrollView(
+            physics: const ClampingScrollPhysics(),
+            child: RepaintBoundary(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: composerChildren,
+              ),
+            ),
+          ),
         ),
-        constraints: const BoxConstraints(minHeight: TouchTarget.input),
+      );
+    } else {
+      // Compact mode keeps every action inside one full-width shell. Matching
+      // control sizes and insets make the resting row mirror the focused shell.
+      final textFieldContent = Container(
+        key: const ValueKey('compact-composer-content'),
+        height: conduitScaledControlExtent(
+          context,
+          baseExtent: _composerControlSize,
+        ),
+        padding: const EdgeInsets.fromLTRB(
+          _composerHorizontalInset,
+          0,
+          _composerHorizontalInset,
+          _composerActionRowBottomInset,
+        ),
         alignment: Alignment.center,
         child: Stack(
           clipBehavior: Clip.none,
           children: [
             Row(
-              crossAxisAlignment: _isMultiline
-                  ? CrossAxisAlignment.end
-                  : CrossAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
+                if (_isRecording) ...[
+                  _buildDictationStopButton(size: _composerControlSize),
+                  const SizedBox(width: Spacing.xs),
+                ] else if (compactControls.showLeading) ...[
+                  _buildOverflowButton(
+                    tooltip: l10n.more,
+                    dense: true,
+                    nativeActions: nativeAttachmentActions,
+                  ),
+                  const SizedBox(width: Spacing.xs),
+                ],
                 Expanded(
-                  child: Padding(
-                    padding: EdgeInsets.only(
-                      bottom: Platform.isAndroid && _isMultiline
-                          ? Spacing.sm
-                          : 0,
+                  child: _buildComposerTextField(
+                    brightness: brightness,
+                    sendOnEnter: sendOnEnter,
+                    voiceAvailable: voiceAvailable,
+                    isGenerating: isGenerating,
+                    desktopTurnRunning:
+                        isDesktopHermesComposer &&
+                        desktopTurnState == HermesDesktopTurnState.running,
+                    allUploadsComplete: allUploadsComplete,
+                    placeholderBase: placeholderBase,
+                    placeholderFocused: placeholderFocused,
+                    contentPadding: const EdgeInsets.symmetric(
+                      vertical: Spacing.xs,
                     ),
-                    child: _buildComposerTextField(
-                      brightness: brightness,
-                      sendOnEnter: sendOnEnter,
-                      voiceAvailable: voiceAvailable,
-                      isGenerating: isGenerating,
-                      allUploadsComplete: allUploadsComplete,
-                      placeholderBase: placeholderBase,
-                      placeholderFocused: placeholderFocused,
-                      contentPadding: const EdgeInsets.symmetric(
-                        vertical: Spacing.xs,
-                      ),
-                      isActive: isActive,
-                    ),
+                    isActive: isActive,
                   ),
                 ),
-                if (!_hasText && voiceAvailable && !isGenerating) ...[
+                if (compactControls.showMic) ...[
                   const SizedBox(width: Spacing.xs),
-                  Platform.isAndroid
-                      ? Transform.translate(
-                          offset: const Offset(Spacing.xxs, 0),
-                          child: _buildInlineMicAction(
-                            voiceAvailable,
-                            size: 36.0,
-                          ),
-                        )
-                      : SizedBox(
-                          height: 36.0,
-                          child: Center(
-                            child: _buildInlineMicAction(voiceAvailable),
-                          ),
-                        ),
+                  SizedBox(
+                    height: conduitScaledControlExtent(
+                      context,
+                      baseExtent: _composerControlSize,
+                    ),
+                    child: Center(
+                      child: _buildInlineMicAction(
+                        voiceAvailable,
+                        size: _composerControlSize,
+                      ),
+                    ),
+                  ),
                 ],
-                SizedBox(width: Platform.isAndroid ? 0 : Spacing.xs),
+                if (!compactControls.showMic) const SizedBox(width: Spacing.xs),
                 _buildPrimaryButton(
                   _hasText,
                   isGenerating,
@@ -2362,108 +3889,186 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
                 ),
               ],
             ),
-            Positioned(
-              top: Spacing.xs,
-              right: 0,
-              child: AnimatedOpacity(
-                opacity: (_showExpandButton && !_expandModalOpen) ? 1.0 : 0.0,
-                duration: const Duration(milliseconds: 160),
-                child: IgnorePointer(
-                  ignoring: !_showExpandButton || _expandModalOpen,
-                  child: _buildExpandButton(_showExpandTextModal),
-                ),
-              ),
-            ),
           ],
         ),
       );
 
-      final Widget textFieldShell = _buildComposerShell(
+      shellContent = KeyedSubtree(
         key: const ValueKey('compact-composer-shell'),
-        borderRadius: shellRadius,
-        useSmoothRectangleBorder: _isMultiline,
         child: textFieldContent,
       );
-
-      final bottomPadding = _composerBottomPadding(context);
-      return Padding(
-        padding: EdgeInsets.fromLTRB(
-          Spacing.screenPadding,
-          0,
-          Spacing.screenPadding,
-          bottomPadding,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Show prompt overlay above the compact input row when active
-            if (_showPromptOverlay)
-              Padding(
-                padding: const EdgeInsets.only(bottom: Spacing.xs),
-                child: _buildActiveOverlay(),
-              ),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                _buildOverflowButton(
-                  tooltip: l10n.more,
-                  webSearchActive: webSearchEnabled && webSearchAvailable,
-                  imageGenerationActive: imageGenEnabled && imageGenAvailable,
-                  toolsActive: selectedToolIds.isNotEmpty,
-                  terminalActive: terminalActive,
-                  filtersActive: selectedFilterIds.isNotEmpty,
-                  nativeActions: nativeAttachmentActions,
-                ),
-                const SizedBox(width: Spacing.sm),
-                Expanded(
-                  child: _wrapIosSurfaceShadow(
-                    textFieldShell,
-                    borderRadius: shellRadius,
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      );
+      compactPromptOverlay = _shouldShowPromptOverlay
+          ? Padding(
+              padding: const EdgeInsets.only(bottom: Spacing.xs),
+              child: _buildActiveOverlay(),
+            )
+          : null;
     }
 
-    // For expanded mode with quick pills, use the full shell.
-    final shellContent = ConstrainedBox(
-      constraints: BoxConstraints(
-        maxHeight: MediaQuery.of(context).size.height * 0.4,
-      ),
-      child: AnimatedSize(
-        duration: const Duration(milliseconds: 160),
-        curve: Curves.easeOutCubic,
-        alignment: Alignment.topCenter,
-        child: SingleChildScrollView(
-          physics: const ClampingScrollPhysics(),
-          child: RepaintBoundary(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: composerChildren,
-            ),
-          ),
-        ),
-      ),
-    );
-
+    // Keep the native backdrop in one stable element slot when the composer
+    // crosses between compact and expanded layouts. Replacing the platform
+    // view here forces UIKit to allocate a fresh IOSurface for the same glass
+    // material, which is substantially more expensive than swapping only the
+    // Flutter-owned foreground content.
     final Widget shell = _wrapIosSurfaceShadow(
-      _buildComposerShell(borderRadius: shellRadius, child: shellContent),
+      _buildComposerShell(
+        key: const ValueKey('composer-native-shell'),
+        borderRadius: shellRadius,
+        isRecording: _isRecording,
+        child: shellContent,
+      ),
       borderRadius: shellRadius,
     );
 
     // Wrap with padding for floating effect, accounting for safe area
     final bottomPadding = _composerBottomPadding(context);
-    return Padding(
+    final composer = Padding(
       padding: EdgeInsets.fromLTRB(
         Spacing.screenPadding,
         0,
         Spacing.screenPadding,
         bottomPadding,
       ),
-      child: shell,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (widget.attachedOverlay != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: Spacing.xs),
+              child: widget.attachedOverlay!,
+            ),
+          ?compactPromptOverlay,
+          const ChatDraftQueueRow(),
+          shell,
+        ],
+      ),
+    );
+    return _wrapWithComposerLineMeasurement(
+      compactControls: compactControls,
+      child: _wrapWithFallbackAttachmentPanel(
+        composer: composer,
+        localAttachmentsOnly: isHermesComposer,
+        attachmentAvailability: attachmentAvailability,
+      ),
+    );
+  }
+
+  Widget _wrapWithComposerLineMeasurement({
+    required Widget child,
+    required _CompactComposerControls compactControls,
+  }) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final controlSize = conduitScaledControlExtent(
+          context,
+          baseExtent: _composerControlSize,
+        );
+        var reservedWidth = controlSize + Spacing.xs;
+        if (compactControls.showLeading) {
+          reservedWidth += controlSize + Spacing.xs;
+        }
+        if (compactControls.showMic) {
+          reservedWidth += controlSize + Spacing.xs;
+        }
+        final compactTextFieldWidth =
+            constraints.maxWidth -
+            (Spacing.screenPadding * 2) -
+            (_composerHorizontalInset * 2) -
+            reservedWidth;
+        _scheduleComposerLineMeasurement(context, compactTextFieldWidth);
+        return child;
+      },
+    );
+  }
+
+  Widget _wrapWithFallbackAttachmentPanel({
+    required Widget composer,
+    required bool localAttachmentsOnly,
+    required ComposerOverflowAttachmentAvailability attachmentAvailability,
+  }) {
+    final fallbackPanel = ComposerAttachmentKeyboard(
+      height: _fallbackAttachmentPanelHeight,
+      localAttachmentsOnly: localAttachmentsOnly,
+      onDismiss: _dismissFallbackAttachmentPanel,
+      onFileAttachment: attachmentAvailability.file
+          ? widget.onFileAttachment
+          : null,
+      onServerFileAttachment: attachmentAvailability.serverFile
+          ? widget.onServerFileAttachment
+          : null,
+      onImageAttachment: attachmentAvailability.photo
+          ? widget.onImageAttachment
+          : null,
+      onCameraCapture: attachmentAvailability.camera
+          ? widget.onCameraCapture
+          : null,
+      onWebAttachment: attachmentAvailability.web
+          ? widget.onWebAttachment
+          : null,
+      onMcpContent: attachmentAvailability.mcpContent
+          ? _openDirectMcpContent
+          : null,
+      onToolSettings: ref.watch(personalValvesCommandAvailableProvider)
+          ? _openToolSettings
+          : null,
+      onCompareModels: _comparisonCommandAvailable(ref.watch)
+          ? () => unawaited(_openCompareModels())
+          : null,
+      compareModelsHasMessage: _hasText,
+    );
+
+    return PopScope(
+      canPop: !_isFallbackAttachmentPanelVisible,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && _isFallbackAttachmentPanelVisible) {
+          if (_fallbackPanelReplacedKeyboard) {
+            if (widget.managesSystemKeyboardInset) {
+              setState(() {
+                _fallbackPanelWaitingForKeyboard = true;
+              });
+            }
+            _restoreSystemKeyboard(preferImmediate: true);
+          }
+          if (!_fallbackPanelReplacedKeyboard ||
+              !widget.managesSystemKeyboardInset) {
+            _dismissFallbackAttachmentPanel();
+          }
+        }
+      },
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          composer,
+          if (widget.managesSystemKeyboardInset)
+            SizedBox(
+              height: _isFallbackAttachmentPanelVisible
+                  ? _fallbackAttachmentPanelHeight
+                  : MediaQuery.viewInsetsOf(context).bottom > 0
+                  ? MediaQuery.viewInsetsOf(context).bottom + Spacing.sm
+                  : math.max(
+                      View.of(context).viewPadding.bottom /
+                          View.of(context).devicePixelRatio,
+                      Spacing.sm,
+                    ),
+              child: _isFallbackAttachmentPanelVisible
+                  ? fallbackPanel
+                  : const SizedBox.shrink(),
+            )
+          else
+            ClipRect(
+              child: AnimatedSize(
+                duration: context.motionDuration(
+                  const Duration(milliseconds: 220),
+                ),
+                curve: Curves.easeOutCubic,
+                alignment: Alignment.topCenter,
+                child: _isFallbackAttachmentPanelVisible
+                    ? fallbackPanel
+                    : const SizedBox.shrink(),
+              ),
+            ),
+        ],
+      ),
     );
   }
 
@@ -2488,6 +4093,7 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
     required bool sendOnEnter,
     required bool voiceAvailable,
     required bool isGenerating,
+    required bool desktopTurnRunning,
     required bool allUploadsComplete,
     required Color placeholderBase,
     required Color placeholderFocused,
@@ -2502,7 +4108,7 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
       excludeFromSemantics: true,
       onTap: () {
         if (!widget.enabled) return;
-        unawaited(_hideNativeKeyboardAttachmentPanel());
+        unawaited(_hideAttachmentPanels(restoreFallbackKeyboard: true));
         // Explicit user intent to focus: re-enable autofocus and focus
         try {
           ref.read(composerAutofocusEnabledProvider.notifier).set(true);
@@ -2526,7 +4132,7 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
                 )] =
                 const InsertNewlineIntent();
           }
-          if (_showPromptOverlay) {
+          if (_shouldShowPromptOverlay) {
             map[LogicalKeySet(LogicalKeyboardKey.arrowDown)] =
                 const SelectNextPromptIntent();
             map[LogicalKeySet(LogicalKeyboardKey.arrowUp)] =
@@ -2540,11 +4146,15 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
           actions: <Type, Action<Intent>>{
             SendMessageIntent: CallbackAction<SendMessageIntent>(
               onInvoke: (intent) {
-                if (_showPromptOverlay) {
+                if (_canConfirmPromptSelection) {
                   _confirmPromptSelection();
                   return null;
                 }
-                _sendMessage();
+                if (desktopTurnRunning) {
+                  unawaited(_sendDesktopBusyMessage(steer: false));
+                } else {
+                  _sendMessage();
+                }
                 return null;
               },
             ),
@@ -2589,10 +4199,15 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
                 factor,
               )!;
 
-              final FontWeight recordingWeight = _isRecording
-                  ? FontWeight.w500
-                  : FontWeight.w400;
-              final TextStyle baseChatStyle = AppTypography.chatMessageStyle;
+              final TextStyle baseChatStyle = _composerInputTextStyle(
+                _isRecording,
+              );
+              final inputPlaceholder = _isTranscribing
+                  ? AppLocalizations.of(context)!.transcribingAudio
+                  : _isRecording
+                  ? AppLocalizations.of(context)!.recordingAudio
+                  : widget.placeholder ??
+                        AppLocalizations.of(context)!.messageHintText;
 
               // IMPORTANT: Always use TextInputAction.newline for multiline
               // chat input. Using TextInputAction.send causes issues with
@@ -2601,18 +4216,13 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
               // send messages. The send-on-enter functionality is handled
               // by keyboard shortcuts (Enter key) instead.
               if (!kIsWeb && Platform.isIOS) {
+                final usesNativePlatformView = conduitSupportsNativeGlass();
                 return CupertinoTextField(
                   controller: _controller,
                   focusNode: _focusNode,
-                  placeholder:
-                      widget.placeholder ??
-                      AppLocalizations.of(context)!.messageHintText,
+                  placeholder: inputPlaceholder,
                   placeholderStyle: baseChatStyle.copyWith(
                     color: animatedPlaceholder,
-                    fontWeight: recordingWeight,
-                    fontStyle: _isRecording
-                        ? FontStyle.italic
-                        : FontStyle.normal,
                   ),
                   enabled: widget.enabled,
                   autofocus: false,
@@ -2624,23 +4234,22 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
                   textInputAction: TextInputAction.newline,
                   autofillHints: const <String>[],
                   showCursor: true,
+                  cursorOpacityAnimates: composerCursorOpacityAnimates(
+                    usesNativePlatformView: usesNativePlatformView,
+                  ),
                   cursorColor: Theme.of(context).textSelectionTheme.cursorColor,
                   scrollPadding: const EdgeInsets.only(bottom: 80),
                   keyboardAppearance: brightness,
-                  style: baseChatStyle.copyWith(
-                    color: animatedTextColor,
-                    fontStyle: _isRecording
-                        ? FontStyle.italic
-                        : FontStyle.normal,
-                    fontWeight: recordingWeight,
-                  ),
-                  contentInsertionConfiguration: ContentInsertionConfiguration(
-                    allowedMimeTypes: ClipboardAttachmentService
-                        .supportedImageMimeTypes
-                        .toList(),
-                    onContentInserted: _handleContentInserted,
-                  ),
-                  // Transparent decoration — the glass container provides
+                  style: baseChatStyle.copyWith(color: animatedTextColor),
+                  contentInsertionConfiguration: _selectedModelAcceptsImageInput
+                      ? ContentInsertionConfiguration(
+                          allowedMimeTypes: ClipboardAttachmentService
+                              .supportedImageMimeTypes
+                              .toList(),
+                          onContentInserted: _handleContentInserted,
+                        )
+                      : null,
+                  // Transparent decoration, the glass container provides
                   // the visual frame.
                   decoration: const BoxDecoration(),
                   padding: contentPadding,
@@ -2650,7 +4259,9 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
                   onSubmitted: (_) {},
                   onTap: () {
                     if (!widget.enabled) return;
-                    unawaited(_hideNativeKeyboardAttachmentPanel());
+                    unawaited(
+                      _hideAttachmentPanels(restoreFallbackKeyboard: true),
+                    );
                     _ensureFocusedIfEnabled();
                   },
                 );
@@ -2670,36 +4281,27 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
                 showCursor: true,
                 scrollPadding: const EdgeInsets.only(bottom: 80),
                 keyboardAppearance: brightness,
-                style: baseChatStyle.copyWith(
-                  color: animatedTextColor,
-                  fontStyle: _isRecording ? FontStyle.italic : FontStyle.normal,
-                  fontWeight: recordingWeight,
-                ),
+                style: baseChatStyle.copyWith(color: animatedTextColor),
                 decoration: context.conduitInputStyles
-                    .borderless(
-                      hint:
-                          widget.placeholder ??
-                          AppLocalizations.of(context)!.messageHintText,
-                    )
+                    .borderless(hint: inputPlaceholder)
                     .copyWith(
                       hintStyle: baseChatStyle.copyWith(
                         color: animatedPlaceholder,
-                        fontWeight: recordingWeight,
-                        fontStyle: _isRecording
-                            ? FontStyle.italic
-                            : FontStyle.normal,
+                        fontWeight: FontWeight.w300,
                       ),
                       contentPadding: contentPadding,
                       isDense: true,
                       alignLabelWithHint: true,
                     ),
                 // Enable pasting images and files from clipboard
-                contentInsertionConfiguration: ContentInsertionConfiguration(
-                  allowedMimeTypes: ClipboardAttachmentService
-                      .supportedImageMimeTypes
-                      .toList(),
-                  onContentInserted: _handleContentInserted,
-                ),
+                contentInsertionConfiguration: _selectedModelAcceptsImageInput
+                    ? ContentInsertionConfiguration(
+                        allowedMimeTypes: ClipboardAttachmentService
+                            .supportedImageMimeTypes
+                            .toList(),
+                        onContentInserted: _handleContentInserted,
+                      )
+                    : null,
                 // Use Flutter's standard text-editing context menu. Images
                 // arrive through ContentInsertionConfiguration/native paste.
                 contextMenuBuilder: (context, editableTextState) {
@@ -2708,7 +4310,9 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
                 onSubmitted: (_) {},
                 onTap: () {
                   if (!widget.enabled) return;
-                  unawaited(_hideNativeKeyboardAttachmentPanel());
+                  unawaited(
+                    _hideAttachmentPanels(restoreFallbackKeyboard: true),
+                  );
                   _ensureFocusedIfEnabled();
                 },
               );
@@ -2721,16 +4325,13 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
 
   Widget _buildOverflowButton({
     required String tooltip,
-    required bool webSearchActive,
-    required bool imageGenerationActive,
-    required bool toolsActive,
-    required bool terminalActive,
-    required bool filtersActive,
     bool dense = false,
     List<IosKeyboardAttachmentActionConfig> nativeActions = const [],
   }) {
-    final double buttonSize = dense ? 36.0 : TouchTarget.minimum;
-
+    final double buttonSize = conduitScaledControlExtent(
+      context,
+      baseExtent: dense ? _composerControlSize : TouchTarget.minimum,
+    );
     // Let the parent supply a completely custom overflow button.
     if (widget.overflowButtonBuilder != null) {
       return widget.overflowButtonBuilder!(buttonSize);
@@ -2738,94 +4339,169 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
 
     final bool enabled = widget.enabled && !_isRecording;
 
-    Color? activeColor;
-    final bool nativePanelVisible =
-        !kIsWeb && Platform.isIOS && _isNativeAttachmentPanelVisible;
-
-    // Native attachment panel uses an X to dismiss; keep it neutral like the idle
-    // + control, not the same primary-filled treatment as feature/tool "active" states.
-    if (webSearchActive ||
-        imageGenerationActive ||
-        toolsActive ||
-        terminalActive ||
-        filtersActive) {
-      activeColor = context.conduitTheme.buttonPrimary;
-    }
-
-    final bool isActive = activeColor != null;
+    final bool attachmentPanelVisible =
+        (!kIsWeb && Platform.isIOS && _isNativeAttachmentPanelVisible) ||
+        _isFallbackAttachmentPanelVisible;
     final theme = context.conduitTheme;
 
     final Color iconColor = !enabled
         ? theme.textPrimary.withValues(alpha: Alpha.disabled)
-        : nativePanelVisible
+        : attachmentPanelVisible
         ? theme.textPrimary.withValues(alpha: Alpha.strong)
-        : isActive
-        ? theme.buttonPrimaryText
         : theme.textPrimary.withValues(alpha: Alpha.strong);
 
+    final isIOS = PlatformInfo.isIOS;
     final IconData overflowIcon;
-    if (nativePanelVisible) {
-      overflowIcon = CupertinoIcons.xmark;
-    } else if (webSearchActive) {
-      overflowIcon = Platform.isIOS ? CupertinoIcons.search : Icons.search;
-    } else if (imageGenerationActive) {
-      overflowIcon = Platform.isIOS ? CupertinoIcons.photo : Icons.image;
-    } else if (toolsActive) {
-      overflowIcon = Platform.isIOS ? CupertinoIcons.wrench : Icons.build;
-    } else if (terminalActive) {
-      overflowIcon = Platform.isIOS
-          ? CupertinoIcons.chevron_left_slash_chevron_right
-          : Icons.terminal_rounded;
-    } else if (filtersActive) {
-      overflowIcon = Platform.isIOS
-          ? CupertinoIcons.sparkles
-          : Icons.auto_awesome;
+    if (attachmentPanelVisible) {
+      overflowIcon = isIOS ? CupertinoIcons.xmark : Icons.close;
     } else {
-      overflowIcon = Platform.isIOS ? CupertinoIcons.add : Icons.add;
+      overflowIcon = isIOS ? CupertinoIcons.add : Icons.add;
     }
+    // Material's add/close glyphs have a lighter, more compact drawn bound
+    // than their Cupertino counterparts. Use the standard Material action
+    // extent so they do not look undersized inside the shared 44pt target.
+    final iconSize = conduitScaledIconExtent(
+      context,
+      isIOS
+          ? _cupertinoComposerOverflowIconExtent
+          : _materialComposerOverflowIconExtent,
+    );
 
-    return AdaptiveTooltip(
-      message: tooltip,
-      child: _buildComposerIconButton(
-        onPressed: enabled
-            ? () {
-                unawaited(_handleOverflowButtonPressed(nativeActions));
-              }
-            : null,
-        size: buttonSize,
-        isProminent: isActive && !nativePanelVisible,
-        androidShowBackground: !isActive,
-        color: nativePanelVisible ? theme.surfaceContainerHighest : null,
-        child: Icon(overflowIcon, size: IconSize.large, color: iconColor),
+    return Focus(
+      key: const ValueKey('composer-overflow-button'),
+      canRequestFocus: false,
+      skipTraversal: true,
+      descendantsAreFocusable: false,
+      child: AdaptiveTooltip(
+        message: tooltip,
+        child: _buildComposerIconButton(
+          onPressed: enabled
+              ? () {
+                  unawaited(_handleOverflowButtonPressed(nativeActions));
+                }
+              : null,
+          size: buttonSize,
+          forcePlain: true,
+          iosSymbol: attachmentPanelVisible ? 'xmark' : 'plus',
+          iosSymbolSize: iconSize,
+          iosSymbolColor: iconColor,
+          child: ConduitSystemAdaptiveIcon(
+            overflowIcon,
+            size: iconSize,
+            color: iconColor,
+          ),
+        ),
       ),
     );
   }
 
   Widget _buildExpandButton(VoidCallback onTap) {
-    return GestureDetector(
-      onTap: onTap,
-      behavior: HitTestBehavior.opaque,
-      child: Padding(
-        padding: const EdgeInsets.all(Spacing.xs),
-        child: Icon(
-          Icons.open_in_full,
-          size: IconSize.large,
-          color: context.conduitTheme.textSecondary.withValues(alpha: 0.7),
+    final iconSize = conduitScaledIconExtent(context, IconSize.large);
+    final iconColor = context.conduitTheme.textSecondary.withValues(alpha: 0.7);
+    return AdaptiveTooltip(
+      message: AppLocalizations.of(context)!.edit,
+      child: GestureDetector(
+        key: const ValueKey<String>('composer-expand-button'),
+        onTap: onTap,
+        behavior: HitTestBehavior.opaque,
+        child: Padding(
+          padding: const EdgeInsets.all(Spacing.xs),
+          child: ConduitSystemAdaptiveIcon(
+            Platform.isIOS
+                ? CupertinoIcons.arrow_up_left_arrow_down_right
+                : Icons.open_in_full,
+            size: iconSize,
+            color: iconColor,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDictationStopButton({double? size}) {
+    final theme = context.conduitTheme;
+    final baseSize = size ?? TouchTarget.minimum;
+    final buttonSize = conduitScaledControlExtent(
+      context,
+      baseExtent: baseSize,
+    );
+    final iconSize = conduitScaledIconExtent(context, IconSize.medium);
+    final background = theme.surfaceContainerHighest.withValues(alpha: 0.96);
+    final border = theme.cardBorder.withValues(alpha: 0.75);
+
+    return AdaptiveTooltip(
+      message: AppLocalizations.of(context)!.stopRecording,
+      child: GestureDetector(
+        key: const ValueKey('composer-dictation-stop-button'),
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.enabled
+            ? () {
+                unawaited(_stopVoice());
+              }
+            : null,
+        child: Container(
+          width: buttonSize,
+          height: buttonSize,
+          decoration: BoxDecoration(
+            color: background,
+            shape: BoxShape.circle,
+            border: Border.all(color: border, width: BorderWidth.thin),
+          ),
+          child: Center(
+            child: ConduitSystemAdaptiveIcon(
+              Platform.isIOS ? CupertinoIcons.stop_fill : Icons.stop_rounded,
+              size: iconSize,
+              color: theme.textPrimary.withValues(alpha: Alpha.strong),
+            ),
+          ),
         ),
       ),
     );
   }
 
   Widget _buildInlineMicAction(bool voiceAvailable, {double? size}) {
-    final bool enabledMic = widget.enabled && voiceAvailable;
-    final icon = Icon(
-      Platform.isIOS ? CupertinoIcons.mic : Icons.mic,
-      size: IconSize.large,
-      color: _isRecording
-          ? context.conduitTheme.buttonPrimary
-          : context.conduitTheme.textSecondary.withValues(
-              alpha: enabledMic ? Alpha.strong : Alpha.disabled,
-            ),
+    final bool enabledMic = widget.enabled && (voiceAvailable || _isRecording);
+    final theme = context.conduitTheme;
+    final bool active = _isRecording;
+    final double buttonSize = conduitScaledControlExtent(
+      context,
+      baseExtent: size ?? _composerControlSize,
+    );
+    final iconSize = conduitScaledIconExtent(context, IconSize.large);
+    final IconData iconData = active
+        ? (Platform.isIOS ? CupertinoIcons.stop_fill : Icons.stop_rounded)
+        : (Platform.isIOS ? CupertinoIcons.mic : Icons.mic);
+    final Color iconColor = active
+        ? theme.buttonPrimaryText
+        : theme.textSecondary.withValues(
+            alpha: enabledMic ? Alpha.strong : Alpha.disabled,
+          );
+    final icon = AnimatedSwitcher(
+      duration: context.motionDuration(const Duration(milliseconds: 160)),
+      switchInCurve: Curves.easeOutCubic,
+      switchOutCurve: Curves.easeInCubic,
+      transitionBuilder: (child, animation) {
+        if (context.reduceMotion) {
+          return child;
+        }
+        final scale = Tween<double>(begin: 0.94, end: 1).animate(
+          CurvedAnimation(
+            parent: animation,
+            curve: Curves.easeOutCubic,
+            reverseCurve: Curves.easeInCubic,
+          ),
+        );
+        return FadeTransition(
+          opacity: animation,
+          child: ScaleTransition(scale: scale, child: child),
+        );
+      },
+      child: ConduitSystemAdaptiveIcon(
+        iconData,
+        key: ValueKey<IconData>(iconData),
+        size: iconSize,
+        color: iconColor,
+      ),
     );
     final onPressed = enabledMic
         ? () {
@@ -2834,20 +4510,28 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
           }
         : null;
 
-    if (size != null) {
-      return _buildComposerIconButton(
-        onPressed: onPressed,
-        size: size,
-        child: icon,
-      );
-    }
-
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onPressed,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: Spacing.xs),
-        child: icon,
+    return AdaptiveTooltip(
+      message: active
+          ? AppLocalizations.of(context)!.stopRecording
+          : AppLocalizations.of(context)!.startDictation,
+      child: GestureDetector(
+        key: ValueKey<String>(
+          active ? 'composer-dictation-stop' : 'composer-dictation-start',
+        ),
+        behavior: HitTestBehavior.opaque,
+        onTap: onPressed,
+        child: SizedBox.square(
+          dimension: buttonSize,
+          child: Align(
+            alignment: AlignmentDirectional.centerEnd,
+            child: Padding(
+              padding: const EdgeInsetsDirectional.only(
+                end: _composerTrailingAccessoryInset,
+              ),
+              child: icon,
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -2855,6 +4539,15 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
   Widget _buildCreateDraftNoteButton({required bool isLoading}) {
     final l10n = AppLocalizations.of(context)!;
     final bool enabled = widget.enabled && !isLoading && !_isRecording;
+    final buttonSize = conduitScaledControlExtent(
+      context,
+      baseExtent: _composerControlSize,
+    );
+    final iconSize = conduitScaledIconExtent(context, IconSize.medium);
+    final visualSize = conduitScaledControlExtent(
+      context,
+      baseExtent: _composerPrimaryVisualSize,
+    );
     final iconColor = enabled
         ? context.conduitTheme.textSecondary.withValues(alpha: Alpha.strong)
         : context.conduitTheme.textSecondary.withValues(alpha: Alpha.disabled);
@@ -2864,22 +4557,26 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
       child: _buildComposerIconButton(
         key: const ValueKey('create-draft-note-button'),
         onPressed: enabled ? _createNoteFromDraft : null,
-        size: 36.0,
-        isProminent: false,
+        size: buttonSize,
+        visualSize: visualSize,
+        visualAlignment: AlignmentDirectional.centerEnd,
+        forcePlain: true,
+        iosSymbol: isLoading ? null : 'doc.text',
+        iosSymbolColor: iconColor,
         child: isLoading
             ? SizedBox(
-                width: IconSize.large,
-                height: IconSize.large,
+                width: iconSize,
+                height: iconSize,
                 child: CircularProgressIndicator(
                   strokeWidth: 2.5,
                   color: context.conduitTheme.textSecondary,
                 ),
               )
-            : Icon(
+            : ConduitSystemAdaptiveIcon(
                 Platform.isIOS
                     ? CupertinoIcons.doc_text
                     : Icons.note_add_outlined,
-                size: IconSize.large,
+                size: iconSize,
                 color: iconColor,
               ),
       ),
@@ -2895,7 +4592,21 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
     bool hasUploadsInProgress, {
     bool dense = false,
   }) {
-    final double buttonSize = dense ? 36.0 : TouchTarget.minimum;
+    final double buttonSize = conduitScaledControlExtent(
+      context,
+      baseExtent: dense ? _composerControlSize : TouchTarget.minimum,
+    );
+    final double primaryVisualSize = conduitScaledControlExtent(
+      context,
+      baseExtent: _composerPrimaryVisualSize,
+    );
+    // Cupertino's arrow and waveform symbols have a larger optical footprint.
+    // Material's corresponding glyphs need the regular action extent to read
+    // clearly inside the same 32pt visual button.
+    final primaryIconSize = conduitScaledIconExtent(
+      context,
+      Platform.isIOS ? IconSize.small : IconSize.medium,
+    );
 
     // Don't allow sending until all uploads are complete
     final enabled =
@@ -2903,8 +4614,9 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
 
     // Generating -> STOP variant
     if (isGenerating) {
+      final stopLabel = AppLocalizations.of(context)!.stopGenerating;
       return AdaptiveTooltip(
-        message: AppLocalizations.of(context)!.stopGenerating,
+        message: stopLabel,
         child: _buildComposerIconButton(
           key: const ValueKey('primary-btn-stop'),
           onPressed: () {
@@ -2912,35 +4624,48 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
             stopGeneration();
           },
           size: buttonSize,
+          visualSize: primaryVisualSize,
+          semanticLabel: stopLabel,
+          iosSymbolSize: primaryIconSize,
           isProminent: true,
-          child: Icon(
+          iosSymbol: 'stop.fill',
+          iosSymbolColor: context.conduitTheme.buttonPrimaryText,
+          child: ConduitSystemAdaptiveIcon(
             Platform.isIOS ? CupertinoIcons.stop_fill : Icons.stop,
-            size: dense ? IconSize.large : IconSize.xl,
+            size: primaryIconSize,
             color: context.conduitTheme.buttonPrimaryText,
           ),
         ),
       );
     }
 
-    // If there's text, render SEND variant; otherwise render VOICE CALL variant
-    if (hasText) {
+    // If there's text, render SEND variant. During active dictation, keep the
+    // send affordance visible even before text arrives so the layout stays
+    // stable around the middle text field.
+    if (hasText || _isRecording) {
       final onPressed = enabled
           ? () {
-              _sendMessage();
+              if (_isRecording) {
+                unawaited(_stopVoiceAndSend());
+              } else {
+                _sendMessage();
+              }
             }
           : null;
       final sendChild = hasUploadsInProgress
           ? SizedBox(
-              width: IconSize.large,
-              height: IconSize.large,
+              width: primaryIconSize,
+              height: primaryIconSize,
               child: CircularProgressIndicator(
                 strokeWidth: 2.5,
                 color: context.conduitTheme.textSecondary,
               ),
             )
-          : Icon(
-              CupertinoIcons.arrow_up,
-              size: IconSize.large,
+          : ConduitSystemAdaptiveIcon(
+              Platform.isIOS
+                  ? CupertinoIcons.arrow_up
+                  : Icons.arrow_upward_rounded,
+              size: primaryIconSize,
               color: enabled
                   ? context.conduitTheme.buttonPrimaryText
                   : context.conduitTheme.textPrimary.withValues(
@@ -2955,7 +4680,18 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
           key: const ValueKey('primary-btn-send'),
           onPressed: onPressed,
           size: buttonSize,
+          visualSize: primaryVisualSize,
+          semanticLabel: enabled
+              ? AppLocalizations.of(context)!.sendMessage
+              : AppLocalizations.of(context)!.send,
+          iosSymbolSize: primaryIconSize,
           isProminent: true,
+          iosSymbol: hasUploadsInProgress ? null : 'arrow.up',
+          iosSymbolColor: enabled
+              ? context.conduitTheme.buttonPrimaryText
+              : context.conduitTheme.textPrimary.withValues(
+                  alpha: Alpha.disabled,
+                ),
           child: sendChild,
         ),
       );
@@ -2964,7 +4700,7 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
     // VOICE CALL variant when no text is present and voice is available.
     // Otherwise fall back to a muted send button.
     if (widget.onVoiceCall != null) {
-      final bool enabledVoiceCall = widget.enabled;
+      final bool enabledVoiceCall = widget.enabled && !_isRecording;
       return AdaptiveTooltip(
         message: AppLocalizations.of(context)!.voiceCallTitle,
         child: _buildComposerIconButton(
@@ -2976,10 +4712,19 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
                 }
               : null,
           size: buttonSize,
+          visualSize: primaryVisualSize,
+          semanticLabel: AppLocalizations.of(context)!.voiceCallTitle,
+          iosSymbolSize: primaryIconSize,
           isProminent: true,
-          child: Icon(
+          iosSymbol: 'waveform',
+          iosSymbolColor: enabledVoiceCall
+              ? context.conduitTheme.buttonPrimaryText
+              : context.conduitTheme.textPrimary.withValues(
+                  alpha: Alpha.disabled,
+                ),
+          child: ConduitSystemAdaptiveIcon(
             Platform.isIOS ? CupertinoIcons.waveform : Icons.graphic_eq,
-            size: dense ? IconSize.large : IconSize.xl,
+            size: primaryIconSize,
             color: enabledVoiceCall
                 ? context.conduitTheme.buttonPrimaryText
                 : context.conduitTheme.textPrimary.withValues(
@@ -2995,10 +4740,17 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
       key: const ValueKey('primary-btn-send-muted'),
       onPressed: null,
       size: buttonSize,
+      visualSize: primaryVisualSize,
+      semanticLabel: AppLocalizations.of(context)!.send,
+      iosSymbolSize: primaryIconSize,
       isProminent: false,
-      child: Icon(
-        CupertinoIcons.arrow_up,
-        size: IconSize.large,
+      iosSymbol: 'arrow.up',
+      iosSymbolColor: context.conduitTheme.textPrimary.withValues(
+        alpha: Alpha.disabled,
+      ),
+      child: ConduitSystemAdaptiveIcon(
+        Platform.isIOS ? CupertinoIcons.arrow_up : Icons.arrow_upward_rounded,
+        size: primaryIconSize,
         color: context.conduitTheme.textPrimary.withValues(
           alpha: Alpha.disabled,
         ),
@@ -3007,12 +4759,16 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
   }
 
   Widget _buildPillButton({
+    Key? key,
     required IconData icon,
     required String label,
     required bool isActive,
     VoidCallback? onTap,
     String? iconUrl,
     bool dense = false,
+    bool haptic = true,
+    Color? iconColor,
+    String? semanticsHint,
   }) {
     final bool enabled = onTap != null;
     final theme = context.conduitTheme;
@@ -3029,72 +4785,69 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
         ? theme.textPrimary
         : theme.textSecondary.withValues(alpha: enabled ? 1.0 : Alpha.disabled);
 
-    final Color iconColor = isActive ? theme.buttonPrimary : textColor;
+    final Color glyphColor =
+        iconColor ?? (isActive ? theme.buttonPrimary : textColor);
 
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 200),
-      curve: Curves.easeOutCubic,
-      child: Semantics(
-        button: true,
-        enabled: enabled,
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: onTap == null
-              ? null
-              : () {
-                  ConduitHaptics.mediumImpact();
-                  onTap();
-                },
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
-            curve: Curves.easeOutCubic,
-            padding: EdgeInsets.symmetric(
-              horizontal: dense ? Spacing.sm : Spacing.md,
-              vertical: dense ? (Spacing.xs + 1) : (Spacing.sm - 2),
-            ),
-            decoration: BoxDecoration(
-              color: background,
-              borderRadius: BorderRadius.circular(AppBorderRadius.round),
-              border: Border.all(color: borderColor, width: BorderWidth.thin),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                iconUrl != null && iconUrl.isNotEmpty
-                    ? ModelAvatar(
-                        size: dense ? IconSize.small : IconSize.small + 1,
-                        imageUrl: iconUrl,
-                        label: label,
-                      )
-                    : Icon(
-                        icon,
-                        size: dense ? IconSize.small : IconSize.small + 1,
-                        color: iconColor,
-                      ),
-                SizedBox(width: dense ? Spacing.xs : Spacing.xs + 1),
-                AnimatedDefaultTextStyle(
-                  duration: const Duration(milliseconds: 200),
-                  curve: Curves.easeOutCubic,
-                  style: AppTypography.labelMediumStyle.copyWith(
-                    color: textColor,
-                    fontWeight: isActive ? FontWeight.w600 : FontWeight.w500,
-                    letterSpacing: AppTypography.letterSpacingNormal,
-                  ),
-                  child: Text(
-                    label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
+    return Semantics(
+      key: key,
+      button: true,
+      enabled: enabled,
+      hint: semanticsHint,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap == null
+            ? null
+            : () {
+                if (haptic) ConduitHaptics.mediumImpact();
+                onTap();
+              },
+        child: AnimatedContainer(
+          duration: context.motionDuration(const Duration(milliseconds: 200)),
+          curve: Curves.easeOutCubic,
+          padding: EdgeInsets.symmetric(
+            horizontal: dense ? Spacing.sm : Spacing.md,
+            vertical: dense ? (Spacing.xs + 1) : (Spacing.sm - 2),
+          ),
+          decoration: BoxDecoration(
+            color: background,
+            borderRadius: BorderRadius.circular(AppBorderRadius.round),
+            border: Border.all(color: borderColor, width: BorderWidth.thin),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              iconUrl != null && iconUrl.isNotEmpty
+                  ? ModelAvatar(
+                      size: IconSize.chip,
+                      imageUrl: iconUrl,
+                      label: label,
+                    )
+                  : Icon(icon, size: IconSize.chip, color: glyphColor),
+              SizedBox(width: dense ? Spacing.xs : Spacing.xs + 1),
+              AnimatedDefaultTextStyle(
+                duration: context.motionDuration(
+                  const Duration(milliseconds: 200),
                 ),
-              ],
-            ),
+                curve: Curves.easeOutCubic,
+                style: AppTypography.labelMediumStyle.copyWith(
+                  color: textColor,
+                  fontWeight: isActive ? FontWeight.w600 : FontWeight.w500,
+                  letterSpacing: AppTypography.letterSpacingNormal,
+                ),
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
           ),
         ),
       ),
     );
   }
 
-  /// Builds a circular icon button for the composer.
+  /// Builds an icon button for the composer.
   ///
   /// Uses native glass only where iOS supports it; older iOS follows the same
   /// opaque fallback treatment as Android.
@@ -3103,16 +4856,38 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
     required VoidCallback? onPressed,
     required Widget child,
     required double size,
+    double? visualSize,
+    AlignmentGeometry visualAlignment = Alignment.center,
+    String? semanticLabel,
+    double? iosSymbolSize,
     bool isProminent = false,
     bool androidShowBackground = false,
+    bool forcePlain = false,
     Color? color,
+    String? iosSymbol,
+    Color? iosSymbolColor,
   }) {
     final theme = context.conduitTheme;
     final effectiveColor = color ?? theme.buttonPrimary;
     final androidBackgroundColor =
         color ?? theme.surfaceContainerHighest.withValues(alpha: 0.95);
+
+    // iOS glass buttons are UIKit platform views. Remove them while another
+    // route covers the composer so their compositor layer cannot bleed
+    // through an opaque Flutter modal sheet.
+    if (conduitSupportsNativeGlass() && !forcePlain && !_isRouteVisible) {
+      return SizedBox.square(dimension: size);
+    }
+
+    final effectiveVisualSize = (visualSize ?? size)
+        .clamp(0.0, size)
+        .toDouble();
+    final keyBelongsToOuterTarget = effectiveVisualSize < size;
+
     final usesOpaqueFallback = conduitUsesOpaqueGlassFallback();
-    final buttonStyle = usesOpaqueFallback
+    final buttonStyle = forcePlain
+        ? AdaptiveButtonStyle.plain
+        : usesOpaqueFallback
         ? (isProminent || androidShowBackground
               ? AdaptiveButtonStyle.filled
               : AdaptiveButtonStyle.plain)
@@ -3120,20 +4895,137 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
               ? AdaptiveButtonStyle.prominentGlass
               : AdaptiveButtonStyle.glass);
 
-    return AdaptiveButton.child(
+    final adaptiveSize = size > 40
+        ? AdaptiveButtonSize.large
+        : AdaptiveButtonSize.medium;
+    final buttonColor =
+        usesOpaqueFallback && androidShowBackground && !isProminent
+        ? androidBackgroundColor
+        : effectiveColor;
+
+    // A visually plain action gains no glass material from a UIKit platform
+    // view. Keep those controls in Flutter so the plus/close, expand, and note
+    // actions do not each allocate and composite their own IOSurface.
+    if (conduitSupportsNativeGlass() && !forcePlain) {
+      // Loading indicators are transient Flutter content. Keeping them out of
+      // child-mode avoids creating another persistent platform view.
+      if (iosSymbol == null) {
+        final loadingButton = Semantics(
+          key: keyBelongsToOuterTarget ? null : key,
+          button: true,
+          enabled: onPressed != null,
+          child: SizedBox.square(
+            dimension: effectiveVisualSize,
+            child: isProminent
+                ? DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: buttonColor,
+                      shape: BoxShape.circle,
+                    ),
+                    child: Center(child: child),
+                  )
+                : Center(child: child),
+          ),
+        );
+        return _wrapComposerVisualControl(
+          key: key,
+          onPressed: onPressed,
+          semanticLabel: semanticLabel,
+          targetSize: size,
+          visualSize: effectiveVisualSize,
+          visualAlignment: visualAlignment,
+          control: loadingButton,
+        );
+      }
+      final nativeButton = SizedBox.square(
+        dimension: effectiveVisualSize,
+        child: _StableNativeComposerIconButton(
+          key: keyBelongsToOuterTarget ? null : key,
+          onPressed: onPressed,
+          enabled: onPressed != null,
+          symbol: SFSymbol(
+            iosSymbol,
+            size: iosSymbolSize ?? kCupertinoNativeControlSymbolExtent,
+            color: iosSymbolColor,
+          ),
+          style: buttonStyle,
+          color: buttonColor,
+          size: adaptiveSize,
+          dimension: effectiveVisualSize,
+        ),
+      );
+      return _wrapComposerVisualControl(
+        key: key,
+        onPressed: onPressed,
+        semanticLabel: semanticLabel,
+        targetSize: size,
+        visualSize: effectiveVisualSize,
+        visualAlignment: visualAlignment,
+        control: nativeButton,
+      );
+    }
+
+    final fallbackButton = SizedBox.square(
+      dimension: effectiveVisualSize,
+      child: AdaptiveButton.child(
+        key: keyBelongsToOuterTarget ? null : key,
+        onPressed: onPressed,
+        enabled: onPressed != null,
+        style: buttonStyle,
+        color: buttonColor,
+        size: adaptiveSize,
+        minSize: Size.square(effectiveVisualSize),
+        padding: EdgeInsets.zero,
+        borderRadius: BorderRadius.circular(effectiveVisualSize),
+        useSmoothRectangleBorder: false,
+        child: child,
+      ),
+    );
+    return _wrapComposerVisualControl(
       key: key,
       onPressed: onPressed,
+      semanticLabel: semanticLabel,
+      targetSize: size,
+      visualSize: effectiveVisualSize,
+      visualAlignment: visualAlignment,
+      control: fallbackButton,
+    );
+  }
+
+  Widget _wrapComposerVisualControl({
+    required Key? key,
+    required VoidCallback? onPressed,
+    required String? semanticLabel,
+    required double targetSize,
+    required double visualSize,
+    required AlignmentGeometry visualAlignment,
+    required Widget control,
+  }) {
+    if (visualSize >= targetSize) return control;
+
+    return Semantics(
+      key: key,
+      button: true,
       enabled: onPressed != null,
-      style: buttonStyle,
-      color: usesOpaqueFallback && androidShowBackground && !isProminent
-          ? androidBackgroundColor
-          : effectiveColor,
-      size: size > 40 ? AdaptiveButtonSize.large : AdaptiveButtonSize.medium,
-      minSize: Size(size, size),
-      padding: EdgeInsets.zero,
-      borderRadius: BorderRadius.circular(size),
-      useSmoothRectangleBorder: false,
-      child: child,
+      label: semanticLabel,
+      onTap: onPressed,
+      child: SizedBox.square(
+        dimension: targetSize,
+        child: Stack(
+          alignment: visualAlignment,
+          children: [
+            Positioned.fill(
+              child: ExcludeSemantics(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: onPressed,
+                ),
+              ),
+            ),
+            ExcludeSemantics(child: control),
+          ],
+        ),
+      ),
     );
   }
 
@@ -3144,25 +5036,39 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
     Key? key,
     required Widget child,
     required BorderRadius borderRadius,
-    bool useSmoothRectangleBorder = true,
+    bool isRecording = false,
   }) {
     final theme = context.conduitTheme;
+    final recordingBorderColor = theme.buttonPrimary.withValues(alpha: 0.56);
+    final recordingSurfaceColor = Color.alphaBlend(
+      theme.buttonPrimary.withValues(alpha: 0.045),
+      theme.surfaceContainerHighest,
+    );
 
-    if (conduitSupportsNativeGlass()) {
+    if (conduitSupportsNativeGlass() && _isRouteVisible) {
       return Stack(
         key: key,
         fit: StackFit.passthrough,
         children: [
           Positioned.fill(
+            child: IgnorePointer(child: _composerGlassBackdrop(borderRadius)),
+          ),
+          Positioned.fill(
             child: IgnorePointer(
-              child: AdaptiveButton.child(
-                onPressed: () {},
-                style: AdaptiveButtonStyle.glass,
-                size: AdaptiveButtonSize.large,
-                padding: EdgeInsets.zero,
-                borderRadius: borderRadius,
-                useSmoothRectangleBorder: useSmoothRectangleBorder,
-                child: const SizedBox.expand(),
+              child: AnimatedContainer(
+                duration: context.motionDuration(
+                  const Duration(milliseconds: 160),
+                ),
+                curve: Curves.easeOutCubic,
+                decoration: BoxDecoration(
+                  borderRadius: borderRadius,
+                  border: Border.all(
+                    color: isRecording
+                        ? recordingBorderColor
+                        : Colors.transparent,
+                    width: isRecording ? BorderWidth.thin * 1.5 : 0,
+                  ),
+                ),
               ),
             ),
           ),
@@ -3171,15 +5077,44 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
       );
     }
 
-    return Container(
+    return AnimatedContainer(
       key: key,
+      duration: context.motionDuration(const Duration(milliseconds: 160)),
+      curve: Curves.easeOutCubic,
       decoration: BoxDecoration(
-        color: theme.surfaceContainerHighest,
+        color: isRecording
+            ? recordingSurfaceColor
+            : theme.surfaceContainerHighest,
         borderRadius: borderRadius,
-        border: Border.all(color: theme.cardBorder, width: BorderWidth.thin),
+      ),
+      // Paint the state border over the surface instead of letting
+      // BoxDecoration contribute its width to the child's layout. This keeps
+      // the compact composer at the same 44pt control extent and prevents the
+      // thicker recording border from shifting its contents.
+      foregroundDecoration: BoxDecoration(
+        borderRadius: borderRadius,
+        border: Border.all(
+          color: isRecording ? recordingBorderColor : theme.cardBorder,
+          width: isRecording ? BorderWidth.thin * 1.5 : BorderWidth.thin,
+        ),
       ),
       child: child,
     );
+  }
+
+  Widget _composerGlassBackdrop(BorderRadius borderRadius) {
+    final cached = _cachedComposerGlassBackdrop;
+    if (cached != null && _cachedComposerGlassRadius == borderRadius) {
+      return cached;
+    }
+
+    final backdrop = AdaptiveGlassBackdrop(
+      key: const ValueKey('composer-native-glass-backdrop'),
+      borderRadius: borderRadius,
+    );
+    _cachedComposerGlassRadius = borderRadius;
+    _cachedComposerGlassBackdrop = backdrop;
+    return backdrop;
   }
 
   double _composerBottomPadding(BuildContext context) {
@@ -3201,7 +5136,7 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
     ),
   }) {
     final isLight = Theme.of(context).brightness == Brightness.light;
-    if (!isLight) return child;
+    if (!isLight || !_isRouteVisible) return child;
     return DecoratedBox(
       decoration: BoxDecoration(
         borderRadius: borderRadius,
@@ -3224,39 +5159,6 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
     );
   }
 
-  void _showOverflowSheet() {
-    ConduitHaptics.selectionClick();
-    final prevCanRequest = _focusNode.canRequestFocus;
-    final wasFocused = _focusNode.hasFocus;
-    _focusNode.canRequestFocus = false;
-    try {
-      FocusScope.of(context).unfocus();
-      SystemChannels.textInput.invokeMethod('TextInput.hide');
-    } catch (_) {}
-
-    ThemedSheets.showCustom<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => ComposerOverflowSheet(
-        onFileAttachment: widget.onFileAttachment,
-        onServerFileAttachment: widget.onServerFileAttachment,
-        onImageAttachment: widget.onImageAttachment,
-        onCameraCapture: widget.onCameraCapture,
-        onWebAttachment: widget.onWebAttachment,
-      ),
-    ).whenComplete(() {
-      if (mounted) {
-        _focusNode.canRequestFocus = prevCanRequest;
-        if (wasFocused && widget.enabled) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (!mounted) return;
-            _ensureFocusedIfEnabled();
-          });
-        }
-      }
-    });
-  }
-
   void _showExpandTextModal() async {
     if (Platform.isIOS) {
       final l10n = AppLocalizations.of(context)!;
@@ -3266,7 +5168,9 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
           title: widget.placeholder ?? l10n.sendMessage,
           value: _controller.text,
           placeholder: widget.placeholder ?? l10n.messageHintText,
-          sendLabel: l10n.send,
+          sendLabel: _queuesInsteadOfSending
+              ? l10n.queueDraftAction
+              : l10n.send,
           valueId: 'expanded-text-value',
           sendActionId: 'send-expanded-text',
           closeActionId: 'close-expanded-text',
@@ -3358,7 +5262,7 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
   Future<void> _startVoice() async {
     if (!widget.enabled) return;
     try {
-      final ok = await _voiceService.initialize();
+      final ok = await _voiceInputService.initialize();
       if (!mounted) return;
       if (!ok) {
         _showVoiceUnavailable(
@@ -3368,8 +5272,11 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
         return;
       }
       // Centralized permission + start
-      final stream = await _voiceService.beginListening();
+      final stream = await _voiceInputService.beginListening();
       if (!mounted) return;
+      _transcribingListenable?.removeListener(_handleTranscribingChanged);
+      _transcribingListenable = _voiceInputService.transcribing
+        ..addListener(_handleTranscribingChanged);
       setState(() {
         _isRecording = true;
         _baseTextAtStart = _controller.text;
@@ -3405,11 +5312,40 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
     }
   }
 
+  void _handleTranscribingChanged() {
+    final value = _transcribingListenable?.value ?? false;
+    if (!mounted || value == _isTranscribing) return;
+    setState(() => _isTranscribing = value);
+  }
+
+  Future<void> _stopVoiceListening() async {
+    try {
+      await _voiceInputService.stopListening();
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isTranscribing = false;
+          _isRecording = false;
+        });
+      }
+    }
+  }
+
   Future<void> _stopVoice() async {
-    await _voiceService.stopListening();
+    await _stopVoiceListening();
     if (!mounted) return;
-    setState(() => _isRecording = false);
     ConduitHaptics.selectionClick();
+  }
+
+  Future<void> _stopVoiceAndSend() async {
+    if (_controller.text.trim().isEmpty) {
+      await _stopVoice();
+      return;
+    }
+    await _stopVoiceListening();
+    if (!mounted) return;
+    ConduitHaptics.lightImpact();
+    _sendMessage();
   }
 
   // When on-device STT is unavailable we rely on server transcription.
@@ -3464,8 +5400,10 @@ class _ModernChatInputState extends ConsumerState<ModernChatInput>
   }
 }
 
-enum _ComposerContextSuggestionType { note, knowledgeBase, knowledgeFile }
+/// conduit_core's suggestion kinds (composer_commands.dart).
+typedef _ComposerContextSuggestionType = ComposerContextSuggestionType;
 
+/// A core [ComposerContextSuggestion] with the icon this composer draws.
 class _ComposerContextSuggestion {
   const _ComposerContextSuggestion({
     required this.type,
@@ -3484,26 +5422,6 @@ class _ComposerContextSuggestion {
   final String? collectionName;
   final String? source;
   final IconData icon;
-
-  static String? stringValue(Object? value) {
-    final text = value?.toString().trim();
-    if (text == null || text.isEmpty) {
-      return null;
-    }
-    return text;
-  }
-
-  static Map<String, dynamic>? mapValue(Object? value) {
-    if (value is Map<String, dynamic>) {
-      return value;
-    }
-    if (value is Map) {
-      return value.map(
-        (key, entryValue) => MapEntry(key.toString(), entryValue),
-      );
-    }
-    return null;
-  }
 }
 
 class _ContextSuggestionPlaceholder extends StatelessWidget {

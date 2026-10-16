@@ -1,7 +1,7 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_tex/flutter_tex.dart';
 
-import '../../jovial_svg_image.dart';
+import '../../horizontal_gesture_ownership.dart';
 import 'latex_rendering_server.dart';
 
 /// Extracts LaTeX expressions before markdown parsing and
@@ -103,6 +103,11 @@ class LatexPreprocessor {
   /// Use [splitOnPlaceholders] during rendering to recover
   /// the original LaTeX content.
   String extract(String content) {
+    // Every delimiter starts with '$' or '\'; skip the four full regex passes
+    // for the common all-prose case.
+    if (!content.contains(r'$') && !content.contains('\\')) {
+      return content;
+    }
     var result = content;
 
     // Extract \[...\] block LaTeX.
@@ -181,7 +186,13 @@ class LatexPreprocessor {
       }
       final key = match.group(0)!;
       final expr = allPlaceholders[key]!;
-      segments.add(LatexSegment.latex(expr.tex, isBlock: expr.isBlock));
+      segments.add(
+        LatexSegment.latex(
+          expr.tex,
+          isBlock: expr.isBlock,
+          placeholderLength: key.length,
+        ),
+      );
       lastEnd = match.end;
     }
 
@@ -213,19 +224,25 @@ class LatexPreprocessor {
     Widget buildMath() {
       return Math2SVG(
         math: tex,
-        // `flutter_tex` caches rendered SVGs internally; keep alive helps
-        // preserve that state for still-mounted formulas in scrolling views.
+        // `flutter_tex` caches rendered SVGs internally; keep alive preserves
+        // that state for still-mounted formulas so scrolling back through a
+        // math-heavy transcript re-shows the rendered SVG instead of flashing
+        // the plain-text fallback and shifting row extents mid-scroll.
         wantKeepAlive: true,
         loadingWidgetBuilder: (_) => _buildLatexFallback(tex, textStyle),
         errorWidgetBuilder: (_, _) => _buildLatexFallback(tex, textStyle),
         formulaWidgetBuilder: (context, svg) {
-          final scaledFontSize = MediaQuery.textScalerOf(
-            context,
-          ).scale(baseFontSize);
+          final scaledFontSize = MediaQuery.textScalerOf(context)
+              .scale(baseFontSize);
           final height = _svgExToPixels(svg, scaledFontSize);
           return ColorFiltered(
             colorFilter: ColorFilter.mode(color, BlendMode.srcATop),
-            child: JovialSvgImage.string(svg, height: height),
+            child: SvgPicture.string(
+              svg,
+              height: height,
+              fit: BoxFit.contain,
+              alignment: Alignment.center,
+            ),
           );
         },
       );
@@ -249,9 +266,16 @@ class LatexPreprocessor {
 
   static Widget _wrapLatexWidget(Widget child, {required bool isBlock}) {
     if (!isBlock) return child;
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: child,
+    return HorizontalScrollGestureBoundary(
+      child: LayoutBuilder(
+        builder: (context, constraints) => SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minWidth: constraints.maxWidth),
+            child: Center(child: child),
+          ),
+        ),
+      ),
     );
   }
 
@@ -292,10 +316,26 @@ class LatexSegment {
   /// Always `false` for plain text segments.
   final bool isBlock;
 
+  /// The length of the placeholder token consumed from the source text for
+  /// this segment.
+  ///
+  /// For plain-text segments this is the length of [content]. For LaTeX
+  /// segments [content] holds the recovered TeX, which is unrelated to the
+  /// placeholder token's length, so this records the token length instead.
+  /// Streaming-fade offset accounting must advance by the placeholder token
+  /// length to stay in the document-wide `textContent` coordinate space.
+  final int placeholderLength;
+
   /// Creates a plain-text segment.
-  const LatexSegment.text(this.content) : isLatex = false, isBlock = false;
+  const LatexSegment.text(this.content)
+    : isLatex = false,
+      isBlock = false,
+      placeholderLength = content.length;
 
   /// Creates a LaTeX expression segment.
-  const LatexSegment.latex(this.content, {required this.isBlock})
-    : isLatex = true;
+  const LatexSegment.latex(
+    this.content, {
+    required this.isBlock,
+    required this.placeholderLength,
+  }) : isLatex = true;
 }

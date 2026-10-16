@@ -5,6 +5,33 @@ private func dropdownLocalized(_ key: String, _ fallback: String) -> String {
     NSLocalizedString(key, tableName: nil, bundle: .main, value: fallback, comment: "")
 }
 
+/// Symbol the Dart layer sends for the currently selected option.
+private let nativeDropdownSelectionSymbol = "checkmark"
+
+/// Glyph used when an option's symbol cannot be rendered inline. It mirrors the
+/// selected-row marker the other native action sheets already use.
+private let nativeDropdownCheckmarkGlyph = "✓"
+
+final class NativeDropdownCompletion: NSObject, UIAdaptivePresentationControllerDelegate {
+    private var completion: ((Result<String?, Error>) -> Void)?
+
+    init(_ completion: @escaping (Result<String?, Error>) -> Void) {
+        self.completion = completion
+    }
+
+    func finish(_ result: Result<String?, Error>) {
+        guard let completion else { return }
+        self.completion = nil
+        completion(result)
+    }
+
+    func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
+        finish(.success(nil))
+    }
+}
+
+private var nativeDropdownCompletionKey: UInt8 = 0
+
 private struct NativeDropdownOption {
     let id: String
     let label: String
@@ -39,6 +66,16 @@ private struct NativeDropdownOption {
         enabled = payload["enabled"] as? Bool ?? true
         destructive = payload["destructive"] as? Bool ?? false
     }
+}
+
+/// `UIAlertAction` has no public image API, so an option's symbol cannot be
+/// drawn inside the action. The selection marker still has to survive, so it
+/// moves into the title.
+private func decoratedDropdownLabel(_ option: NativeDropdownOption) -> String {
+    guard option.sfSymbol == nativeDropdownSelectionSymbol else {
+        return option.label
+    }
+    return "\(nativeDropdownCheckmarkGlyph) \(option.label)"
 }
 
 private struct NativeDropdownConfiguration {
@@ -102,13 +139,16 @@ private struct NativeDropdownConfiguration {
 }
 
 /// Presents simple option lists with native UIKit menus/action sheets.
-final class NativeDropdownBridge: NativeDropdownHostApi {
+final class NativeDropdownBridge: ConduitBridge, NativeDropdownHostApi {
     static let shared = NativeDropdownBridge()
+
+    private var host: ConduitBridgeHost?
 
     private init() {}
 
-    func configure(messenger: FlutterBinaryMessenger) {
-        NativeDropdownHostApiSetup.setUp(binaryMessenger: messenger, api: self)
+    func attach(to host: ConduitBridgeHost) {
+        self.host = host
+        NativeDropdownHostApiSetup.setUp(binaryMessenger: host.messenger, api: self)
     }
 
     func show(
@@ -147,27 +187,35 @@ final class NativeDropdownBridge: NativeDropdownHostApi {
             message: configuration.message,
             preferredStyle: .actionSheet
         )
+        let result = NativeDropdownCompletion(completion)
+        objc_setAssociatedObject(
+            controller,
+            &nativeDropdownCompletionKey,
+            result,
+            .OBJC_ASSOCIATION_RETAIN_NONATOMIC
+        )
 
         configuration.options.forEach { option in
             let style: UIAlertAction.Style = option.destructive
                 ? .destructive
                 : .default
-            let action = UIAlertAction(title: option.label, style: style) { _ in
-                completion(.success(option.id))
+            let action = UIAlertAction(
+                title: decoratedDropdownLabel(option),
+                style: style
+            ) { _ in
+                result.finish(.success(option.id))
             }
             action.isEnabled = option.enabled
-            if let sfSymbol = option.sfSymbol,
-               !sfSymbol.isEmpty {
-                action.setValue(UIImage(systemName: sfSymbol), forKey: "image")
-            }
             controller.addAction(action)
         }
 
         controller.addAction(
             UIAlertAction(title: configuration.cancelLabel, style: .cancel) { _ in
-                completion(.success(nil))
+                result.finish(.success(nil))
             }
         )
+
+        NativeSheetTheme.shared.apply(to: controller)
 
         if let popover = controller.popoverPresentationController {
             popover.sourceView = presenter.view
@@ -185,16 +233,24 @@ final class NativeDropdownBridge: NativeDropdownHostApi {
         }
 
         presenter.present(controller, animated: true)
+        if controller.presentingViewController == nil {
+            result.finish(.failure(PigeonError(
+                code: "PRESENTATION_FAILED",
+                message: dropdownLocalized("native.unablePresentDropdown", "Unable to present native dropdown"),
+                details: nil
+            )))
+            return
+        }
+
+        // Both of these need the presentation to exist. Reading them earlier
+        // builds a presentation controller outside the presenting trait
+        // environment and loads the alert's private view ahead of UIKit.
+        controller.presentationController?.delegate = result
+        NativeSheetTheme.shared.applyAccent(to: controller)
     }
 
     private func topViewController() -> UIViewController? {
-        let root = UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .flatMap(\.windows)
-            .first { $0.isKeyWindow }?
-            .rootViewController
-
-        return topViewController(from: root)
+        topViewController(from: host?.presentingViewController)
     }
 
     private func topViewController(from root: UIViewController?) -> UIViewController? {

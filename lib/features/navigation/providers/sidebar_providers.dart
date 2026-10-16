@@ -1,48 +1,51 @@
-import 'package:flutter/material.dart';
-import 'package:riverpod_annotation/riverpod_annotation.dart';
+import 'package:riverpod/riverpod.dart';
 
-import '../../../core/persistence/persistence_keys.dart';
-import '../../../core/persistence/preferences_store.dart';
+import 'package:conduit_core/providers/app_providers.dart';
 
-part 'sidebar_providers.g.dart';
+import 'package:conduit_core/features/hermes/providers/hermes_providers.dart';
+import 'package:conduit_core/features/email/providers/email_providers.dart';
 
-/// Index of the active sidebar tab (0=Chats, 1=Terminal, 2=Notes, 3=Channels).
-/// Persisted to shared_preferences so reopening the sidebar remembers the last
-/// tab.
-@Riverpod(keepAlive: true)
-class SidebarActiveTab extends _$SidebarActiveTab {
-  @override
-  int build() {
-    return (PreferencesStore.getInt(PreferenceKeys.sidebarActiveTab) ?? 0)
-        .clamp(0, 3);
-  }
+import '../../terminal/providers/terminal_providers.dart';
 
-  void set(int index) {
-    state = index.clamp(0, 3);
-    PreferencesStore.put(PreferenceKeys.sidebarActiveTab, state);
-  }
-}
+import 'package:conduit_core/features/navigation/models/sidebar_navigation_model.dart';
+import 'package:conduit_core/features/navigation/providers/sidebar_active_tab_provider.dart';
 
-/// Whether the sidebar header search field is expanded (full bar vs icon + avatar).
-@Riverpod(keepAlive: true)
-class SidebarHeaderSearchExpanded extends _$SidebarHeaderSearchExpanded {
-  @override
-  bool build() => false;
+import '../widgets/sidebar_tab_registry.dart';
 
-  void setExpanded(bool value) => state = value;
-}
+export 'sidebar_search_providers.dart';
 
-/// Shared with [ChatsDrawer], [NotesListTab], and [ChannelListTab] for list search.
-@Riverpod(keepAlive: true)
-TextEditingController sidebarSearchFieldController(Ref ref) {
-  final c = TextEditingController();
-  ref.onDispose(c.dispose);
-  return c;
-}
+// The active tab moved to the core, where the chat pipeline switches to the
+// terminal tab when a tool displays a file.
+export 'package:conduit_core/features/navigation/providers/sidebar_active_tab_provider.dart';
+// The tablet width preference moved to conduit_core.
+export 'package:conduit_core/features/navigation/providers/sidebar_tablet_width_provider.dart';
 
-@Riverpod(keepAlive: true)
-FocusNode sidebarSearchFieldFocusNode(Ref ref) {
-  final n = FocusNode(debugLabel: 'sidebar_header_search');
-  ref.onDispose(n.dispose);
-  return n;
-}
+final sidebarNavigationSnapshotProvider = Provider<SidebarNavigationSnapshot>((
+  ref,
+) {
+  final hermesOnly = ref.watch(hermesOnlyModeProvider);
+  final hasOpenWebUi = ref.watch(openWebUiAccountAvailableProvider);
+  final availability = SidebarTabAvailability(
+    hermesOnly: hermesOnly,
+    hasOpenWebUi: hasOpenWebUi,
+    hermesEnabled: ref.watch(hermesEnabledProvider),
+    notesEnabled: ref.watch(notesFeatureEnabledProvider),
+    terminalEnabled: ref.watch(terminalTabVisibleProvider),
+    channelsEnabled: ref.watch(channelsFeatureEnabledProvider),
+    emailEnabled: ref.watch(emailFeatureEnabledProvider),
+  );
+  final tabs = visibleSidebarTabIds(availability);
+  final persistedTab = ref.watch(sidebarActiveTabProvider);
+  final legacyIndex = ref
+      .read(sidebarActiveTabProvider.notifier)
+      .pendingLegacyIndex();
+  return SidebarNavigationSnapshot(
+    tabs: tabs,
+    isLegacySelection: legacyIndex != null,
+    selectedTab: resolveSidebarTabSelection(
+      persistedTab: persistedTab,
+      legacyIndex: legacyIndex,
+      visibleTabs: tabs,
+    ),
+  );
+});

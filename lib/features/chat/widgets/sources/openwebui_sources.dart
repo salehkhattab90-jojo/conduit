@@ -1,17 +1,32 @@
+import 'dart:async';
 import 'dart:io' show Platform;
 
-import 'package:adaptive_platform_ui/adaptive_platform_ui.dart';
+import 'package:conduit/shared/widgets/platform_ui/platform_ui.dart';
 import 'package:cached_network_image_ce/cached_network_image.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
-import '../../../../core/models/chat_message.dart';
+import 'package:conduit_core/models/chat_message.dart';
+
 import '../../../../core/services/native_sheet_bridge.dart';
+import '../../../../shared/services/raster_media_policy.dart';
 import '../../../../shared/theme/theme_extensions.dart';
 import '../../../../shared/utils/adaptive_glass.dart';
 import '../../../../shared/utils/external_link_launcher.dart';
-import '../../../../shared/widgets/markdown/source_reference_helper.dart';
+
+import 'package:conduit_core/utils/source_presentation.dart';
+import 'package:conduit_core/utils/source_reference_helper.dart';
+
 import '../../../../shared/widgets/sheet_handle.dart';
 import '../../../../shared/widgets/themed_sheets.dart';
+
+// The favicon resolver, snippets and labels are conduit_core's
+// (utils/source_presentation.dart); re-exported for existing importers.
+export 'package:conduit_core/utils/source_presentation.dart'
+    show
+        SourceFaviconDomainResolver,
+        SourceGroundingRedirectResolver,
+        debugResetSourceFaviconDomainCache,
+        resolveSourceFaviconDomain;
 
 /// OpenWebUI-style sources component with a compact chip and details sheet.
 class OpenWebUISourcesWidget extends StatelessWidget {
@@ -19,10 +34,14 @@ class OpenWebUISourcesWidget extends StatelessWidget {
     super.key,
     required this.sources,
     this.messageId,
+    this.faviconImageProvider,
+    this.faviconDomainResolver,
   });
 
   final List<ChatSourceReference> sources;
   final String? messageId;
+  final ImageProvider<Object> Function(String url)? faviconImageProvider;
+  final SourceFaviconDomainResolver? faviconDomainResolver;
 
   @override
   Widget build(BuildContext context) {
@@ -47,7 +66,7 @@ class OpenWebUISourcesWidget extends StatelessWidget {
         );
         final textPainter = TextPainter(
           text: TextSpan(
-            text: _sourceCountLabel(sources.length),
+            text: sourceCountLabel(sources.length),
             style: labelStyle,
           ),
           maxLines: 1,
@@ -64,7 +83,7 @@ class OpenWebUISourcesWidget extends StatelessWidget {
 
         return Semantics(
           button: true,
-          label: _sourceCountLabel(sources.length),
+          label: sourceCountLabel(sources.length),
           child: AdaptiveButton.child(
             onPressed: () => _showSourcesBottomSheet(context),
             style: usesOpaqueFallback
@@ -112,6 +131,9 @@ class OpenWebUISourcesWidget extends StatelessWidget {
                     child: _SourceFavicon(
                       url: SourceReferenceHelper.getSourceUrl(urlSources[i])!,
                       size: 16,
+                      imageProvider: faviconImageProvider,
+                      domainResolver:
+                          faviconDomainResolver ?? resolveSourceFaviconDomain,
                     ),
                   ),
               ],
@@ -120,7 +142,7 @@ class OpenWebUISourcesWidget extends StatelessWidget {
           const SizedBox(width: 8),
         ],
         Text(
-          _sourceCountLabel(sources.length),
+          sourceCountLabel(sources.length),
           style: AppTypography.labelMediumStyle.copyWith(
             fontWeight: FontWeight.w600,
             color: theme.textPrimary.withValues(alpha: 0.8),
@@ -133,13 +155,28 @@ class OpenWebUISourcesWidget extends StatelessWidget {
   void _showSourcesBottomSheet(BuildContext context) async {
     if (Platform.isIOS) {
       try {
+        final resolver = faviconDomainResolver ?? resolveSourceFaviconDomain;
+        final faviconDomains = await Future.wait<String?>([
+          for (final source in sources)
+            if (SourceReferenceHelper.getSourceUrl(source) case final url?)
+              resolver(url)
+            else
+              Future<String?>.value(),
+        ]);
+        if (!context.mounted) {
+          return;
+        }
         await NativeSheetBridge.instance.presentSheet(
           root: NativeSheetDetailConfig(
             id: 'chat-sources',
-            title: _sourceCountLabel(sources.length),
+            title: sourceCountLabel(sources.length),
             items: [
               for (var index = 0; index < sources.length; index++)
-                _buildNativeSourceItem(sources[index], index),
+                _buildNativeSourceItem(
+                  sources[index],
+                  index,
+                  faviconDomain: faviconDomains[index],
+                ),
             ],
           ),
           rethrowErrors: true,
@@ -197,7 +234,7 @@ class OpenWebUISourcesWidget extends StatelessWidget {
                         const SizedBox(width: Spacing.sm),
                         Expanded(
                           child: Text(
-                            _sourceCountLabel(sources.length),
+                            sourceCountLabel(sources.length),
                             style: AppTypography.bodyLargeStyle.copyWith(
                               fontWeight: FontWeight.w600,
                               color: liveTheme.textPrimary,
@@ -248,7 +285,7 @@ class OpenWebUISourcesWidget extends StatelessWidget {
     final theme = context.conduitTheme;
     final url = SourceReferenceHelper.getSourceUrl(source);
     final displayText = SourceReferenceHelper.getSourceLabel(source, index);
-    final snippet = _sourceSnippet(source);
+    final snippet = sourceSnippet(source);
     final type = source.type?.trim();
     final hasType = type != null && type.isNotEmpty;
 
@@ -276,7 +313,13 @@ class OpenWebUISourcesWidget extends StatelessWidget {
                 _SourceIndexBadge(index: index + 1),
                 const SizedBox(width: Spacing.sm),
                 if (url != null) ...[
-                  _SourceFavicon(url: url, size: 18),
+                  _SourceFavicon(
+                    url: url,
+                    size: 18,
+                    imageProvider: faviconImageProvider,
+                    domainResolver:
+                        faviconDomainResolver ?? resolveSourceFaviconDomain,
+                  ),
                   const SizedBox(width: Spacing.sm),
                 ] else ...[
                   Container(
@@ -358,11 +401,12 @@ class OpenWebUISourcesWidget extends StatelessWidget {
 
   NativeSheetItemConfig _buildNativeSourceItem(
     ChatSourceReference source,
-    int index,
-  ) {
+    int index, {
+    String? faviconDomain,
+  }) {
     final url = SourceReferenceHelper.getSourceUrl(source);
-    final snippet = _sourceSnippet(source);
-    final type = _sourceType(source);
+    final snippet = sourceSnippet(source);
+    final type = sourceType(source);
 
     return NativeSheetItemConfig(
       id: 'source-$index',
@@ -375,85 +419,9 @@ class OpenWebUISourcesWidget extends StatelessWidget {
       sourceUrl: url,
       sourceType: type,
       snippet: snippet,
-      faviconUrl: _sourceFaviconUrl(url),
+      faviconUrl: sourceFaviconUrl(url, domain: faviconDomain),
     );
   }
-
-  String _sourceCountLabel(int count) {
-    return count == 1 ? '1 Source' : '$count Sources';
-  }
-
-  String? _sourceType(ChatSourceReference source) {
-    final type = source.type?.trim();
-    return type == null || type.isEmpty ? null : type;
-  }
-
-  String? _sourceSnippet(ChatSourceReference source) {
-    final candidates = <dynamic>[
-      source.snippet,
-      ..._metadataSnippetCandidates(source),
-    ];
-
-    for (final candidate in candidates) {
-      final normalized = _normalizeSnippet(candidate);
-      if (normalized != null) {
-        return normalized;
-      }
-    }
-
-    return null;
-  }
-
-  Iterable<dynamic> _metadataSnippetCandidates(
-    ChatSourceReference source,
-  ) sync* {
-    final metadata = source.metadata;
-    if (metadata == null) {
-      return;
-    }
-
-    final documents = metadata['documents'];
-    if (documents is List) {
-      for (final document in documents) {
-        yield document;
-      }
-    }
-
-    final primaryMetadata = SourceReferenceHelper.primaryMetadata(source);
-    final nestedSource = SourceReferenceHelper.nestedSourceMetadata(source);
-    for (final entry in [primaryMetadata, nestedSource]) {
-      if (entry == null) {
-        continue;
-      }
-      yield entry['snippet'];
-      yield entry['content'];
-      yield entry['description'];
-      yield entry['text'];
-    }
-  }
-
-  String? _normalizeSnippet(dynamic value) {
-    if (value == null) {
-      return null;
-    }
-
-    final text = value.toString().replaceAll(RegExp(r'\s+'), ' ').trim();
-    return text.isEmpty ? null : text;
-  }
-
-  String? _sourceFaviconUrl(String? url) {
-    if (url == null) {
-      return null;
-    }
-
-    final domain = SourceReferenceHelper.extractDomain(url).trim();
-    if (domain.isEmpty) {
-      return null;
-    }
-
-    return 'https://www.google.com/s2/favicons?sz=32&domain=$domain';
-  }
-
 }
 
 class _SourceIndexBadge extends StatelessWidget {
@@ -484,46 +452,129 @@ class _SourceIndexBadge extends StatelessWidget {
   }
 }
 
-class _SourceFavicon extends StatelessWidget {
-  const _SourceFavicon({required this.url, required this.size});
+class _SourceFavicon extends StatefulWidget {
+  const _SourceFavicon({
+    required this.url,
+    required this.size,
+    required this.domainResolver,
+    this.imageProvider,
+  });
 
   final String url;
   final double size;
+  final SourceFaviconDomainResolver domainResolver;
+  final ImageProvider<Object> Function(String url)? imageProvider;
+
+  @override
+  State<_SourceFavicon> createState() => _SourceFaviconState();
+}
+
+class _SourceFaviconState extends State<_SourceFavicon> {
+  late String _domain;
+  int _resolutionGeneration = 0;
+  bool _waitingForGroundingRedirect = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _beginDomainResolution();
+  }
+
+  @override
+  void didUpdateWidget(covariant _SourceFavicon oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.url != widget.url ||
+        oldWidget.domainResolver != widget.domainResolver) {
+      _beginDomainResolution();
+    }
+  }
+
+  void _beginDomainResolution() {
+    final generation = ++_resolutionGeneration;
+    _domain = SourceReferenceHelper.extractDomain(widget.url);
+    final source = Uri.tryParse(widget.url);
+    _waitingForGroundingRedirect = isGoogleGroundingRedirect(source);
+    if (!_waitingForGroundingRedirect) {
+      return;
+    }
+    unawaited(() async {
+      try {
+        final domain = await widget.domainResolver(widget.url);
+        if (!mounted || generation != _resolutionGeneration) {
+          return;
+        }
+        final normalized = domain.trim();
+        setState(() {
+          if (normalized.isNotEmpty) {
+            _domain = normalized;
+          }
+          _waitingForGroundingRedirect = false;
+        });
+      } catch (_) {
+        if (!mounted || generation != _resolutionGeneration) {
+          return;
+        }
+        setState(() => _waitingForGroundingRedirect = false);
+      }
+    }());
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = context.conduitTheme;
-    final domain = SourceReferenceHelper.extractDomain(url);
-
+    final decodeTarget = RasterMediaPolicy.forBox(
+      context,
+      profile: RasterDecodeProfile.avatar,
+      logicalWidth: widget.size - 2,
+      logicalHeight: widget.size - 2,
+    );
     return Container(
-      width: size,
-      height: size,
+      width: widget.size,
+      height: widget.size,
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(size / 2),
+        borderRadius: BorderRadius.circular(widget.size / 2),
         border: Border.all(color: theme.surfaceBackground, width: 1),
         color: theme.surfaceBackground,
       ),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular((size / 2) - 1),
-        child: CachedNetworkImage(
-          imageUrl: 'https://www.google.com/s2/favicons?sz=32&domain=$domain',
-          width: size - 2,
-          height: size - 2,
-          errorBuilder: (context, error, stackTrace) => _fallback(theme),
-        ),
+        borderRadius: BorderRadius.circular((widget.size / 2) - 1),
+        child: _waitingForGroundingRedirect
+            ? _fallback(theme)
+            : Image(
+                image: RasterMediaPolicy.resizeProvider(
+                  widget.imageProvider?.call(
+                        'https://www.google.com/s2/favicons'
+                        '?sz=32&domain=$_domain',
+                      ) ??
+                      CachedNetworkImageProvider(
+                        'https://www.google.com/s2/favicons'
+                        '?sz=32&domain=$_domain',
+                      ),
+                  decodeTarget,
+                ),
+                width: widget.size - 2,
+                height: widget.size - 2,
+                fit: BoxFit.contain,
+                frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+                  return wasSynchronouslyLoaded || frame != null
+                      ? child
+                      : _fallback(theme);
+                },
+                errorBuilder: (context, error, stackTrace) => _fallback(theme),
+              ),
       ),
     );
   }
 
   Widget _fallback(ConduitThemeExtension theme) {
     return Container(
-      width: size - 2,
-      height: size - 2,
+      width: widget.size - 2,
+      height: widget.size - 2,
       color: theme.textSecondary.withValues(alpha: 0.1),
       alignment: Alignment.center,
       child: Icon(
         Icons.language,
-        size: size * 0.55,
+        size: widget.size * 0.55,
         color: theme.textSecondary.withValues(alpha: 0.6),
       ),
     );
