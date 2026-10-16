@@ -4229,5 +4229,9 @@
   "accountsRemoveAddressMessage": "Conduit probeert dit adres niet meer. Je accounts blijven ingelogd.",
   "accountsAddressConfirmTitle": "Dit adres controleren?",
   "accountsAddressConfirmMessage": "Om zeker te weten dat {host} deze server is, stuurt Conduit er de sessie van een hier opgeslagen account naartoe. Ga alleen verder als je dit adres vertrouwt.",
-  "accountsAddressConfirmAction": "Adres controleren"
+  "accountsAddressConfirmAction": "Adres controleren",
+  "sidebarEmailTab": "E-mail",
+  "searchEmail": "E-mail zoeken...",
+  "emailLoadFailed": "E-mail kon niet worden geladen.",
+  "emailDownloadFailed": "De bijlage kon niet worden opgeslagen. Probeer het opnieuw."
 }

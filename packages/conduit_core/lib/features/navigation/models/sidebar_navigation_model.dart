@@ -1,7 +1,7 @@
 import 'package:meta/meta.dart';
 
 /// Stable, persistence-safe identity for a sidebar destination.
-enum SidebarTabId { chats, hermes, terminal, notes, channels }
+enum SidebarTabId { chats, hermes, terminal, notes, channels, email }
 
 /// Data-only capability snapshot used to decide which destinations exist.
 @immutable
@@ -13,6 +13,7 @@ final class SidebarTabAvailability {
     required this.notesEnabled,
     required this.terminalEnabled,
     required this.channelsEnabled,
+    this.emailEnabled = false,
   });
 
   final bool hermesOnly;
@@ -21,6 +22,9 @@ final class SidebarTabAvailability {
   final bool notesEnabled;
   final bool terminalEnabled;
   final bool channelsEnabled;
+
+  /// Whether the server offers the Email section (`features.enable_email`).
+  final bool emailEnabled;
 }
 
 SidebarTabId resolveSidebarTabSelection({

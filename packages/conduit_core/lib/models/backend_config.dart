@@ -121,6 +121,7 @@ class BackendConfig {
     this.codeInterpreterEngine,
     this.enableAutomations,
     this.enableCalendar,
+    this.enableEmail,
     this.enableAudioInput,
     this.enableAudioOutput,
     this.sttProvider,
@@ -196,6 +197,12 @@ class BackendConfig {
   /// treat only `true` as enabled.
   final bool? enableCalendar;
 
+  /// Mirrors `features.enable_email`: whether the server hosts the Email
+  /// section. Reported only to a signed-in account and only by servers that
+  /// carry the email service; null (not reported) means unavailable, so callers
+  /// treat only `true` as enabled.
+  final bool? enableEmail;
+
   final bool? enableAudioInput;
   final bool? enableAudioOutput;
   final String? sttProvider;
@@ -250,6 +257,7 @@ class BackendConfig {
     String? codeInterpreterEngine,
     bool? enableAutomations,
     bool? enableCalendar,
+    bool? enableEmail,
     bool? enableAudioInput,
     bool? enableAudioOutput,
     String? sttProvider,
@@ -285,6 +293,7 @@ class BackendConfig {
           codeInterpreterEngine ?? this.codeInterpreterEngine,
       enableAutomations: enableAutomations ?? this.enableAutomations,
       enableCalendar: enableCalendar ?? this.enableCalendar,
+      enableEmail: enableEmail ?? this.enableEmail,
       enableAudioInput: enableAudioInput ?? this.enableAudioInput,
       enableAudioOutput: enableAudioOutput ?? this.enableAudioOutput,
       sttProvider: sttProvider ?? this.sttProvider,
@@ -338,6 +347,7 @@ class BackendConfig {
       'code_interpreter_engine': codeInterpreterEngine,
       'enable_automations': enableAutomations,
       'enable_calendar': enableCalendar,
+      'enable_email': enableEmail,
       'enable_audio_input': enableAudioInput,
       'enable_audio_output': enableAudioOutput,
       'stt_provider': sttProvider,
@@ -371,6 +381,7 @@ class BackendConfig {
     String? codeInterpreterEngine;
     bool? enableAutomations;
     bool? enableCalendar;
+    bool? enableEmail;
     bool? enableAudioInput;
     bool? enableAudioOutput;
     String? sttProvider;
@@ -436,6 +447,10 @@ class BackendConfig {
     final calendarValue = json['enable_calendar'];
     if (calendarValue is bool) {
       enableCalendar = calendarValue;
+    }
+    final emailValue = json['enable_email'];
+    if (emailValue is bool) {
+      enableEmail = emailValue;
     }
 
     final audioIn = json['enable_audio_input'];
@@ -557,6 +572,10 @@ class BackendConfig {
       if (nestedCalendar is bool && enableCalendar == null) {
         enableCalendar = nestedCalendar;
       }
+      final nestedEmail = features['enable_email'];
+      if (nestedEmail is bool && enableEmail == null) {
+        enableEmail = nestedEmail;
+      }
       final nestedAudioIn = features['enable_audio_input'];
       if (nestedAudioIn is bool && enableAudioInput == null) {
         enableAudioInput = nestedAudioIn;
@@ -635,6 +654,7 @@ class BackendConfig {
       codeInterpreterEngine: codeInterpreterEngine,
       enableAutomations: enableAutomations,
       enableCalendar: enableCalendar,
+      enableEmail: enableEmail,
       enableAudioInput: enableAudioInput,
       enableAudioOutput: enableAudioOutput,
       sttProvider: sttProvider,

@@ -6138,5 +6138,9 @@
   "accountsRemoveAddressMessage": "Conduit přestane tuto adresu zkoušet. Vaše účty zůstanou přihlášené.",
   "accountsAddressConfirmTitle": "Ověřit tuto adresu?",
   "accountsAddressConfirmMessage": "Aby Conduit ověřil, že {host} je tento server, pošle mu relaci účtu uloženého v tomto zařízení. Pokračujte, jen pokud této adrese důvěřujete.",
-  "accountsAddressConfirmAction": "Ověřit adresu"
+  "accountsAddressConfirmAction": "Ověřit adresu",
+  "sidebarEmailTab": "E-mail",
+  "searchEmail": "Hledat e-maily...",
+  "emailLoadFailed": "E-mail se nepodařilo načíst.",
+  "emailDownloadFailed": "Přílohu se nepodařilo uložit. Zkuste to znovu."
 }

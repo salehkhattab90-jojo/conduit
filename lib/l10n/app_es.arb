@@ -4229,5 +4229,9 @@
   "accountsRemoveAddressMessage": "Conduit dejará de probar esta dirección. Tus cuentas seguirán con la sesión iniciada.",
   "accountsAddressConfirmTitle": "¿Comprobar esta dirección?",
   "accountsAddressConfirmMessage": "Para asegurarse de que {host} es este servidor, Conduit le envía la sesión de una cuenta guardada aquí. Continúa solo si confías en esta dirección.",
-  "accountsAddressConfirmAction": "Comprobar dirección"
+  "accountsAddressConfirmAction": "Comprobar dirección",
+  "sidebarEmailTab": "Correo",
+  "searchEmail": "Buscar correo...",
+  "emailLoadFailed": "No se pudo cargar el correo.",
+  "emailDownloadFailed": "No se pudo guardar el archivo adjunto. Inténtalo de nuevo."
 }

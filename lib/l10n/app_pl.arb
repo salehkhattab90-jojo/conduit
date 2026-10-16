@@ -7870,5 +7870,9 @@
         "example": "gpt-realtime-2.1-mini"
       }
     }
-  }
+  },
+  "sidebarEmailTab": "E-mail",
+  "searchEmail": "Szukaj e-maili...",
+  "emailLoadFailed": "Nie udało się wczytać poczty.",
+  "emailDownloadFailed": "Nie udało się zapisać załącznika. Spróbuj ponownie."
 }

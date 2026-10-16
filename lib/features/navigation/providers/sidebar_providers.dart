@@ -3,6 +3,7 @@ import 'package:riverpod/riverpod.dart';
 import 'package:conduit_core/providers/app_providers.dart';
 
 import 'package:conduit_core/features/hermes/providers/hermes_providers.dart';
+import 'package:conduit_core/features/email/providers/email_providers.dart';
 
 import '../../terminal/providers/terminal_providers.dart';
 
@@ -31,6 +32,7 @@ final sidebarNavigationSnapshotProvider = Provider<SidebarNavigationSnapshot>((
     notesEnabled: ref.watch(notesFeatureEnabledProvider),
     terminalEnabled: ref.watch(terminalTabVisibleProvider),
     channelsEnabled: ref.watch(channelsFeatureEnabledProvider),
+    emailEnabled: ref.watch(emailFeatureEnabledProvider),
   );
   final tabs = visibleSidebarTabIds(availability);
   final persistedTab = ref.watch(sidebarActiveTabProvider);

@@ -4229,5 +4229,9 @@
   "accountsRemoveAddressMessage": "Conduit n'essaiera plus cette adresse. Vos comptes restent connectés.",
   "accountsAddressConfirmTitle": "Vérifier cette adresse ?",
   "accountsAddressConfirmMessage": "Pour s'assurer que {host} est bien ce serveur, Conduit lui envoie la session d'un compte enregistré ici. Ne continuez que si vous faites confiance à cette adresse.",
-  "accountsAddressConfirmAction": "Vérifier l'adresse"
+  "accountsAddressConfirmAction": "Vérifier l'adresse",
+  "sidebarEmailTab": "E-mail",
+  "searchEmail": "Rechercher des e-mails...",
+  "emailLoadFailed": "Impossible de charger les e-mails.",
+  "emailDownloadFailed": "Impossible d'enregistrer la pièce jointe. Veuillez réessayer."
 }

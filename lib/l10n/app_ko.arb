@@ -4001,5 +4001,9 @@
   "accountsRemoveAddressMessage": "Conduit이 더 이상 이 주소를 시도하지 않습니다. 계정은 로그인 상태로 유지됩니다.",
   "accountsAddressConfirmTitle": "이 주소를 확인할까요?",
   "accountsAddressConfirmMessage": "{host}이(가) 이 서버인지 확인하기 위해 Conduit이 이 기기에 저장된 계정의 세션을 해당 주소로 보냅니다. 이 주소를 신뢰하는 경우에만 계속하세요.",
-  "accountsAddressConfirmAction": "주소 확인"
+  "accountsAddressConfirmAction": "주소 확인",
+  "sidebarEmailTab": "이메일",
+  "searchEmail": "이메일 검색...",
+  "emailLoadFailed": "이메일을 불러올 수 없습니다.",
+  "emailDownloadFailed": "첨부 파일을 저장할 수 없습니다. 다시 시도하세요."
 }

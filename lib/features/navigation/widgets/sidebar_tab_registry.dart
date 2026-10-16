@@ -2,6 +2,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../../l10n/app_localizations.dart';
 import '../../channels/widgets/channel_list_tab.dart';
+import '../../email/views/email_tab.dart';
 import '../../hermes/widgets/hermes_sessions_tab.dart';
 import '../../notes/widgets/notes_list_tab.dart';
 import '../../terminal/widgets/terminal_tab.dart';
@@ -82,11 +83,13 @@ String _hermesLabel(AppLocalizations l10n) => l10n.sidebarHermesTab;
 String _notesLabel(AppLocalizations l10n) => l10n.sidebarNotesTab;
 String _terminalLabel(AppLocalizations l10n) => l10n.sidebarTerminalTab;
 String _channelsLabel(AppLocalizations l10n) => l10n.sidebarChannelsTab;
+String _emailLabel(AppLocalizations l10n) => l10n.sidebarEmailTab;
 String _conversationSearchHint(AppLocalizations l10n) =>
     l10n.searchConversations;
 String _notesSearchHint(AppLocalizations l10n) => l10n.searchNotes;
 String _terminalSearchHint(AppLocalizations l10n) => l10n.searchFiles;
 String _channelsSearchHint(AppLocalizations l10n) => l10n.searchChannels;
+String _emailSearchHint(AppLocalizations l10n) => l10n.searchEmail;
 
 Widget _chatsBody({required bool showBottomNavigation, required bool active}) =>
     const ChatsDrawer();
@@ -109,6 +112,9 @@ Widget _channelsBody({
   required bool active,
 }) => const ChannelListTab();
 
+Widget _emailBody({required bool showBottomNavigation, required bool active}) =>
+    EmailTab(isActive: active);
+
 bool _chatsVisible(SidebarTabAvailability availability) =>
     !availability.hermesOnly;
 
@@ -130,6 +136,11 @@ bool _channelsVisible(SidebarTabAvailability availability) =>
     !availability.hermesOnly &&
     availability.channelsEnabled;
 
+bool _emailVisible(SidebarTabAvailability availability) =>
+    availability.hasOpenWebUi &&
+    !availability.hermesOnly &&
+    availability.emailEnabled;
+
 const sidebarTabRegistry = <SidebarTabDescriptor>[
   SidebarTabDescriptor(
     id: SidebarTabId.chats,
@@ -142,6 +153,17 @@ const sidebarTabRegistry = <SidebarTabDescriptor>[
     selectedSfSymbol: 'bubble.left.fill',
     isVisible: _chatsVisible,
     createAction: chatSidebarCreateAction,
+  ),
+  SidebarTabDescriptor(
+    id: SidebarTabId.email,
+    labelBuilder: _emailLabel,
+    searchHintBuilder: _emailSearchHint,
+    bodyBuilder: _emailBody,
+    materialIcon: Icons.mail_outline,
+    selectedMaterialIcon: Icons.mail,
+    sfSymbol: 'envelope',
+    selectedSfSymbol: 'envelope.fill',
+    isVisible: _emailVisible,
   ),
   SidebarTabDescriptor(
     id: SidebarTabId.hermes,

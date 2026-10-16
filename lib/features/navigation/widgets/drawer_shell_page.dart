@@ -11,6 +11,7 @@ import '../../../l10n/app_localizations.dart';
 import '../../../shared/theme/theme_extensions.dart';
 import '../../../shared/widgets/sidebar_layout_constants.dart';
 import '../../../shared/widgets/platform_ui/platform_ui.dart';
+import '../../email/widgets/email_open_request_listener.dart';
 
 import 'package:conduit_core/features/chat/providers/chat_providers.dart';
 
@@ -73,7 +74,8 @@ class DrawerShellPage extends ConsumerWidget {
         } catch (_) {}
       },
       drawer: const SidebarPage(),
-      layoutBuilder: (layout) => MacDesktopShortcuts(child: layout),
+      layoutBuilder: (layout) =>
+          EmailOpenRequestListener(child: MacDesktopShortcuts(child: layout)),
       child: child,
     );
   }

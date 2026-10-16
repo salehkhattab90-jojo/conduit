@@ -8791,5 +8791,21 @@
   "accountsAddressConfirmAction": "Check address",
   "@accountsAddressConfirmAction": {
     "description": "Confirms sending a saved account's session to a new address of an Open WebUI server, to check that it reaches the same server."
+  },
+  "sidebarEmailTab": "Email",
+  "@sidebarEmailTab": {
+    "description": "Sidebar tab label for the Email section, which embeds the server's email web app."
+  },
+  "searchEmail": "Search email...",
+  "@searchEmail": {
+    "description": "Hint text for the sidebar search field while the Email tab is selected."
+  },
+  "emailLoadFailed": "Couldn't load email.",
+  "@emailLoadFailed": {
+    "description": "Shown in the Email tab when the email web app could not be loaded."
+  },
+  "emailDownloadFailed": "Couldn't save the attachment. Please try again.",
+  "@emailDownloadFailed": {
+    "description": "Error shown when saving an email attachment from the Email tab fails."
   }
 }

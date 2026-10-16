@@ -4267,5 +4267,9 @@
   "accountsRemoveAddressMessage": "Conduit перестанет пробовать этот адрес. Вход в ваши аккаунты сохранится.",
   "accountsAddressConfirmTitle": "Проверить этот адрес?",
   "accountsAddressConfirmMessage": "Чтобы убедиться, что {host} — это тот же сервер, Conduit отправит туда сеанс аккаунта, сохранённого на этом устройстве. Продолжайте, только если доверяете этому адресу.",
-  "accountsAddressConfirmAction": "Проверить адрес"
+  "accountsAddressConfirmAction": "Проверить адрес",
+  "sidebarEmailTab": "Почта",
+  "searchEmail": "Поиск писем...",
+  "emailLoadFailed": "Не удалось загрузить почту.",
+  "emailDownloadFailed": "Не удалось сохранить вложение. Попробуйте ещё раз."
 }
