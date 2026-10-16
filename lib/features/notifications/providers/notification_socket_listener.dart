@@ -8,6 +8,7 @@ import 'package:conduit_core/providers/app_providers.dart';
 import 'package:conduit_core/database/local_conversation_loader.dart';
 
 import '../../../shared/services/navigation_service.dart';
+import '../../email/email_open_navigation.dart';
 
 import 'package:conduit_core/services/settings_service.dart';
 import 'package:conduit_core/services/socket_service.dart';
@@ -115,6 +116,9 @@ Future<void> _handleTap(Ref ref, NotificationTap tap) async {
           ref.read(activeConversationProvider.notifier).set(local);
         }
         schedulePullChatNow(ref, tap.sourceId, ownership: ownership);
+      case null:
+        // An email notification (no core kind): show the Email section.
+        openEmailFromNotification(ref, tap.sourceId);
     }
   } catch (e, st) {
     DebugLogger.error(

@@ -7874,5 +7874,8 @@
   "sidebarEmailTab": "E-mail",
   "searchEmail": "Szukaj e-maili...",
   "emailLoadFailed": "Nie udało się wczytać poczty.",
-  "emailDownloadFailed": "Nie udało się zapisać załącznika. Spróbuj ponownie."
+  "emailDownloadFailed": "Nie udało się zapisać załącznika. Spróbuj ponownie.",
+  "notificationChannelEmailName": "E-mail",
+  "notificationChannelEmailDescription": "Nowe e-maile w skrzynce odbiorczej",
+  "emailNotificationDefaultTitle": "Nowy e-mail"
 }

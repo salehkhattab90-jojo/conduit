@@ -10,14 +10,25 @@ import '../../../core/utils/current_localizations.dart';
 import 'package:conduit_core/utils/debug_logger.dart';
 
 import 'package:conduit_core/features/notifications/models/app_notification.dart';
+import 'package:conduit_core/features/email/email_push_payload.dart';
 
 part 'local_notification_service.g.dart';
 
 /// A tap on a system notification, decoded back into the target it points at.
 class NotificationTap {
-  const NotificationTap({required this.kind, required this.sourceId});
+  const NotificationTap({
+    required NotificationKind this.kind,
+    required this.sourceId,
+  });
 
-  final NotificationKind kind;
+  /// A tap on a new-email notification. [sourceId] is the message to open, or
+  /// empty to open the Email section only.
+  const NotificationTap.email(String messageId)
+    : kind = null,
+      sourceId = messageId;
+
+  /// Null for an email tap, which has no core [NotificationKind].
+  final NotificationKind? kind;
   final String sourceId;
 
   static NotificationTap? tryDecode(String? payload) {
@@ -27,6 +38,9 @@ class NotificationTap {
       if (map is! Map) return null;
       final kindName = map['kind'];
       final sourceId = map['sourceId'];
+      if (kindName == emailPushType) {
+        return NotificationTap.email(sourceId is String ? sourceId : '');
+      }
       if (kindName is! String || sourceId is! String || sourceId.isEmpty) {
         return null;
       }
@@ -44,6 +58,9 @@ class NotificationTap {
     'kind': notification.kind.name,
     'sourceId': notification.sourceId,
   });
+
+  static String encodeEmail(String? messageId) =>
+      jsonEncode({'kind': emailPushType, 'sourceId': messageId ?? ''});
 }
 
 /// Wraps a single [FlutterLocalNotificationsPlugin] instance for OS-level
@@ -138,6 +155,20 @@ class LocalNotificationService {
           AndroidFlutterLocalNotificationsPlugin
         >()
         ?.createNotificationChannel(channel);
+    // The server names this channel in every Email push; Android files
+    // background pushes under a fallback channel unless it exists.
+    await _plugin
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >()
+        ?.createNotificationChannel(
+          AndroidNotificationChannel(
+            emailNotificationChannelId,
+            l10n.notificationChannelEmailName,
+            description: l10n.notificationChannelEmailDescription,
+            importance: Importance.high,
+          ),
+        );
   }
 
   void _onResponse(NotificationResponse response) {
@@ -245,6 +276,53 @@ class LocalNotificationService {
     } catch (e, st) {
       DebugLogger.error(
         'failed to show system notification',
+        error: e,
+        stackTrace: st,
+        scope: 'notifications/system',
+      );
+    }
+  }
+
+  /// Posts a new-email notification for a push that arrived while the app is
+  /// in the foreground (the OS shows background ones itself). Tapping it
+  /// decodes to [NotificationTap.email].
+  Future<void> showEmail({
+    String? title,
+    String? body,
+    String? messageId,
+  }) async {
+    if (!Platform.isAndroid && !Platform.isIOS) return;
+    if (!_initialized) await initialize();
+
+    final l10n = currentAppLocalizations();
+    final resolvedTitle = title != null && title.trim().isNotEmpty
+        ? title
+        : l10n.emailNotificationDefaultTitle;
+    try {
+      await _plugin.show(
+        id: _nextNotificationId(),
+        title: resolvedTitle,
+        body: body ?? '',
+        notificationDetails: NotificationDetails(
+          android: AndroidNotificationDetails(
+            emailNotificationChannelId,
+            l10n.notificationChannelEmailName,
+            channelDescription: l10n.notificationChannelEmailDescription,
+            importance: Importance.high,
+            priority: Priority.high,
+            icon: '@mipmap/ic_launcher',
+          ),
+          iOS: const DarwinNotificationDetails(
+            presentAlert: true,
+            presentBadge: true,
+            presentSound: true,
+          ),
+        ),
+        payload: NotificationTap.encodeEmail(messageId),
+      );
+    } catch (e, st) {
+      DebugLogger.error(
+        'failed to show email notification',
         error: e,
         stackTrace: st,
         scope: 'notifications/system',

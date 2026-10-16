@@ -8807,5 +8807,17 @@
   "emailDownloadFailed": "Couldn't save the attachment. Please try again.",
   "@emailDownloadFailed": {
     "description": "Error shown when saving an email attachment from the Email tab fails."
+  },
+  "notificationChannelEmailName": "Email",
+  "@notificationChannelEmailName": {
+    "description": "Android notification channel name for new-email push notifications."
+  },
+  "notificationChannelEmailDescription": "New email in your inbox",
+  "@notificationChannelEmailDescription": {
+    "description": "Android notification channel description for new-email push notifications."
+  },
+  "emailNotificationDefaultTitle": "New email",
+  "@emailNotificationDefaultTitle": {
+    "description": "Fallback title of a new-email notification when the push carries none."
   }
 }

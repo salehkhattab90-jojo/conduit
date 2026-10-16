@@ -5836,5 +5836,8 @@
   "sidebarEmailTab": "メール",
   "searchEmail": "メールを検索...",
   "emailLoadFailed": "メールを読み込めませんでした。",
-  "emailDownloadFailed": "添付ファイルを保存できませんでした。もう一度お試しください。"
+  "emailDownloadFailed": "添付ファイルを保存できませんでした。もう一度お試しください。",
+  "notificationChannelEmailName": "メール",
+  "notificationChannelEmailDescription": "受信トレイの新着メール",
+  "emailNotificationDefaultTitle": "新着メール"
 }

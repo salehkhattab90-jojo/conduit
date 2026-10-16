@@ -4233,5 +4233,8 @@
   "sidebarEmailTab": "Correo",
   "searchEmail": "Buscar correo...",
   "emailLoadFailed": "No se pudo cargar el correo.",
-  "emailDownloadFailed": "No se pudo guardar el archivo adjunto. Inténtalo de nuevo."
+  "emailDownloadFailed": "No se pudo guardar el archivo adjunto. Inténtalo de nuevo.",
+  "notificationChannelEmailName": "Correo",
+  "notificationChannelEmailDescription": "Correo nuevo en tu bandeja de entrada",
+  "emailNotificationDefaultTitle": "Correo nuevo"
 }

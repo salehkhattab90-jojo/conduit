@@ -6142,5 +6142,8 @@
   "sidebarEmailTab": "E-mail",
   "searchEmail": "Hľadať e-maily...",
   "emailLoadFailed": "E-mail sa nepodarilo načítať.",
-  "emailDownloadFailed": "Prílohu sa nepodarilo uložiť. Skúste to znova."
+  "emailDownloadFailed": "Prílohu sa nepodarilo uložiť. Skúste to znova.",
+  "notificationChannelEmailName": "E-mail",
+  "notificationChannelEmailDescription": "Nové e-maily v schránke",
+  "emailNotificationDefaultTitle": "Nový e-mail"
 }

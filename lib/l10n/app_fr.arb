@@ -4233,5 +4233,8 @@
   "sidebarEmailTab": "E-mail",
   "searchEmail": "Rechercher des e-mails...",
   "emailLoadFailed": "Impossible de charger les e-mails.",
-  "emailDownloadFailed": "Impossible d'enregistrer la pièce jointe. Veuillez réessayer."
+  "emailDownloadFailed": "Impossible d'enregistrer la pièce jointe. Veuillez réessayer.",
+  "notificationChannelEmailName": "E-mail",
+  "notificationChannelEmailDescription": "Nouveaux e-mails dans votre boîte de réception",
+  "emailNotificationDefaultTitle": "Nouvel e-mail"
 }

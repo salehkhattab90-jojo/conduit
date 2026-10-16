@@ -130,6 +130,7 @@ import 'package:conduit_core/features/release_notes/release_notes_bootstrap.dart
 import 'features/release_notes/release_notes_coordinator.dart';
 import 'features/release_notes/data/release_notes_repository.dart';
 import 'features/release_notes/release_notes_presenter.dart';
+import 'features/notifications/services/email_push_service.dart';
 import 'l10n/conduit_localizations.dart';
 import 'shared/widgets/legacy_design_compatibility.dart';
 
@@ -340,6 +341,9 @@ void main() {
       final hiveBoxesFuture = HiveBootstrap.instance.ensureInitialized();
       final preferencesFuture = PreferencesStore.ensureInitialized();
       final platformUiFuture = PlatformUiCapabilities.initialize();
+      // Email push. Never throws: without a Firebase config file in the build,
+      // push stays off and the app runs as usual.
+      final emailPushFuture = initializeEmailPush();
 
       try {
         await QuickActionsBootstrap.initialize();
@@ -553,6 +557,7 @@ void main() {
             .timeout(const Duration(seconds: 5), onTimeout: () => false);
       }
 
+      await emailPushFuture;
       await modelLogosLoaded;
       runApp(
         UncontrolledProviderScope(

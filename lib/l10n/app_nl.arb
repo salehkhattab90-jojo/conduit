@@ -4233,5 +4233,8 @@
   "sidebarEmailTab": "E-mail",
   "searchEmail": "E-mail zoeken...",
   "emailLoadFailed": "E-mail kon niet worden geladen.",
-  "emailDownloadFailed": "De bijlage kon niet worden opgeslagen. Probeer het opnieuw."
+  "emailDownloadFailed": "De bijlage kon niet worden opgeslagen. Probeer het opnieuw.",
+  "notificationChannelEmailName": "E-mail",
+  "notificationChannelEmailDescription": "Nieuwe e-mail in je inbox",
+  "emailNotificationDefaultTitle": "Nieuwe e-mail"
 }

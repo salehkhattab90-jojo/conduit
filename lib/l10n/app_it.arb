@@ -4233,5 +4233,8 @@
   "sidebarEmailTab": "Email",
   "searchEmail": "Cerca email...",
   "emailLoadFailed": "Impossibile caricare le email.",
-  "emailDownloadFailed": "Impossibile salvare l'allegato. Riprova."
+  "emailDownloadFailed": "Impossibile salvare l'allegato. Riprova.",
+  "notificationChannelEmailName": "Email",
+  "notificationChannelEmailDescription": "Nuove email nella posta in arrivo",
+  "emailNotificationDefaultTitle": "Nuova email"
 }

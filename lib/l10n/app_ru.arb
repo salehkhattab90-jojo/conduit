@@ -4271,5 +4271,8 @@
   "sidebarEmailTab": "Почта",
   "searchEmail": "Поиск писем...",
   "emailLoadFailed": "Не удалось загрузить почту.",
-  "emailDownloadFailed": "Не удалось сохранить вложение. Попробуйте ещё раз."
+  "emailDownloadFailed": "Не удалось сохранить вложение. Попробуйте ещё раз.",
+  "notificationChannelEmailName": "Почта",
+  "notificationChannelEmailDescription": "Новые письма во входящих",
+  "emailNotificationDefaultTitle": "Новое письмо"
 }

@@ -69,6 +69,7 @@ import 'package:conduit_core/features/hermes/models/hermes_model.dart';
 
 import '../../features/notifications/providers/notification_socket_listener.dart';
 import '../../features/notifications/services/local_notification_service.dart';
+import '../../features/notifications/services/email_push_service.dart';
 import '../../shared/theme/theme_providers.dart';
 
 part 'app_startup_providers.g.dart';
@@ -1188,6 +1189,9 @@ class AppStartupFlow extends _$AppStartupFlow {
     unawaited(
       ref.read(notificationSocketListenerProvider.notifier).handleLaunchTap(),
     );
+    // Email push: register this device for the account (a no-op without a
+    // Firebase config); sign-out and account switches are handled inside.
+    unawaited(ref.read(emailPushServiceProvider).start());
     _scheduleDefaultModelPreload(
       keepDefaultModelAutoSelectionAlive: keepDefaultModelAutoSelectionAlive,
     );

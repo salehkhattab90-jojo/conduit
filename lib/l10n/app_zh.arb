@@ -4233,5 +4233,8 @@
   "sidebarEmailTab": "邮件",
   "searchEmail": "搜索邮件...",
   "emailLoadFailed": "无法加载邮件。",
-  "emailDownloadFailed": "无法保存附件，请重试。"
+  "emailDownloadFailed": "无法保存附件，请重试。",
+  "notificationChannelEmailName": "邮件",
+  "notificationChannelEmailDescription": "收件箱中的新邮件",
+  "emailNotificationDefaultTitle": "新邮件"
 }

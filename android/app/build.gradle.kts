@@ -94,3 +94,10 @@ dependencies {
 flutter {
     source = "../.."
 }
+
+// Firebase (Email push): apply the google-services plugin only when this build
+// has a Firebase config. google-services.json is gitignored and supplied per
+// deployment; without it the app builds and runs with push turned off.
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
+}
