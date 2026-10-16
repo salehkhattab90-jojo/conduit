@@ -29,6 +29,7 @@ import 'package:conduit_core/features/chat/providers/openwebui_chat_prompt_provi
 import 'package:conduit_core/features/navigation/models/sidebar_navigation_model.dart';
 import 'package:conduit_core/features/navigation/providers/sidebar_active_tab_provider.dart';
 import 'package:conduit_core/features/terminal/models/terminal_models.dart';
+import 'package:conduit_core/features/terminal/providers/terminal_artifact_providers.dart';
 import 'package:conduit_core/features/terminal/providers/terminal_providers.dart';
 
 // ---------------------------------------------------------------------------
@@ -518,7 +519,11 @@ Future<bool> dispatchChatTransport({
         } catch (_) {}
       });
     },
-    onTerminalEvent: (type, data) {
+    onTerminalEvent: (type, data, messageId) {
+      // Keyed by message, so it is safe to keep after the chat changed.
+      ref
+          .read(terminalLiveArtifactsProvider.notifier)
+          .handleEvent(messageId, type, data);
       if (!ownsConversation()) return;
       if (type == 'terminal:display_file' &&
           (data['path']?.toString().trim().isNotEmpty ?? false)) {

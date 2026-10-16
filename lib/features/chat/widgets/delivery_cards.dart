@@ -1,7 +1,9 @@
 import 'dart:async';
 
 import 'package:conduit_core/features/chat/utils/document_deliveries.dart';
+import 'package:conduit_core/features/terminal/providers/terminal_artifact_providers.dart';
 import 'package:flutter/widgets.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../l10n/app_localizations.dart';
 import '../../../shared/theme/theme_extensions.dart';
@@ -9,6 +11,7 @@ import '../../../shared/utils/platform_page_route.dart';
 import '../../../shared/utils/utf16_sanitizer.dart';
 import '../../../shared/widgets/conduit_components.dart';
 import '../../../shared/widgets/platform_ui/vocabulary.dart';
+import '../../terminal/widgets/terminal_artifact_opener.dart';
 import 'document_preview_page.dart';
 
 /// Identity colour of a delivered file's format, or null for a format with
@@ -188,6 +191,56 @@ class DocumentDeliveryCards extends StatelessWidget {
                 DocumentPreviewPage(delivery: delivery, title: title),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// The files Open Terminal's `display_file` showed for a message: what the
+/// stored tool results record, plus what live events reported, one card per
+/// file. A card opens the file from the terminal workspace.
+class TerminalArtifactCards extends ConsumerWidget {
+  const TerminalArtifactCards({
+    super.key,
+    required this.messageId,
+    required this.output,
+  });
+
+  final String messageId;
+  final List<Map<String, dynamic>>? output;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final live = ref.watch(
+      terminalLiveArtifactsProvider.select((byMessage) => byMessage[messageId]),
+    );
+    final artifacts = terminalArtifactsForMessage(
+      output: output,
+      live: live ?? const <TerminalArtifactRef>[],
+    );
+    if (artifacts.isEmpty) return const SizedBox.shrink();
+
+    final l10n = AppLocalizations.of(context)!;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: Spacing.md),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (var index = 0; index < artifacts.length; index++) ...[
+            if (index > 0) const SizedBox(height: Spacing.sm),
+            DeliveryCard(
+              key: ValueKey('terminal-artifact-${artifacts[index].key}'),
+              title: artifacts[index].name,
+              hint: l10n.artifactCardHint,
+              icon: Icons.auto_awesome_outlined,
+              extension: documentExtension(artifacts[index].name),
+              onTap: () => unawaited(
+                openTerminalArtifact(context, ref, artifacts[index]),
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }

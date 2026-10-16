@@ -9,6 +9,7 @@ import 'package:conduit/l10n/conduit_localizations.dart';
 import 'package:conduit/shared/theme/app_theme.dart';
 import 'package:conduit/shared/theme/tweakcn_themes.dart';
 import 'package:conduit/shared/widgets/web_content_embed.dart';
+import 'package:conduit_core/features/terminal/providers/terminal_artifact_providers.dart';
 import 'package:conduit_core/models/chat_message.dart';
 import 'package:conduit_core/services/settings_service.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -183,6 +184,50 @@ void main() {
     expect(find.byType(WebContentEmbed), findsNothing);
     expect(find.text('Deck.pptx'), findsOneWidget);
     expect(find.text('PPTX'), findsOneWidget);
+  });
+
+  testWidgets('terminal artifacts: one card per file, stored and live', (
+    tester,
+  ) async {
+    final container = await _pump(
+      tester,
+      _assistant(
+        output: _toolCall(
+          callId: 'c1',
+          name: 'display_file',
+          arguments: const {'path': 'chart.html', 'inline': true},
+          resultText: jsonEncode({
+            'type': 'file',
+            'source': 'open_terminal',
+            'displayed': true,
+            'path': '/work/chart.html',
+            'name': 'chart.html',
+            'terminal_selector': 'term-1',
+            'terminal_id': 'term-1',
+          }),
+        ),
+      ),
+    );
+
+    expect(find.text('chart.html'), findsOneWidget);
+    expect(find.text('Artifact · tap to open'), findsOneWidget);
+
+    final live = container.read(terminalLiveArtifactsProvider.notifier);
+    live.handleEvent('assistant-1', 'terminal:display_file', {
+      'path': '/work/chart.html',
+    });
+    live.handleEvent('assistant-1', 'terminal:display_file', {
+      'path': '/work/data.csv',
+    });
+    live.handleEvent('another-message', 'terminal:display_file', {
+      'path': '/work/other.html',
+    });
+    await tester.pump();
+
+    expect(find.text('chart.html'), findsOneWidget);
+    expect(find.text('data.csv'), findsOneWidget);
+    expect(find.text('other.html'), findsNothing);
+    expect(find.text('Artifact · tap to open'), findsNWidgets(2));
   });
 
   test('identity colours stay open-ended', () {

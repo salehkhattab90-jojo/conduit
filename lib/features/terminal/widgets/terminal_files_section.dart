@@ -19,6 +19,7 @@ import '../../../shared/widgets/utility_components.dart';
 import '../controllers/terminal_coordinator.dart';
 import '../models/terminal_models.dart';
 import '../services/terminal_service.dart';
+import 'terminal_artifact_page.dart';
 import 'terminal_section_components.dart';
 
 class TerminalFilesSection extends StatelessWidget {
@@ -401,6 +402,17 @@ Future<void> showTerminalFilePreview(
   if (preview == null || !context.mounted || isCurrent?.call() == false) {
     return;
   }
+  // HTML and SVG files open rendered, full screen.
+  if (terminalWebArtifactSource(preview) case final source?) {
+    await pushTerminalArtifactPage(
+      context,
+      title: entry.displayName,
+      source: source,
+      onDownload: () => coordinator.downloadEntry(operationContext, entry),
+      onShown: onShown,
+    );
+    return;
+  }
   final l10n = AppLocalizations.of(context)!;
 
   final navigator = Navigator.of(context, rootNavigator: true);
@@ -438,6 +450,15 @@ Future<void> showTerminalFilePreview(
   onShown?.call(route);
   await navigator.push(route);
 }
+
+/// The preview dialog's body for a file read outside the Files panel (the
+/// chat's artifact card).
+Widget terminalFilePreviewContent(
+  BuildContext context,
+  AppLocalizations l10n,
+  TerminalFileReadResult preview, {
+  int? page,
+}) => _terminalPreviewContent(context, l10n, preview, page: page);
 
 Widget _terminalPreviewContent(
   BuildContext context,

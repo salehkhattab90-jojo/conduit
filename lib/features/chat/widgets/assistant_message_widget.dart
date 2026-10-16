@@ -1378,6 +1378,11 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
                   const SizedBox(height: Spacing.md),
                 ],
 
+                TerminalArtifactCards(
+                  messageId: _activeAnswerId,
+                  output: activeOutput,
+                ),
+
                 if (hasStatusTimeline) ...[
                   StreamingStatusWidget(
                     updates: displayStatusHistory,

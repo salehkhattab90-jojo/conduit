@@ -452,7 +452,8 @@ ActiveChatStream _attach({
   ApiAuthSnapshot? chatCompletedAuthSnapshot,
   Future<Conversation?> Function(String chatId)? pullChatSnapshot,
   void Function(String Function())? bufferProgressiveLastMessageSnapshot,
-  void Function(String type, Map<String, dynamic> data)? onTerminalEvent,
+  void Function(String type, Map<String, dynamic> data, String messageId)?
+  onTerminalEvent,
   UiRequestPort uiRequests = const NullUiRequestPort(),
   DateTime Function() clock = DateTime.now,
 }) {
@@ -636,6 +637,7 @@ void main() {
       final log = _CallbackLog();
       final registrar = FakeSocketInjector();
       final events = <(String, Map<String, dynamic>)>[];
+      final targets = <String>[];
 
       _attach(
         session: ChatCompletionSession.taskSocket(
@@ -645,7 +647,10 @@ void main() {
         ),
         log: log,
         socketService: _MockSocketService(registrar),
-        onTerminalEvent: (type, data) => events.add((type, data)),
+        onTerminalEvent: (type, data, messageId) {
+          events.add((type, data));
+          targets.add(messageId);
+        },
       );
 
       registrar.emitChatEvent(
@@ -674,6 +679,9 @@ void main() {
         'terminal:replace_file_content',
         'terminal:run_command',
       ]);
+      // The resolved assistant message travels with each event, so the
+      // artifact card can be keyed to it.
+      check(targets).deepEquals(['msg-1', 'msg-1', 'msg-1', 'msg-1']);
     });
 
     test(

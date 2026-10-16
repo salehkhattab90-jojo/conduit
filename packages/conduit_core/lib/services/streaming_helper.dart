@@ -622,7 +622,9 @@ ActiveChatStream attachUnifiedChunkedStreaming({
   updateMessageById,
   void Function(String newTitle)? onChatTitleUpdated,
   void Function()? onChatTagsUpdated,
-  void Function(String type, Map<String, dynamic> data)? onTerminalEvent,
+  // [messageId] is the message the event resolved to.
+  void Function(String type, Map<String, dynamic> data, String messageId)?
+  onTerminalEvent,
   void Function(
     String type,
     Map<String, dynamic> data,
@@ -3529,16 +3531,20 @@ ActiveChatStream attachUnifiedChunkedStreaming({
       }
 
       if (type is String && type.startsWith('terminal:') && payload is Map) {
-        if (resolveTargetMessageIdForStream(
-              messageId,
-              eventType: type,
-              incomingSessionId: incomingSessionId,
-              allowBindingForeignMessage: true,
-            ) ==
-            null) {
+        final terminalTargetId = resolveTargetMessageIdForStream(
+          messageId,
+          eventType: type,
+          incomingSessionId: incomingSessionId,
+          allowBindingForeignMessage: true,
+        );
+        if (terminalTargetId == null) {
           return;
         }
-        onTerminalEvent?.call(type, Map<String, dynamic>.from(payload));
+        onTerminalEvent?.call(
+          type,
+          Map<String, dynamic>.from(payload),
+          terminalTargetId,
+        );
         return;
       }
 
