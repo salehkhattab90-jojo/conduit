@@ -25,9 +25,10 @@ Design: `docs/upgrade-owui-0.12/ARCHITECTURE.md`.
 
 ## Locked deployment
 New: `core/deployment/{deployment_policy,ensure_locked_server}.dart`,
-`lib/core/deployment/{deployment_config,deployment,deployment_providers,native_sheet_deployment}.dart`,
+`lib/core/deployment/{deployment_config,deployment,deployment_providers,native_sheet_deployment,active_deployment}.dart`,
 `tool/apply_brand_strings.dart`. **`lib/core/deployment/deployment.dart` is the one
-file a customer branch overrides.**
+file a customer branch overrides.** Code reads the deployment through
+`activeDeployment`, never `kDeployment`, so tests can pin the stock one.
 
 | file | hook |
 |---|---|
@@ -50,6 +51,8 @@ file a customer branch overrides.**
 | `lib/features/release_notes/release_notes_presenter.dart` | review/support URLs from the brand |
 | `lib/features/direct_connections/views/direct_connections_page.dart` | on-device web search settings only when allowed |
 | `lib/core/services/callkit_service.dart`, `lib/platform/app_intents_service.dart`, `lib/shared/services/brand_service.dart` | product name from the brand |
+| `test/flutter_test_config.dart` | pins the stock deployment for the whole suite (`debugDeploymentOverride`) |
+| `test/features/chat/widgets/composer_overflow_items_test.dart`, `test/features/release_notes/release_notes_sheet_test.dart` | product name in expected strings taken from the English `appTitle` |
 
 ## Email section and push
 New: `core/features/email/**`, `lib/features/email/**`,

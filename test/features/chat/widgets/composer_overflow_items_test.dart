@@ -26,6 +26,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 
+/// The product name in the English strings: a customer branch renames it.
+final _appName = lookupAppLocalizations(const Locale('en')).appTitle;
+
 const _serverModel = Model(id: 'server-model', name: 'Server');
 
 const _toggleFilter = ToggleFilter(
@@ -285,8 +288,8 @@ void main() {
     // back from the builder: the native presenter shows exactly these rows.
     const description =
         'Run code on the server to analyze data and make files.';
-    const browserExplanation =
-        "This server runs code in the browser, which Conduit can't do.";
+    final browserExplanation =
+        "This server runs code in the browser, which $_appName can't do.";
     const unavailableExplanation =
         'Not available for this server, account, or model.';
     final states =
@@ -590,7 +593,7 @@ void main() {
 
         expect(
           find.text(
-            "This server runs code in the browser, which Conduit can't do.",
+            "This server runs code in the browser, which $_appName can't do.",
           ),
           findsOneWidget,
         );

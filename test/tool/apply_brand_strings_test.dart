@@ -91,11 +91,21 @@ void main() {
       for (final key in before.keys.where((key) => key.startsWith('@'))) {
         expect(after[key], before[key], reason: '${file.path} $key');
       }
-      expect(
-        after.values.whereType<String>().any((v) => v.contains('Acme')),
-        isTrue,
-        reason: file.path,
+      // A branch that already renamed the product has no "Conduit" left to
+      // rename; the rename must still leave the file intact.
+      final namesProduct = before.entries.any(
+        (entry) =>
+            !entry.key.startsWith('@') &&
+            entry.value is String &&
+            RegExp(r'\bConduit\b').hasMatch(entry.value as String),
       );
+      if (namesProduct) {
+        expect(
+          after.values.whereType<String>().any((v) => v.contains('Acme')),
+          isTrue,
+          reason: file.path,
+        );
+      }
     }
   });
 }

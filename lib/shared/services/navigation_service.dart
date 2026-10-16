@@ -2,7 +2,7 @@ import 'package:conduit/l10n/app_localizations.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../core/deployment/deployment.dart';
+import '../../core/deployment/active_deployment.dart';
 import '../widgets/themed_dialogs.dart';
 
 import 'package:conduit_core/navigation/routes.dart';
@@ -196,7 +196,7 @@ class NavigationService {
 
   /// Where signing in starts: server setup, or straight to sign-in when the
   /// build is locked to its server.
-  static String get _signInRoute => kDeployment.policy.isLocked
+  static String get _signInRoute => activeDeployment.policy.isLocked
       ? Routes.authentication
       : Routes.serverConnection;
 

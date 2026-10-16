@@ -53,7 +53,7 @@ import 'package:conduit_core/providers/host_ports.dart';
 
 import 'package:conduit_core/deployment/ensure_locked_server.dart';
 
-import 'core/deployment/deployment.dart';
+import 'core/deployment/active_deployment.dart';
 import 'core/deployment/deployment_providers.dart';
 import 'core/deployment/native_sheet_deployment.dart';
 
@@ -394,7 +394,7 @@ void main() {
       final providerContainer = ProviderContainer(
         overrides: [
           // The deployment this build is made for (lib/core/deployment).
-          deploymentPolicyProvider.overrideWithValue(kDeployment.policy),
+          deploymentPolicyProvider.overrideWithValue(activeDeployment.policy),
           // Host ports. `lib/core` declares these without a value so it
           // stays free of Flutter plugins; each host binds its own.
           databaseOpenerProvider.overrideWithValue(
@@ -550,7 +550,7 @@ void main() {
       // the app opens on its sign-in. Bounded like the Keychain warm-up: a
       // slow Keychain finishes the seeding after first paint, behind the
       // splash the router holds until the server is there.
-      if (kDeployment.policy.isLocked) {
+      if (activeDeployment.policy.isLocked) {
         await providerContainer
             .read(lockedServerBootstrapProvider)
             .ensure()

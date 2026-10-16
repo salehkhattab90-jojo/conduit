@@ -8,7 +8,7 @@ import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:uuid/uuid.dart';
 
-import '../deployment/deployment.dart';
+import '../deployment/active_deployment.dart';
 import '../utils/current_localizations.dart';
 
 part 'callkit_service.g.dart';
@@ -204,7 +204,7 @@ class CallKitService implements VoiceCallKitPort {
     return CallKitParams(
       id: id,
       nameCaller: callerName,
-      appName: kDeployment.brand.callkitAppName,
+      appName: activeDeployment.brand.callkitAppName,
       avatar: avatar,
       handle: handle,
       type: 0, // 0 = audio call

@@ -9,7 +9,7 @@ import '../../shared/theme/theme_extensions.dart';
 import '../../shared/utils/external_link_launcher.dart';
 import '../../shared/widgets/themed_sheets.dart';
 
-import '../../core/deployment/deployment.dart';
+import '../../core/deployment/active_deployment.dart';
 import '../../core/deployment/deployment_config.dart';
 import 'models/release_note.dart';
 import 'widgets/release_notes_sheet.dart';
@@ -34,7 +34,7 @@ Future<void> requestReleaseNotesReview({
       );
 
   // The brand's store pages; a brand without one has nothing to review.
-  final url = (brand ?? kDeployment.brand).storeReviewUrls?.forPlatform(
+  final url = (brand ?? activeDeployment.brand).storeReviewUrls?.forPlatform(
     resolvedPlatform,
   );
   if (url == null) return;
@@ -60,7 +60,7 @@ Future<void> showReleaseNotesSheet({
       }
 
       void openSupport() {
-        final supportUrl = kDeployment.brand.donationUrls?.buyMeACoffee;
+        final supportUrl = activeDeployment.brand.donationUrls?.buyMeACoffee;
         if (supportUrl == null) return;
         unawaited(
           launchInAppBrowserLink(supportUrl, scope: 'release-notes/support'),

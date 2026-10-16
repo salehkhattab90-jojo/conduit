@@ -15,7 +15,7 @@ import 'package:conduit_core/models/socket_health.dart';
 import 'package:conduit_core/providers/backend_mode_providers.dart'
     show PreferredBackend;
 
-import '../deployment/deployment.dart';
+import '../deployment/active_deployment.dart';
 import '../deployment/deployment_config.dart';
 import '../services/native_sheet_bridge.dart';
 
@@ -81,7 +81,7 @@ List<NativeSheetItemConfig> buildNativeAboutItems(
     ),
   // Release notes and the licenses open Flutter pages, so they close the
   // sheet like the other rows that leave it, and say so with a chevron.
-  if ((brand ?? kDeployment.brand).showReleaseNotes)
+  if ((brand ?? activeDeployment.brand).showReleaseNotes)
     NativeSheetItemConfig(
       id: NativeSheetRoutes.releaseNotesManual,
       title: l10n.releaseNotesTitle,
@@ -89,7 +89,7 @@ List<NativeSheetItemConfig> buildNativeAboutItems(
       showsDisclosure: true,
       dismissOnSelect: true,
     ),
-  if ((brand ?? kDeployment.brand).githubUrl case final githubUrl?)
+  if ((brand ?? activeDeployment.brand).githubUrl case final githubUrl?)
     NativeSheetItemConfig(
       id: 'github',
       title: l10n.githubRepository,
@@ -182,7 +182,7 @@ List<NativeSheetSectionConfig> buildNativeProfileRootSections(
   DeploymentPolicy? policy,
   BrandConfig? brand,
 }) {
-  final deployment = policy ?? kDeployment.policy;
+  final deployment = policy ?? activeDeployment.policy;
   final supportItems = buildNativeSupportItems(l10n, brand: brand);
   final hasAccount = account != null;
   final cardItems = <NativeSheetItemConfig>[
@@ -382,7 +382,7 @@ NativeSheetDetailConfig buildNativeAccountsDetail(
     title: l10n.accountsTitle,
     trailingActionId: nativeAccountAddActionId,
     trailingActionSfSymbol: 'plus',
-    sections: _withAllowedBackendCards(policy ?? kDeployment.policy, [
+    sections: _withAllowedBackendCards(policy ?? activeDeployment.policy, [
       if (accounts == null)
         NativeSheetSectionConfig(
           items: [
@@ -660,7 +660,7 @@ List<NativeSheetItemConfig> buildNativeSupportItems(
   AppLocalizations l10n, {
   BrandConfig? brand,
 }) {
-  final urls = (brand ?? kDeployment.brand).donationUrls;
+  final urls = (brand ?? activeDeployment.brand).donationUrls;
   return [
     if (urls?.buyMeACoffee case final url?)
       NativeSheetItemConfig(

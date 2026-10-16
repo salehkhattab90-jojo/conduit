@@ -26,7 +26,7 @@ import 'package:conduit_core/providers/chat_entry_readiness_providers.dart';
 import '../features/chat/voice_call/presentation/voice_call_launcher.dart';
 import '../features/chat/services/file_attachment_service.dart';
 import '../core/services/media_upload_controller.dart';
-import '../core/deployment/deployment.dart';
+import '../core/deployment/active_deployment.dart';
 
 import 'package:conduit_core/services/share_staging_cleanup.dart';
 
@@ -49,7 +49,7 @@ Future<void> _delayAppIntentReadinessRetry(Duration delay) =>
     Future<void>.delayed(delay);
 
 /// The product name Siri reads back in the replies below.
-String get _appName => kDeployment.brand.appName;
+String get _appName => activeDeployment.brand.appName;
 
 typedef AppIntentLedgerPayloadReader = String? Function();
 typedef AppIntentLedgerPayloadWriter = Future<void> Function(String payload);

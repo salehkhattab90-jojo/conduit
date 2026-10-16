@@ -11,6 +11,8 @@ import 'package:conduit/platform/flutter_log_sink.dart';
 import 'package:conduit/platform/geolocator_location_port.dart';
 import 'package:conduit/platform/wakelock_plus_port.dart';
 import 'package:conduit_core/conduit_core.dart';
+import 'package:conduit/core/deployment/active_deployment.dart';
+import 'package:conduit/core/deployment/deployment_config.dart';
 
 /// Runs before every `flutter test` file.
 ///
@@ -47,5 +49,10 @@ Future<void> testExecutable(FutureOr<void> Function() testMain) async {
   // ports; installing the app's adapters keeps tests on those paths.
   LocationPort.hostDefault = const GeolocatorLocationPort();
   WakelockPort.hostDefault = const WakelockPlusPort();
+  // The suite tests upstream behaviour, so it runs against the stock
+  // deployment whatever this branch's lib/core/deployment/deployment.dart
+  // ships; a customer branch that locks the app still passes it. Tests of a
+  // locked build pass their own policy or brand.
+  debugDeploymentOverride = const DeploymentConfig.stock();
   await testMain();
 }
