@@ -399,6 +399,10 @@ Future<bool> dispatchChatTransport({
       ? null
       : (socketService?.sessionId ?? session.sessionId);
 
+  // Marks the prompts this stream raises, so its teardown declines exactly
+  // those (a multi-model turn's other answers keep theirs).
+  final promptOwner = Object();
+
   // 5. Attach streaming
   final activeStream = attachUnifiedChunkedStreaming(
     // The host's surface for server-initiated prompts and notices;
@@ -553,7 +557,15 @@ Future<bool> dispatchChatTransport({
             type: type,
             data: data,
             acknowledge: acknowledge,
+            owner: promptOwner,
           );
+    },
+    onInteractivePromptsAbandoned: () {
+      try {
+        ref
+            .read(openWebUiLivePromptProvider.notifier)
+            .cancelForOwner(promptOwner);
+      } catch (_) {}
     },
     onRemoteMessageBound: (remoteMessageId) {
       if (!ownsConversation() || slot != null) return;

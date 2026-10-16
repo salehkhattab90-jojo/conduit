@@ -16,6 +16,8 @@ import 'package:conduit_core/services/chat_completion_transport.dart';
 import 'package:conduit_core/services/socket_service.dart';
 import 'package:conduit_core/services/streaming_helper.dart';
 import 'package:conduit_core/services/worker_manager.dart';
+import 'package:conduit_core/features/chat/providers/openwebui_chat_prompt_provider.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart' show ProviderContainer;
 import 'package:conduit_core/models/server_config.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -456,6 +458,9 @@ ActiveChatStream _attach({
   onTerminalEvent,
   UiRequestPort uiRequests = const NullUiRequestPort(),
   DateTime Function() clock = DateTime.now,
+  void Function(String, Map<String, dynamic>, void Function(dynamic))?
+  onInteractivePrompt,
+  void Function()? onInteractivePromptsAbandoned,
 }) {
   return attachUnifiedChunkedStreaming(
     clock: clock,
@@ -488,6 +493,8 @@ ActiveChatStream _attach({
     pullChatSnapshot: pullChatSnapshot,
     onTerminalEvent: onTerminalEvent,
     uiRequests: uiRequests,
+    onInteractivePrompt: onInteractivePrompt,
+    onInteractivePromptsAbandoned: onInteractivePromptsAbandoned,
   );
 }
 
@@ -7191,6 +7198,82 @@ void main() {
       check(lastMsg.error!.content).equals('Persisted backend error');
       check(lastMsg.isStreaming).isFalse();
       check(log.finishCount).equals(1);
+    });
+  });
+
+  group('server prompts at stream teardown', () {
+    test('a confirmation still waiting is declined when the stream ends', () {
+      final log = _CallbackLog();
+      final registrar = FakeSocketInjector();
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      final prompts = container.read(openWebUiLivePromptProvider.notifier);
+      final owner = Object();
+      final answers = <dynamic>[];
+
+      final stream = _attach(
+        session: ChatCompletionSession.taskSocket(
+          messageId: 'msg-1',
+          sessionId: 'sess-1',
+          taskId: 'task-1',
+        ),
+        log: log,
+        socketService: _MockSocketService(registrar),
+        onInteractivePrompt: (type, data, acknowledge) =>
+            prompts.handleSocketRequest(
+              conversationId: 'conv-1',
+              type: type,
+              data: data,
+              acknowledge: acknowledge,
+              owner: owner,
+            ),
+        onInteractivePromptsAbandoned: () => prompts.cancelForOwner(owner),
+      );
+
+      registrar.emitChatEvent(
+        'confirmation',
+        const {'title': 'Send email?', 'message': 'To: someone'},
+        messageId: 'msg-1',
+        sessionId: 'sess-1',
+        acknowledge: answers.add,
+      );
+      check(container.read(openWebUiLivePromptProvider)).isNotNull();
+      check(answers).isEmpty();
+
+      stream.disposeWatchdog();
+
+      check(answers).deepEquals([false]);
+      check(container.read(openWebUiLivePromptProvider)).isNull();
+
+      // A late tap on the gone prompt changes nothing.
+      stream.disposeWatchdog();
+      check(answers).deepEquals([false]);
+    });
+
+    test('a stopped task declines its prompt as well', () {
+      final log = _CallbackLog();
+      final registrar = FakeSocketInjector();
+      var abandoned = 0;
+      _attach(
+        session: ChatCompletionSession.taskSocket(
+          messageId: 'msg-1',
+          sessionId: 'sess-1',
+          taskId: 'task-1',
+        ),
+        log: log,
+        socketService: _MockSocketService(registrar),
+        onInteractivePrompt: (_, _, _) {},
+        onInteractivePromptsAbandoned: () => abandoned++,
+      );
+
+      registrar.emitChatEvent(
+        'chat:tasks:cancel',
+        const <String, dynamic>{},
+        messageId: 'msg-1',
+        sessionId: 'sess-1',
+      );
+
+      check(abandoned).isGreaterThan(0);
     });
   });
 

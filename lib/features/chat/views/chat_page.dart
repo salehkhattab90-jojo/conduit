@@ -3892,7 +3892,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                             approved,
                           );
                         } else {
-                          notifier.cancel();
+                          // Only this request: others may be queued.
+                          notifier.dismiss(matchingLivePrompt.prompt.identity);
                         }
                       },
                     );

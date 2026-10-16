@@ -45,7 +45,7 @@ void main() {
     ]);
   });
 
-  test('replacement and ownership changes cancel each request once', () {
+  test('leaving each chat cancels its queued request once', () {
     final container = ProviderContainer();
     addTearDown(container.dispose);
     final first = <dynamic>[];
@@ -151,27 +151,39 @@ void main() {
     check(responses).deepEquals([true]);
   });
 
-  test('legacy confirmation bounds text and times out to false', () async {
-    final container = ProviderContainer();
-    addTearDown(container.dispose);
-    final responses = <dynamic>[];
-    final notifier = container.read(openWebUiLivePromptProvider.notifier);
-    debugOpenWebUiPromptTimeoutOverride = const Duration(milliseconds: 5);
-    notifier.handleSocketRequest(
-      conversationId: 'chat-1',
-      type: 'confirmation',
-      data: {
-        'title': '${List.filled(119, 'T').join()}😀',
-        'message': 'Run the tool?',
-      },
-      acknowledge: responses.add,
-    );
+  test(
+    'a plain confirmation keeps its full text and has no deadline',
+    () async {
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      final responses = <dynamic>[];
+      final notifier = container.read(openWebUiLivePromptProvider.notifier);
+      debugOpenWebUiPromptTimeoutOverride = const Duration(milliseconds: 5);
+      final title = '${List.filled(300, 'T').join()}😀';
+      final message = List.filled(400, 'Line of the email body.').join('\n');
+      notifier.handleSocketRequest(
+        conversationId: 'chat-1',
+        type: 'confirmation',
+        data: {
+          'title': title,
+          'message': message,
+          'confirm_text': 'Send',
+          'cancel_text': 'Keep draft',
+        },
+        acknowledge: responses.add,
+      );
 
-    final prompt = container.read(openWebUiLivePromptProvider)!.prompt;
-    check(prompt.title).equals(List.filled(119, 'T').join());
-    await Future<void>.delayed(const Duration(milliseconds: 20));
-    check(responses).deepEquals([false]);
-  });
+      final prompt = container.read(openWebUiLivePromptProvider)!.prompt;
+      check(prompt.title).equals(title);
+      check(prompt.message).equals(message);
+      check(prompt.confirmText).equals('Send');
+      check(prompt.cancelText).equals('Keep draft');
+      check(prompt.timeout).isNull();
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      check(responses).isEmpty();
+      check(container.read(openWebUiLivePromptProvider)).isNotNull();
+    },
+  );
 }
 
 Map<String, dynamic> _questionData() => {

@@ -632,6 +632,12 @@ ActiveChatStream attachUnifiedChunkedStreaming({
   )?
   onInteractivePrompt,
 
+  /// Called once this stream's socket listeners are torn down (finished,
+  /// stopped, superseded or abandoned): prompts it handed to
+  /// [onInteractivePrompt] that are still unanswered must now be declined, or
+  /// the server waits on an answer nobody can give.
+  void Function()? onInteractivePromptsAbandoned,
+
   /// Asks the user when the server interrupts a stream for a confirmation or
   /// a value, and surfaces server notifications.
   ///
@@ -2892,6 +2898,12 @@ ActiveChatStream attachUnifiedChunkedStreaming({
       } catch (_) {}
     }
     socketSubscriptions.clear();
+
+    // Prompts this stream raised can no longer reach its turn: decline them
+    // now instead of leaving the server waiting on them.
+    try {
+      onInteractivePromptsAbandoned?.call();
+    } catch (_) {}
 
     imageCollectionDebounce?.cancel();
     imageCollectionDebounce = null;

@@ -42,6 +42,9 @@ class OpenWebUiComposerPrompt {
     this.message = '',
     this.questions = const <OpenWebUiPromptQuestion>[],
     this.timeout = const Duration(minutes: 2),
+    this.confirmText,
+    this.cancelText,
+    this.messageIsCode = false,
   });
 
   final String identity;
@@ -49,7 +52,22 @@ class OpenWebUiComposerPrompt {
   final String title;
   final String message;
   final List<OpenWebUiPromptQuestion> questions;
-  final Duration timeout;
+
+  /// How long the client keeps the prompt open before answering it as
+  /// cancelled. Null keeps it open until it is answered or its stream ends: the
+  /// server waits on a plain `confirmation` for as long as its
+  /// `WEBSOCKET_EVENT_CALLER_TIMEOUT` allows, so a client deadline would only
+  /// deny it silently.
+  final Duration? timeout;
+
+  /// The server's own labels for the decision buttons (`confirm_text` /
+  /// `cancel_text`), or null for the app's defaults.
+  final String? confirmText;
+  final String? cancelText;
+
+  /// Whether [message] is formatted tool-call arguments (shown as code) rather
+  /// than prose.
+  final bool messageIsCode;
 }
 
 @immutable
@@ -230,6 +248,11 @@ OpenWebUiPendingToolPrompt? findPendingOpenWebUiToolPrompt(
 /// A tool call awaiting approval in a chat that is not saved (tool approval
 /// "ask") carries only `tool_call: {id, name, arguments}` and no text, so it
 /// is shown as a saved approval is: the tool's name over its arguments.
+///
+/// Neither is shortened: the user approves exactly what the server acts on
+/// (an outgoing message body, a tool's full arguments), and a cut text would
+/// ask for consent to something partly unseen. Question forms keep their
+/// bounds ([parseOpenWebUiAskUserPrompt]).
 ({String title, String message}) openWebUiConfirmationText(
   Map<String, dynamic> data,
 ) {
@@ -242,8 +265,48 @@ OpenWebUiPendingToolPrompt? findPendingOpenWebUiToolPrompt(
     );
   }
   return (
-    title: boundedOpenWebUiString(data['title'], 120),
-    message: boundedOpenWebUiString(data['message'], 2000),
+    title: data['title']?.toString().trim() ?? '',
+    message: data['message']?.toString().trim() ?? '',
+  );
+}
+
+/// How long a tool call awaiting approval stays open when the request does
+/// not say: the server's own default.
+const Duration kOpenWebUiToolApprovalDefaultTimeout = Duration(minutes: 2);
+
+/// The composer prompt for a socket `confirmation` request.
+///
+/// A plain confirmation (`title` / `message`, optional `confirm_text` /
+/// `cancel_text`) has no client deadline. A tool call awaiting approval
+/// honours `timeout_ms` clamped to 60–240 s, as the server clamps the time it
+/// waits for this client (`socket/main.py` `get_event_call`).
+OpenWebUiComposerPrompt parseOpenWebUiConfirmationPrompt(
+  Map<String, dynamic> data, {
+  required String identity,
+}) {
+  final text = openWebUiConfirmationText(data);
+  final isToolCall = _stringMap(data['tool_call']) != null;
+  Duration? timeout;
+  if (isToolCall) {
+    final rawTimeout = data['timeout_ms'];
+    timeout = rawTimeout is int
+        ? Duration(milliseconds: rawTimeout.clamp(60000, 240000))
+        : kOpenWebUiToolApprovalDefaultTimeout;
+  }
+  String? label(Object? value) {
+    final normalized = boundedOpenWebUiString(value, 80);
+    return normalized.isEmpty ? null : normalized;
+  }
+
+  return OpenWebUiComposerPrompt(
+    identity: identity,
+    kind: OpenWebUiComposerPromptKind.confirmation,
+    title: text.title,
+    message: text.message,
+    timeout: timeout,
+    confirmText: label(data['confirm_text']),
+    cancelText: label(data['cancel_text']),
+    messageIsCode: isToolCall,
   );
 }
 
@@ -262,7 +325,8 @@ String formatOpenWebUiToolArguments(Object? value) {
   } catch (_) {
     text = normalized.toString();
   }
-  return boundedOpenWebUiString(text, 2000);
+  // Not shortened: these are the arguments the user approves.
+  return text.trim();
 }
 
 List<Map<String, dynamic>> applyOpenWebUiToolCallResolution({

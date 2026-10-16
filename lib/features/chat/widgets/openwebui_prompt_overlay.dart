@@ -10,6 +10,7 @@ import '../../../l10n/app_localizations.dart';
 import '../../../shared/theme/theme_extensions.dart';
 import '../../../shared/widgets/composer_prompt_surface.dart';
 import '../../../shared/widgets/conduit_components.dart';
+import 'confirmation_message_body.dart';
 
 class OpenWebUiPromptOverlay extends StatefulWidget {
   const OpenWebUiPromptOverlay({
@@ -323,22 +324,30 @@ class _OpenWebUiPromptOverlayState extends State<OpenWebUiPromptOverlay> {
         ),
         if (widget.prompt.message.isNotEmpty) ...[
           const SizedBox(height: Spacing.xs),
+          // The full text, scrolling once it is taller than most of the
+          // screen; prose goes through the inert renderer, arguments as code.
           ConstrainedBox(
             constraints: BoxConstraints(
-              maxHeight: math.min(240, MediaQuery.sizeOf(context).height * 0.3),
+              maxHeight: openWebUiDecisionBodyMaxHeight(context),
             ),
             child: SingleChildScrollView(
-              child: Text(
-                widget.prompt.message,
-                key: const ValueKey('openwebui-prompt-message'),
-                style: approval
-                    ? AppTypography.codeStyle.copyWith(
-                        color: theme.textSecondary,
-                      )
-                    : AppTypography.bodySmallStyle.copyWith(
+              child: approval || widget.prompt.messageIsCode
+                  ? Text(
+                      widget.prompt.message,
+                      key: const ValueKey('openwebui-prompt-message'),
+                      style: AppTypography.codeStyle.copyWith(
                         color: theme.textSecondary,
                       ),
-              ),
+                    )
+                  : ConfirmationMessageBody(
+                      key: const ValueKey('openwebui-prompt-message'),
+                      message: widget.prompt.message,
+                      style: AppTypography.bodySmallStyle.copyWith(
+                        color: theme.textSecondary,
+                      ),
+                      quoteColor: theme.textSecondary,
+                      quoteBorderColor: theme.dividerColor,
+                    ),
             ),
           ),
         ],
@@ -356,7 +365,9 @@ class _OpenWebUiPromptOverlayState extends State<OpenWebUiPromptOverlay> {
           runSpacing: Spacing.xs,
           children: [
             ConduitButton(
-              text: approval ? l10n.hermesApprovalDenyAction : l10n.cancel,
+              text: approval
+                  ? l10n.hermesApprovalDenyAction
+                  : widget.prompt.cancelText ?? l10n.cancel,
               isCompact: true,
               isSecondary: true,
               onPressed: _busy || widget.onDecision == null
@@ -364,7 +375,9 @@ class _OpenWebUiPromptOverlayState extends State<OpenWebUiPromptOverlay> {
                   : () => _run(() => widget.onDecision!(false)),
             ),
             ConduitButton(
-              text: approval ? l10n.hermesApprovalApproveAction : l10n.confirm,
+              text: approval
+                  ? l10n.hermesApprovalApproveAction
+                  : widget.prompt.confirmText ?? l10n.confirm,
               isCompact: true,
               isLoading: _busy,
               onPressed: _busy || widget.onDecision == null
@@ -376,4 +389,16 @@ class _OpenWebUiPromptOverlayState extends State<OpenWebUiPromptOverlay> {
       ],
     );
   }
+}
+
+/// The tallest a decision prompt's text may be before it scrolls: about 60 %
+/// of the height the keyboard leaves, less the room the prompt's title and
+/// buttons and the composer under it need, so the buttons stay on screen.
+double openWebUiDecisionBodyMaxHeight(BuildContext context) {
+  final size = MediaQuery.sizeOf(context);
+  final available = math.max(
+    0.0,
+    size.height - MediaQuery.viewInsetsOf(context).bottom,
+  );
+  return math.max(120.0, math.min(available * 0.6, available - 340));
 }
