@@ -1,6 +1,6 @@
 {
   "@@locale": "sk",
-  "appTitle": "Conduit",
+  "appTitle": "FADI",
   "serverIncompatibleTitle": "Server nie je podporovaný",
   "serverIncompatibleMessage": "Tento server používa Open WebUI {serverVersion}, čo je novšia verzia, než akú táto aplikácia podporuje (maximálne {maxVersion}).",
   "serverIncompatibleResolution": "Ak chcete pokračovať, znížte verziu servera na {maxVersion} alebo staršiu, alebo počkajte na aktualizáciu aplikácie, ktorá pridá podporu.",
@@ -44,11 +44,11 @@
   "@account": {
     "description": "Section header for account-related options."
   },
-  "supportConduit": "Podporiť Conduit",
+  "supportConduit": "Podporiť FADI",
   "@supportConduit": {
     "description": "Section header inviting the user to financially support the project."
   },
-  "supportConduitSubtitle": "Pomôžte udržať Conduit nezávislý financovaním ďalšieho vývoja.",
+  "supportConduitSubtitle": "Pomôžte udržať FADI nezávislý financovaním ďalšieho vývoja.",
   "@supportConduitSubtitle": {
     "description": "Subtitle explaining why donations are helpful."
   },
@@ -72,7 +72,7 @@
   "releaseNotesAnnouncementTitle": "Novinky v {version}",
   "@releaseNotesAnnouncementTitle": {"placeholders": {"version": {"type": "String"}}},
   "releaseNotesLearnMore": "Zistiť viac",
-  "releaseNotesReviewButton": "Ohodnotiť Conduit",
+  "releaseNotesReviewButton": "Ohodnotiť FADI",
   "releaseNotesDoneButton": "Hotovo",
   "signOut": "Odhlásiť sa",
   "@signOut": {
@@ -647,7 +647,7 @@
   "@voiceCallErrorHelp": {
     "description": "Guidance shown when the voice call encounters an error."
   },
-  "messageHintText": "Opýtať sa Conduitu",
+  "messageHintText": "Opýtať sa FADI",
   "@messageHintText": {
     "description": "Short placeholder text in the message input."
   },
@@ -759,7 +759,7 @@
   "@chatQueuedPendingTitle": {
     "description": "Title shown when a queued assistant response is waiting for sync/backoff."
   },
-  "chatQueuedPendingMessage": "Conduit spustí túto odpoveď hneď, ako sa spustí synchronizácia.",
+  "chatQueuedPendingMessage": "FADI spustí túto odpoveď hneď, ako sa spustí synchronizácia.",
   "@chatQueuedPendingMessage": {
     "description": "Body text shown for a queued assistant response that is waiting to be sent."
   },
@@ -1061,7 +1061,7 @@
   "@aboutApp": {
     "description": "Settings tile title to view app information."
   },
-  "aboutAppSubtitle": "Informácie o Conduite a odkazy",
+  "aboutAppSubtitle": "Informácie o FADI a odkazy",
   "@aboutAppSubtitle": {
     "description": "Subtitle/description for the About section."
   },
@@ -1367,11 +1367,11 @@
   "@themePalette": {
     "description": "Title for selecting the app color palette."
   },
-  "themePaletteConduitLabel": "Conduit",
+  "themePaletteConduitLabel": "FADI",
   "@themePaletteConduitLabel": {
     "description": "Palette name for the default Conduit theme."
   },
-  "themePaletteConduitDescription": "Čistý neutrálny motív navrhnutý pre Conduit.",
+  "themePaletteConduitDescription": "Čistý neutrálny motív navrhnutý pre FADI.",
   "@themePaletteConduitDescription": {
     "description": "Description of the Conduit palette."
   },
@@ -1419,7 +1419,7 @@
   "@currentlyUsingLightTheme": {
     "description": "Status text indicating light theme is active."
   },
-  "aboutConduit": "O Conduite",
+  "aboutConduit": "O FADI",
   "@aboutConduit": {
     "description": "Dialog title for app information."
   },
@@ -1527,7 +1527,7 @@
   "@androidAssistantOverlayOption": {
     "description": "Option label for keeping the current assistant overlay."
   },
-  "androidAssistantNewChatOption": "Otvoriť Conduit s novým chatom",
+  "androidAssistantNewChatOption": "Otvoriť FADI s novým chatom",
   "@androidAssistantNewChatOption": {
     "description": "Option label for opening the app to a fresh chat from the assistant trigger."
   },
@@ -1643,7 +1643,7 @@
   "voiceProviderModelsHint": "Použite názvy modelov, ktoré uvádza váš poskytovateľ. Ak pole necháte prázdne, daný smer použije toto zariadenie.",
   "voiceProviderRealtimeModel": "Model v reálnom čase",
   "voiceProviderRealtimeInstructions": "Pokyny",
-  "voiceProviderRealtimeInstructionsHint": "Nechajte prázdne, aby sa použili pokyny Conduit.",
+  "voiceProviderRealtimeInstructionsHint": "Nechajte prázdne, aby sa použili pokyny FADI.",
   "voiceProviderRealtimeFooter": "Hovory v chatoch Direct a Apple vedie tento hlas a model prepisu vyššie mu pomáha sledovať, čo hovoríte.",
   "voiceCallModeTitle": "Hovory",
   "voiceCallModeRealtime": "V reálnom čase",
@@ -3305,7 +3305,7 @@
   "@inactiveStatus": {
     "description": "Label for an inactive account status."
   },
-  "appInformation": "Aplikácia Conduit",
+  "appInformation": "Aplikácia FADI",
   "@appInformation": {
     "description": "Heading for local app information."
   },
@@ -4964,7 +4964,7 @@
   "hermesAgentSettingsSubtitle": "Connect a self-hosted Hermes agent",
   "connectOpenWebUITitle": "Connect to Open WebUI",
   "connectOpenWebUISubtitle": "Add a self-hosted Open WebUI server",
-  "backendChooserWelcome": "Welcome to Conduit",
+  "backendChooserWelcome": "Welcome to FADI",
   "backendChooserPrompt": "Choose how you want to connect.",
   "backendChooserOpenWebUISubtitle": "Use your self-hosted Open WebUI server with full chat, notes, and more.",
   "backendChooserHermesTitle": "Use a Hermes Agent",
@@ -5031,7 +5031,7 @@
   "openWebUiDirectConnectionsLoadFailed": "Pripojenia z Open WebUI sa nepodarilo synchronizovať.",
   "openWebUiDirectConnectionSourceLabel": "Open WebUI",
   "deviceDirectConnectionSourceLabel": "Toto zariadenie",
-  "openWebUiDirectConnectionUnsupportedAuth": "Toto pripojenie používa spôsob overovania, ktorý Conduit nemôže bezpečne použiť.",
+  "openWebUiDirectConnectionUnsupportedAuth": "Toto pripojenie používa spôsob overovania, ktorý FADI nemôže bezpečne použiť.",
   "directConnectionUnavailableLabel": "Nedostupné",
   "openWebUiDirectConnectionEditorDescription": "Zmeny sa uložia do vášho účtu Open WebUI.",
   "openWebUiDirectConnectionProviderDescription": "Používateľské pripojenia v Open WebUI podporujú API kompatibilné s OpenAI.",
@@ -5067,7 +5067,7 @@
   "openRouterProviderName": "OpenRouter",
   "directApiBaseUrl": "Base URL",
   "directOpenRouterUrlInvalid": "Použite koreňovú adresu HTTPS /api/v1 služby OpenRouter (globálnu alebo EÚ).",
-  "directOpenRouterBaseUrlDescription": "Používa váš kľúč API OpenRouter, overený katalóg modelov a nástroje spravované aplikáciou Conduit.",
+  "directOpenRouterBaseUrlDescription": "Používa váš kľúč API OpenRouter, overený katalóg modelov a nástroje spravované aplikáciou FADI.",
   "directOpenRouterChatCompletionsDescription": "Chat Completions sa používa na natívne vyhľadávanie na webe, generovanie obrázkov, analýzu PDF a opakovane použiteľné anotácie PDF.",
   "directCompletionApi": "Completion API",
   "directChatCompletions": "Chat Completions",
@@ -5162,8 +5162,8 @@
   "ollamaThinkingMedium": "Stredná",
   "ollamaThinkingHigh": "Vysoká",
   "ollamaThinkingMaximum": "Maximálna",
-  "releaseNotesSupportPromptHeading": "Páči sa vám Conduit?",
-  "releaseNotesSupportPromptMessage": "Krátka recenzia pomôže viacerým ľuďom objaviť Conduit. Malé prepitné mi pomáha pokračovať vo vývoji. Oboje pre mňa veľa znamená.",
+  "releaseNotesSupportPromptHeading": "Páči sa vám FADI?",
+  "releaseNotesSupportPromptMessage": "Krátka recenzia pomôže viacerým ľuďom objaviť FADI. Malé prepitné mi pomáha pokračovať vo vývoji. Oboje pre mňa veľa znamená.",
   "directConnectProvider": "Pripojiť poskytovateľa",
   "directConnectProviderTitle": "Pripojiť poskytovateľa",
   "directConnectionEnabledSubtitle": "Zobrazovať modely tohto pripojenia vo výbere modelov.",
@@ -5173,7 +5173,7 @@
   "directApiKeyPlaceholder": "Zadajte kľúč API",
   "hermesOnboardingFailed": "Nastavenie Hermes sa nepodarilo dokončiť. Skontrolujte zabezpečené úložisko a skúste to znova.",
   "hermesConnectionDetailsTitle": "Podrobnosti pripojenia",
-  "hermesMemoryKeyShortDescription": "Priradí dlhodobú pamäť agenta k vám. Nechajte prázdne a Conduit vytvorí kľúč.",
+  "hermesMemoryKeyShortDescription": "Priradí dlhodobú pamäť agenta k vám. Nechajte prázdne a FADI vytvorí kľúč.",
   "hermesConnectAction": "Pripojiť Hermes",
   "hermesToolCount": "{count, plural, one{1 nástroj} few{{count} nástroje} other{{count} nástrojov}}",
   "@hermesToolCount": {"placeholders":{"count":{"type":"int"}}},
@@ -5352,12 +5352,12 @@
   "backendChooserSelfHostedSectionTitle": "Vlastné hostované služby",
   "citationShowTitles": "Zobrazovať názvy stránok pri citáciách",
   "citationShowTitlesDescription": "V odznakoch citácií používať názvy stránok namiesto domén webov",
-  "directContextCompactionDescription": "Tieto modely neuvádzajú veľkosť kontextového okna. Conduit použije zvolený limit na zhustenie starších správ skôr, než budú požiadavky príliš veľké.",
-  "directContextCompactionPickerDescription": "Vyberte kontextové okno, ktoré má Conduit použiť na automatické zhustenie.",
+  "directContextCompactionDescription": "Tieto modely neuvádzajú veľkosť kontextového okna. FADI použije zvolený limit na zhustenie starších správ skôr, než budú požiadavky príliš veľké.",
+  "directContextCompactionPickerDescription": "Vyberte kontextové okno, ktoré má FADI použiť na automatické zhustenie.",
   "directContextCompactionTitle": "Zhustenie kontextu",
   "directContextLimit": "Limit kontextu: {tokens}",
   "@directContextLimit": {"description": "Provider-neutral model context limit label.", "placeholders": {"tokens": {"type": "String"}}},
-  "notificationSystemSettingsDescription": "Zmeňte povolenia, zvuk a možnosti bannerov pre Conduit.",
+  "notificationSystemSettingsDescription": "Zmeňte povolenia, zvuk a možnosti bannerov pre FADI.",
   "notificationSystemSettingsOpenFailed": "Systémové nastavenia upozornení sa nepodarilo otvoriť.",
   "notificationTargetsTitle": "Ciele webhookov",
   "notificationTargetsDescription": "Váš server Open WebUI odosiela udalosti na tieto adresy URL, aj keď je táto aplikácia zatvorená.",
@@ -5448,7 +5448,7 @@
   "@voiceCallExpand": {
     "description": "Accessibility label for the button that opens the minimized voice call pill back into the full panel."
   },
-  "askConduitAction": "Opýtať sa Conduitu",
+  "askConduitAction": "Opýtať sa FADI",
   "voiceCallStartTimeout": "Spustenie hlasového hovoru trvalo príliš dlho. Skúste to znova.",
   "@voiceCallStartTimeout": {"description": "Error shown when starting a voice call takes too long."},
   "voiceCallNoSpeech": "Nebola zistená žiadna reč.",
@@ -5539,7 +5539,7 @@
   "chatForkFailed": "Chat sa nepodarilo rozvetviť. Skúste to znova.",
   "codeInterpreter": "Interpret kódu",
   "codeInterpreterDescription": "Spúšťajte kód na serveri na analýzu údajov a vytváranie súborov.",
-  "codeInterpreterBrowserEngine": "Tento server spúšťa kód v prehliadači, čo Conduit nevie.",
+  "codeInterpreterBrowserEngine": "Tento server spúšťa kód v prehliadači, čo FADI nevie.",
   "codeInterpreterUnavailable": "Pre tento server, účet ani model nie je dostupný.",
   "folderProjectSettings": "Nastavenia projektu",
   "folderProjectSettingsDescription": "Predvolené hodnoty pre nové chaty v tomto priečinku. Server na každý chat v ňom použije jeho znalosti a systémový prompt.",
@@ -5652,7 +5652,7 @@
   "queueDraftAction": "Do fronty",
   "queuedDraftsTitle": "Správy vo fronte",
   "queuedDraftsCount": "{count, plural, one{{count} správa vo fronte} few{{count} správy vo fronte} many{{count} správy vo fronte} other{{count} správ vo fronte}}",
-  "queuedDraftsSessionNote": "Správy vo fronte sa uchovávajú iba dovtedy, kým je Conduit otvorený. Po dokončení odpovede sa odošlú spoločne ako jedna správa.",
+  "queuedDraftsSessionNote": "Správy vo fronte sa uchovávajú iba dovtedy, kým je FADI otvorený. Po dokončení odpovede sa odošlú spoločne ako jedna správa.",
   "queuedDraftSendNow": "Zastaviť a odoslať",
   "queuedDraftUploading": "Čaká sa na dokončenie nahrávania súboru",
   "queuedDraftFileFailed": "Súbor sa nenahral. Skúste to znova alebo ho odstráňte.",
@@ -6125,7 +6125,7 @@
   "accountsAddressChangeAnyway": "Napriek tomu zmeniť",
   "accountsSignOutAnyway": "Napriek tomu sa odhlásiť",
   "accountsServerAddresses": "Adresy",
-  "accountsServerAddressesHelp": "Conduit sa pripojí cez prvú adresu, ktorá odpovie, počnúc zhora. Poradie zmeníte potiahnutím.",
+  "accountsServerAddressesHelp": "FADI sa pripojí cez prvú adresu, ktorá odpovie, počnúc zhora. Poradie zmeníte potiahnutím.",
   "accountsAddAddress": "Pridať adresu",
   "accountsEditAddress": "Upraviť adresu",
   "accountsSaveAddress": "Uložiť adresu",
@@ -6135,9 +6135,9 @@
   "accountsAddressDifferentServer": "Táto adresa vedie na iný server alebo k inému účtu na ňom.",
   "accountsAddressNeedsSignIn": "Najprv sa prihláste do účtu na tomto serveri, aby bolo možné adresu overiť.",
   "accountsRemoveAddress": "Odstrániť adresu",
-  "accountsRemoveAddressMessage": "Conduit prestane skúšať túto adresu. Vaše účty zostanú prihlásené.",
+  "accountsRemoveAddressMessage": "FADI prestane skúšať túto adresu. Vaše účty zostanú prihlásené.",
   "accountsAddressConfirmTitle": "Overiť túto adresu?",
-  "accountsAddressConfirmMessage": "Aby Conduit overil, že {host} je tento server, pošle mu reláciu účtu uloženého v tomto zariadení. Pokračujte, len ak tejto adrese dôverujete.",
+  "accountsAddressConfirmMessage": "Aby FADI overil, že {host} je tento server, pošle mu reláciu účtu uloženého v tomto zariadení. Pokračujte, len ak tejto adrese dôverujete.",
   "accountsAddressConfirmAction": "Overiť adresu",
   "sidebarEmailTab": "E-mail",
   "searchEmail": "Hľadať e-maily...",

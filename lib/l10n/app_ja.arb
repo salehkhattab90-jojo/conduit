@@ -1,6 +1,6 @@
 {
   "@@locale": "ja",
-  "appTitle": "Conduit",
+  "appTitle": "FADI",
   "serverIncompatibleTitle": "サーバーは未対応です",
   "serverIncompatibleMessage": "このサーバーは Open WebUI {serverVersion} を実行しており、このアプリが対応するバージョン（{maxVersion} まで）よりも新しいバージョンです。",
   "serverIncompatibleResolution": "続行するには、サーバーを {maxVersion} 以前にダウングレードするか、対応を追加するアプリの更新をお待ちください。",
@@ -44,11 +44,11 @@
   "@account": {
     "description": "Section header for account-related options."
   },
-  "supportConduit": "Conduit を支援",
+  "supportConduit": "FADI を支援",
   "@supportConduit": {
     "description": "Section header inviting the user to financially support the project."
   },
-  "supportConduitSubtitle": "継続的な開発を支援して、Conduit の独立性を保ちます。",
+  "supportConduitSubtitle": "継続的な開発を支援して、FADI の独立性を保ちます。",
   "@supportConduitSubtitle": {
     "description": "Subtitle explaining why donations are helpful."
   },
@@ -72,7 +72,7 @@
   "releaseNotesAnnouncementTitle": "{version} の新機能",
   "@releaseNotesAnnouncementTitle": {"placeholders": {"version": {"type": "String"}}},
   "releaseNotesLearnMore": "詳細を見る",
-  "releaseNotesReviewButton": "Conduit をレビュー",
+  "releaseNotesReviewButton": "FADI をレビュー",
   "releaseNotesDoneButton": "完了",
   "signOut": "サインアウト",
   "@signOut": {
@@ -647,7 +647,7 @@
   "@voiceCallErrorHelp": {
     "description": "Guidance shown when the voice call encounters an error."
   },
-  "messageHintText": "Conduit に質問",
+  "messageHintText": "FADI に質問",
   "@messageHintText": {
     "description": "Short placeholder text in the message input."
   },
@@ -759,7 +759,7 @@
   "@chatQueuedPendingTitle": {
     "description": "Title shown when a queued assistant response is waiting for sync/backoff."
   },
-  "chatQueuedPendingMessage": "同期が実行され次第、Conduit がこの応答を開始します。",
+  "chatQueuedPendingMessage": "同期が実行され次第、FADI がこの応答を開始します。",
   "@chatQueuedPendingMessage": {
     "description": "Body text shown for a queued assistant response that is waiting to be sent."
   },
@@ -1061,7 +1061,7 @@
   "@aboutApp": {
     "description": "Settings tile title to view app information."
   },
-  "aboutAppSubtitle": "Conduit の情報とリンク",
+  "aboutAppSubtitle": "FADI の情報とリンク",
   "@aboutAppSubtitle": {
     "description": "Subtitle/description for the About section."
   },
@@ -1367,11 +1367,11 @@
   "@themePalette": {
     "description": "Title for selecting the app color palette."
   },
-  "themePaletteConduitLabel": "Conduit",
+  "themePaletteConduitLabel": "FADI",
   "@themePaletteConduitLabel": {
     "description": "Palette name for the default Conduit theme."
   },
-  "themePaletteConduitDescription": "Conduit 向けに設計されたクリーンなニュートラルテーマ。",
+  "themePaletteConduitDescription": "FADI 向けに設計されたクリーンなニュートラルテーマ。",
   "@themePaletteConduitDescription": {
     "description": "Description of the Conduit palette."
   },
@@ -1419,7 +1419,7 @@
   "@currentlyUsingLightTheme": {
     "description": "Status text indicating light theme is active."
   },
-  "aboutConduit": "Conduit について",
+  "aboutConduit": "FADI について",
   "@aboutConduit": {
     "description": "Dialog title for app information."
   },
@@ -1527,7 +1527,7 @@
   "@androidAssistantOverlayOption": {
     "description": "Option label for keeping the current assistant overlay."
   },
-  "androidAssistantNewChatOption": "新しいチャットで Conduit を開く",
+  "androidAssistantNewChatOption": "新しいチャットで FADI を開く",
   "@androidAssistantNewChatOption": {
     "description": "Option label for opening the app to a fresh chat from the assistant trigger."
   },
@@ -1643,7 +1643,7 @@
   "voiceProviderModelsHint": "プロバイダーが提示するモデル名を使用してください。空欄にした方向は、代わりにこのデバイスで処理されます。",
   "voiceProviderRealtimeModel": "リアルタイムモデル",
   "voiceProviderRealtimeInstructions": "指示",
-  "voiceProviderRealtimeInstructionsHint": "空欄にすると Conduit の指示を使用します。",
+  "voiceProviderRealtimeInstructionsHint": "空欄にすると FADI の指示を使用します。",
   "voiceProviderRealtimeFooter": "Direct と Apple のチャットの通話ではこの音声が話し、上の文字起こしモデルを使ってあなたの発言を聞き取ります。",
   "voiceCallModeTitle": "通話",
   "voiceCallModeRealtime": "リアルタイム",
@@ -3096,7 +3096,7 @@
   "passwordUpdated": "パスワードを更新しました。",
   "activeStatus": "有効",
   "inactiveStatus": "無効",
-  "appInformation": "Conduit アプリ",
+  "appInformation": "FADI アプリ",
   "appVersion": "バージョン",
   "serverInformation": "サーバー情報",
   "serverInfoUnavailable": "現在サーバー情報を利用できません。",
@@ -4658,7 +4658,7 @@
   "hermesAgentSettingsSubtitle": "Connect a self-hosted Hermes agent",
   "connectOpenWebUITitle": "Connect to Open WebUI",
   "connectOpenWebUISubtitle": "Add a self-hosted Open WebUI server",
-  "backendChooserWelcome": "Welcome to Conduit",
+  "backendChooserWelcome": "Welcome to FADI",
   "backendChooserPrompt": "Choose how you want to connect.",
   "backendChooserOpenWebUISubtitle": "Use your self-hosted Open WebUI server with full chat, notes, and more.",
   "backendChooserHermesTitle": "Use a Hermes Agent",
@@ -4725,7 +4725,7 @@
   "openWebUiDirectConnectionsLoadFailed": "Open WebUIから接続を同期できませんでした。",
   "openWebUiDirectConnectionSourceLabel": "Open WebUI",
   "deviceDirectConnectionSourceLabel": "このデバイス",
-  "openWebUiDirectConnectionUnsupportedAuth": "この接続では、Conduitが安全に使用できない認証方式が設定されています。",
+  "openWebUiDirectConnectionUnsupportedAuth": "この接続では、FADIが安全に使用できない認証方式が設定されています。",
   "directConnectionUnavailableLabel": "利用不可",
   "openWebUiDirectConnectionEditorDescription": "変更内容はOpen WebUIアカウントに保存されます。",
   "openWebUiDirectConnectionProviderDescription": "Open WebUIのユーザー接続はOpenAI互換APIに対応しています。",
@@ -4761,7 +4761,7 @@
   "openRouterProviderName": "OpenRouter",
   "directApiBaseUrl": "Base URL",
   "directOpenRouterUrlInvalid": "Use OpenRouter’s HTTPS /api/v1 root (global or EU).",
-  "directOpenRouterBaseUrlDescription": "Uses your OpenRouter API key, authenticated model catalog, and Conduit-managed tools.",
+  "directOpenRouterBaseUrlDescription": "Uses your OpenRouter API key, authenticated model catalog, and FADI-managed tools.",
   "directOpenRouterChatCompletionsDescription": "Chat Completions is used for native web search, image generation, PDF parsing, and reusable PDF annotations.",
   "directCompletionApi": "Completion API",
   "directChatCompletions": "Chat Completions",
@@ -4856,8 +4856,8 @@
   "ollamaThinkingMedium": "Medium",
   "ollamaThinkingHigh": "High",
   "ollamaThinkingMaximum": "Maximum",
-  "releaseNotesSupportPromptHeading": "Conduit を気に入っていただけましたか?",
-  "releaseNotesSupportPromptMessage": "短いレビューは、より多くの人が Conduit と出会う助けになります。小さなチップは、開発を続ける力になります。どちらも本当に励みになります。",
+  "releaseNotesSupportPromptHeading": "FADI を気に入っていただけましたか?",
+  "releaseNotesSupportPromptMessage": "短いレビューは、より多くの人が FADI と出会う助けになります。小さなチップは、開発を続ける力になります。どちらも本当に励みになります。",
   "directConnectProvider": "プロバイダーに接続",
   "directConnectProviderTitle": "プロバイダーに接続",
   "directConnectionEnabledSubtitle": "この接続のモデルをモデル選択に表示します。",
@@ -4867,7 +4867,7 @@
   "directApiKeyPlaceholder": "API キーを入力",
   "hermesOnboardingFailed": "Hermes の設定を完了できませんでした。セキュアストレージを確認して、もう一度お試しください。",
   "hermesConnectionDetailsTitle": "接続の詳細",
-  "hermesMemoryKeyShortDescription": "エージェントの長期記憶をあなたに関連付けます。空欄の場合は Conduit がキーを作成します。",
+  "hermesMemoryKeyShortDescription": "エージェントの長期記憶をあなたに関連付けます。空欄の場合は FADI がキーを作成します。",
   "hermesConnectAction": "Hermes に接続",
   "hermesToolCount": "ツール {count} 個",
   "@hermesToolCount": {"placeholders":{"count":{"type":"int"}}},
@@ -5046,12 +5046,12 @@
   "backendChooserSelfHostedSectionTitle": "セルフホストのサービス",
   "citationShowTitles": "引用にページタイトルを表示",
   "citationShowTitlesDescription": "引用バッジにサイトのドメインではなくページタイトルを使用します",
-  "directContextCompactionDescription": "これらのモデルはコンテキストウィンドウを報告しません。Conduit はリクエストが大きくなりすぎる前に、選択した上限を使って古いメッセージを圧縮します。",
-  "directContextCompactionPickerDescription": "Conduit が自動圧縮に使用するコンテキストウィンドウを選択してください。",
+  "directContextCompactionDescription": "これらのモデルはコンテキストウィンドウを報告しません。FADI はリクエストが大きくなりすぎる前に、選択した上限を使って古いメッセージを圧縮します。",
+  "directContextCompactionPickerDescription": "FADI が自動圧縮に使用するコンテキストウィンドウを選択してください。",
   "directContextCompactionTitle": "コンテキストの圧縮",
   "directContextLimit": "コンテキスト上限: {tokens}",
   "@directContextLimit": {"description": "Provider-neutral model context limit label.", "placeholders": {"tokens": {"type": "String"}}},
-  "notificationSystemSettingsDescription": "Conduit の許可、サウンド、バナーの設定を変更します。",
+  "notificationSystemSettingsDescription": "FADI の許可、サウンド、バナーの設定を変更します。",
   "notificationSystemSettingsOpenFailed": "システムの通知設定を開けませんでした。",
   "notificationTargetsTitle": "Webhook の送信先",
   "notificationTargetsDescription": "このアプリを閉じている間も、Open WebUI サーバーがこれらの URL にイベントを送信します。",
@@ -5142,7 +5142,7 @@
   "@voiceCallExpand": {
     "description": "Accessibility label for the button that opens the minimized voice call pill back into the full panel."
   },
-  "askConduitAction": "Conduit に質問",
+  "askConduitAction": "FADI に質問",
   "voiceCallStartTimeout": "音声通話の開始に時間がかかりすぎました。もう一度お試しください。",
   "@voiceCallStartTimeout": {"description": "Error shown when starting a voice call takes too long."},
   "voiceCallNoSpeech": "音声が検出されませんでした。",
@@ -5233,7 +5233,7 @@
   "chatForkFailed": "このチャットを分岐できませんでした。もう一度お試しください。",
   "codeInterpreter": "コードインタープリター",
   "codeInterpreterDescription": "サーバー上でコードを実行して、データの分析やファイルの作成ができます。",
-  "codeInterpreterBrowserEngine": "このサーバーはコードをブラウザで実行しますが、Conduit では対応していません。",
+  "codeInterpreterBrowserEngine": "このサーバーはコードをブラウザで実行しますが、FADI では対応していません。",
   "codeInterpreterUnavailable": "このサーバー、アカウント、またはモデルでは使用できません。",
   "folderProjectSettings": "プロジェクト設定",
   "folderProjectSettingsDescription": "このフォルダ内の新しいチャットの既定値です。サーバーは、フォルダ内のすべてのチャットにナレッジとシステムプロンプトを適用します。",
@@ -5346,7 +5346,7 @@
   "queueDraftAction": "キューに追加",
   "queuedDraftsTitle": "キューのメッセージ",
   "queuedDraftsCount": "キューに入っているメッセージ: {count} 件",
-  "queuedDraftsSessionNote": "キューに入れたメッセージは、Conduit を開いている間だけ保持されます。応答が完了すると、1 件のメッセージとしてまとめて送信されます。",
+  "queuedDraftsSessionNote": "キューに入れたメッセージは、FADI を開いている間だけ保持されます。応答が完了すると、1 件のメッセージとしてまとめて送信されます。",
   "queuedDraftSendNow": "停止して送信",
   "queuedDraftUploading": "ファイルのアップロード完了を待っています",
   "queuedDraftFileFailed": "アップロードできなかったファイルがあります。再試行するか削除してください。",
@@ -5819,7 +5819,7 @@
   "accountsAddressChangeAnyway": "それでも変更する",
   "accountsSignOutAnyway": "それでもサインアウト",
   "accountsServerAddresses": "アドレス",
-  "accountsServerAddressesHelp": "Conduit は上から順に試し、最初に応答したアドレスで接続します。ドラッグして順序を変更できます。",
+  "accountsServerAddressesHelp": "FADI は上から順に試し、最初に応答したアドレスで接続します。ドラッグして順序を変更できます。",
   "accountsAddAddress": "アドレスを追加",
   "accountsEditAddress": "アドレスを編集",
   "accountsSaveAddress": "アドレスを保存",
@@ -5829,9 +5829,9 @@
   "accountsAddressDifferentServer": "このアドレスは別のサーバー、またはそのサーバー上の別のアカウントにつながります。",
   "accountsAddressNeedsSignIn": "アドレスを確認できるよう、先にこのサーバーのアカウントにサインインしてください。",
   "accountsRemoveAddress": "アドレスを削除",
-  "accountsRemoveAddressMessage": "Conduit はこのアドレスを試さなくなります。アカウントはサインインしたままです。",
+  "accountsRemoveAddressMessage": "FADI はこのアドレスを試さなくなります。アカウントはサインインしたままです。",
   "accountsAddressConfirmTitle": "このアドレスを確認しますか？",
-  "accountsAddressConfirmMessage": "{host} がこのサーバーであることを確かめるため、Conduit はこのデバイスに保存されたアカウントのセッションをそこへ送信します。このアドレスを信頼できる場合のみ続行してください。",
+  "accountsAddressConfirmMessage": "{host} がこのサーバーであることを確かめるため、FADI はこのデバイスに保存されたアカウントのセッションをそこへ送信します。このアドレスを信頼できる場合のみ続行してください。",
   "accountsAddressConfirmAction": "アドレスを確認",
   "sidebarEmailTab": "メール",
   "searchEmail": "メールを検索...",
