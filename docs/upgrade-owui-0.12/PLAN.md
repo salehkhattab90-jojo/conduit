@@ -1,213 +1,255 @@
-# Conduit fork × Open WebUI 0.12 — plan
+# Conduit fork → rebuild on upstream Conduit v4.2.0 — plan
 
 **Status:** proposal, awaiting owner approval. No code written.
-**Scope:** what this fork (`main` → `saas-base` → customer layer) needs to keep
-working when its Open WebUI server moves from **0.9.2** to **0.12.2**.
-**Companion:** `ARCHITECTURE.md` (designs, file list), customer notes live only on
-the customer branch.
-**Base:** `saas-base` `37f6d355`; upstream Conduit checked at `upstream/main`
-`dda134cd` (v4.2.0, 2026-10-13); Open WebUI v0.12.2 source tree.
+**Replaces** the earlier in-place patch plan (Track A, `a13f04b7`), which assumed
+the app had to keep working on Open WebUI 0.9.2. The owner confirmed (2026-10-16)
+that nobody uses the app yet, so backward compatibility is not a requirement and
+the app does not gate the server upgrade.
+**Companion:** `ARCHITECTURE.md` (seams and designs per feature). Customer values
+live only on the customer branch.
+**Refs:** fork `main` `d81619b2` (stale upstream, 2026-06-19), `saas-base` `a13f04b7`;
+upstream `cogwheel0/conduit` `main` = tag **v4.2.0** `dda134cd` (2026-10-13, supports
+Open WebUI ≤ 0.12.0); target server **Open WebUI 0.12.2** (`6a18585f`).
 
 ## 1. Summary
 
-- The current build is **not usable** on a 0.12.2 server: replies don't stream (they
-  pop in at the end), and every new reply loses its reasoning and tool-call cards,
-  live and after reload. Turns in tool/terminal chats can also stall for seconds to
-  minutes on server requests the app never answers.
-- Upstream Conduit already supports Open WebUI 0.12.0, but it got there across 611
-  commits that restructured the app (core moved into `packages/conduit_core`, Drift
-  persistence, Hermes backend) and it now **requires Flutter ≥ 3.47** (this machine
-  has 3.44.2). Rebasing our 33 fork commits onto it is a separate project, estimated
-  at **13–19 focused days** (§9).
-- **Recommendation: Track A** — patch the fork in place on `saas-base` with ~10
-  targeted, fallback-guarded changes, borrowing upstream's code where it is
-  self-contained (stream reducer, request acks, delete fallback). One build works on
-  **both** 0.9.2 and 0.12.2, so it can ship **before** the server upgrade (the server
-  plan's decision G-5). **Track B** (rebase onto upstream) is proposed as its own
-  project after the server upgrade lands.
+- Rebuild the fork on upstream v4.2.0 and re-apply our features on top, as one
+  commit per feature group. Upstream already carries the work for Open WebUI
+  0.10 → 0.12: Responses-style streaming and `output[]` rendering, answers to the
+  server's socket requests, per-message delete, POST sign-out, two-step sign-in,
+  enforced temporary chats, chat "running" state, per-chat Stop, 409 recovery,
+  knowledge API moves. Most of the old breakage list disappears.
+- A trial cherry-pick of every fork commit onto v4.2.0 (§2) shows that only **3 of
+  33** apply cleanly and usefully. Upstream moved the core into
+  `packages/conduit_core` (Flutter-free), split `api_service.dart`, and rewrote the
+  chat UI, so the rest is a **hand port** onto the new files — our diffs on top of
+  latest upstream, re-expressed against upstream's seams.
+- History: **rebuild + join commit**, the same scheme as the server upgrade
+  (decision G-1 there): no force-push, old history kept, and future upstream syncs
+  become normal merges.
+- Effort ≈ **13–19 focused days** including device QA.
 
-## 2. Breakages and chosen fixes
+## 2. Trial cherry-pick (each commit alone onto `upstream/main` v4.2.0)
 
-Severity is for a typical deployment that uses socket streaming, tools and a
-terminal. "Fallback" = how the same build keeps working on 0.9.2.
+Run in a throwaway detached worktree (script and raw output kept with the session
+notes). `DU` = upstream deleted or moved the file we changed; `UU` = both changed.
 
-| # | Breakage on 0.12.2 (verified) | Symptom | Fix (Track A) | Fallback on 0.9.2 | Source of the fix |
-|---|---|---|---|---|---|
-| 1 | Reply deltas arrive as `response:completion` (`utils/middleware.py:5058,5110,5984`); final `done` has no `content` (`:6641-6647`); DB `content` is plain text, traces only in `output[]` (`models/chats.py:1331`) | No live text; reply appears at the end; **reasoning, tool-call and code-interpreter cards lost on every new reply** (live and reload) | Reduce events → `output[]` → project to the same `<details>` markup 0.9.2 produced → existing renderer (ARCH §1) | 0.9.2 still sends `content`; projection only runs when `content` lacks markup and `output` has non-message items | Reducer: port of upstream `openwebui_response_stream.dart` (+tests). Serializer: port of 0.9.2 `serialize_output` |
-| 2 | Server→client RPCs the app never answers: `request:terminal` (≤5 s), `request:terminal:state` (≤2 s), `request:elicitation` / `request:user_input` (60–240 s); tool-approval `confirmation` carries only `tool_call` | Turns stall; `ask_user` blocks the model for minutes; approval dialog is blank | Answer at the socket layer before fan-out: `{}`, `{connected:false}`, `{action:'cancel'}`, `user_input` → error text telling the model to ask in prose; render tool name + args in the approval dialog (ARCH §2) | Events never arrive on 0.9.2 | Upstream `socket_service.dart:1490-1527` (4cb3c48f) |
-| 3 | Chat `POST` merges history (`models/chats.py:803-850`); new `DELETE /api/v1/chats/{id}/messages/{mid}` (`routers/chats.py:1557`) | Deleting a message reappears after sync | `DELETE` per removed id, parent-first, then refresh (ARCH §3) | 404/405 → today's history rewrite | Upstream `api_service_chats.dart:183-207` |
-| 4 | `GET /api/v1/auths/signout` removed, `POST` only (`routers/auths.py:900`) | Local sign-out still works (error swallowed) but the **server never revokes the token** | `POST`, fall back to `GET` | 405/404 → `GET` | Upstream `api_service_auth.dart:57` |
-| 5 | Native function calling default + `ask_user` builtin (`utils/tools.py:697`) | see #2 | covered by #2; recommend the server keeps the user-input builtin off until #13 ships | — | — |
-| 6 | Per-model "Model controls" (`info.params.model_controls`, `params.model_controls`; `utils/payload.py:20-34`, `main.py:1212-1225`) | Nothing breaks: today's `chat_template_kwargs` + `features.thinking_mode` still pass through. But the app can't drive controls the admin configures | Generic Model controls sheet; send `params.model_controls` when the model advertises them, legacy fields otherwise (ARCH §5) | No `model_controls` in the model list → legacy pill as today | New (upstream Conduit has none) |
-| 7 | Memory: app sends `features.memory` only when `ui.memory == true` (`api_service.dart:4883-4892`) | Memory silently off for users who never toggled it, unless the server seeds a default | Mirror web: `ui.memory ?? config.features.enable_memories ?? false` (ARCH §6). Server default via `ui.default_interface_settings` already reaches the app (`routers/users.py:459-474`) | Same rule is correct on 0.9.2 | Web client `Chat.svelte:4013` |
-| 8 | Terminal `display_file(inline=true)` suppresses `terminal:display_file` (`utils/middleware.py:1344`) | Mostly covered already: the fork rebuilds cards from `output[]` on reload; with #1 they appear live too | Also read the normalised `files[]` entry (`source:'open_terminal'`), de-dupe by path (ARCH §7) | Unchanged | — |
-| 9 | `ui` settings are per-key patches since 0.11.4 (`models/users.py:836-844`) | Clearing the default model or system prompt in the app does nothing (`api_service.dart:2340, 2345, 2362` use `remove`) | Send explicit `null` | 0.9.2 stores `null`; reader treats it as unset (verify) | Upstream d82087fc |
-| 10 | Completion failure without a socket now returns the provider's status (was JSON `null`) and a retry gets 409 | Only on the no-socket path (app backgrounded / socket down): saved error never shows; queued retry loops on 409 | Reproduce in phase 3; if confirmed, port upstream's "read the saved reply once the server has finished it" recovery | 0.9.2 path unchanged | Upstream 4cb3c48f `_recoverSavedReplyOrThrow` |
-| 11 | Provider 401/403 passed through on non-socket sends | Send error containing 401/403 reloads auth (`chat_providers.dart:5322-5329`) — non-socket path only | Mark the reply with the error; probe `GET /api/v1/auths/` once and let the interceptor decide | Same | Upstream 4cb3c48f |
-| 12 | New socket events: `terminal:write_file`, `terminal:replace_file_content`, `terminal:run_command`, `chat:message:tasks`, `context_compaction` | Terminal file browser doesn't refresh after the agent writes; no task list/compaction notice. No errors | Refresh the terminal browser on `terminal:*`; show `context_compaction` as a status line. Task list: deferred | n/a | Upstream 6e9e8668 |
-| 13 | (optional) `ask_user` question forms | Without it the model asks in prose (via #2) | Native question sheet for `request:user_input` (single/multi choice + "other" + free text), answers `{answers}` / `{status:'cancelled'}` | n/a | Upstream `openwebui_chat_prompt*.dart` (f80f7935) — port, ~900 lines |
+| commit | result | conflicted | disposition |
+|---|---|---|---|
+| `5b819447` white-label foundation | conflict | 21 of 23 files (2 DU, 1 UD, 18 UU) | **redesign** — locked deployment (§4 G1) |
+| `cb5061c3` STT/TTS default to server | **clean** (lands in `packages/conduit_core/lib/services/settings_service.dart` via rename) | — | **cherry-pick** |
+| `7cb530ef` Email section | conflict | 2 of 3 (1 DU, 1 UU) | port (G3) |
+| `c4ec13a8` email-* protocol rename | conflict | 1 DU | fold into G3 |
+| `45e840cc` Discuss chat auth | conflict | 1 DU | fold into G3 |
+| `ab897bb7` deletion reconcile on resume | conflict | 2 DU | port (G2) |
+| `e864e3cb` per-chat thinking toggle | conflict | 12 of 13 | **replace** by Model controls (G8) |
+| `9ac412ae` image-gen gated on capability | conflict | 2 (1 DU, 1 UU) | port (G2) |
+| `8c6378bb` refresh models + tools on resume | **clean** | — | **cherry-pick** (verify it compiles) |
+| `5131209c` overflow icon gating | conflict | 1 UU | **drop** — upstream's composer already gates its pills |
+| `aeda9289` gitignore `*.code-workspace` | **clean** | — | **cherry-pick** |
+| `6eb92672` remove reconcile fraction valve | conflict | 3 of 4 | port (G2), decision R-4 |
+| `a5941903` terminal HTML/SVG live render | conflict | 1 UU | port (G5) |
+| `1c776a2c` full-screen artifact viewer | conflict | 1 UU | port (G5) |
+| `ec58aafb` Firebase scaffold | conflict | 3 UU (gradle, pubspec) | port (G4) |
+| `b4a76fe0` FCM service | conflict | 3 of 5 | port (G4) |
+| `1190c29d` tap opens Email | conflict | 2 DU | port (G4) |
+| `ee95d7a2` deep-link to the email | conflict | 3 DU | port (G4) |
+| `dbc279af` / `d4668cb3` | conflict | — | **drop** (change + its revert) |
+| `6c80d681` / `3e549a41` | conflict | — | **drop** (change + its revert) |
+| `e08ff559` display_file → chat card | conflict | 1 of 3 | port (G5) |
+| `92d476c8` fused doc card + preview page | conflict | 1 of 2 | port (G6) |
+| `aefeb0fd` artifact store survives re-sync | conflict | 2 of 3 | port (G5) |
+| `4237ee1c` docs from the output trace | conflict | 1 UU | port (G6) |
+| `89cbb983` keep `output` on chat load | clean, **but redundant** | — | **drop** — upstream already maps `output`; the pick would duplicate the key |
+| `9f08774e` artifact card across restart | conflict | 1 UU | port (G5) |
+| `6dcdd14d` email attachment download | conflict | 1 DU | fold into G3 |
+| `a9dc4b2b` send-confirmation dialog | conflict | 1 of 3 | **re-express** on upstream's prompt (G7) |
+| `8ce73b97` launcher-icons dev tooling | conflict | 2 UU (pubspec) | re-add (G0) |
+| `0e360243` preview contract (structured embeds) | conflict | 5 of 9 (4 DU) | port (G6) — **mandatory** |
+| `37f6d355` LaTeX masking of `<details>` | conflict | 2 of 5 (upstream added the **same incident fixture**) | **drop code**, keep our fixture test as proof (G2) |
+| customer `71839495` brand | conflict | 16 of 129 | re-apply on new files (customer layer) |
+| customer `9a537fa2` bundle id | conflict | 1 of 2 | re-apply (customer layer) |
+| customer `0fe7c88d`, `bf90b44a` | — | — | **drop** (duplicates of base commits) |
 
-**Not breaking, recorded so nobody re-checks them:** the Email tab's `localStorage.token`
-injection (0.12 frontend still keys on it); the send-confirmation dialog for a
-Tool's own `confirmation` event (title/message payload, unchanged); doc-preview cards
-(`function_call_output` still carries `files`/`embeds`, `utils/middleware.py:3651-3657`
-— but the object-embed preview contract comes from this fork's server patches, so it
-holds only if the server upgrade ports them, as its plan says); `/api/chat/completed`, `/api/tasks/*`,
-`/api/models`, chat CRUD, folders, files, notes, memories, terminals proxy routes
-(present in both versions); direct SSE (non-socket) streaming is still provider
-chat-completion chunks. Removed-but-unused: `POST /api/v1/tasks/active/chats` (the fork
-calls a non-`v1` path that never existed; pre-existing, see §7).
+Totals: 3 cherry-picks · 4 dropped as reverts · 4 dropped as covered/obsolete
+(`5131209c`, `89cbb983`, `37f6d355` code, `e864e3cb` replaced) · ~22 ported into 9
+feature groups · customer layer re-applied.
 
-**Opt-in server features the app does not support (keep them off until it does):**
-two-step sign-in (MFA; password/LDAP sign-in answers with a step object), enforced
-temporary chats for non-admins, per-chat Open Terminal context, tool-approval "ask"
-mode for saved chats beyond what #2 renders, folder sharing (shared folders are
-invisible, nothing breaks). Each is a row for Track B or a later Track A item.
+## 3. Branches and history
 
-## 3. Phases (after approval)
+```
+upstream v4.2.0 ──► main                (fast-forward; main is an ancestor of v4.2.0)
+        │
+        └──► saas-base-v4  (scratch branch, one commit per feature group G0…G9)
+                  │
+   join commit: tree = saas-base-v4, parents = old saas-base + saas-base-v4
+                  │   → saas-base fast-forwards: NO force-push, old history kept,
+                  │     merge-base with upstream becomes v4.2.0 (future syncs = merges)
+                  ▼
+   <customer>-v4 = new saas-base + customer commits (brand, bundle id, values)
+   join commit: tree = <customer>-v4, parents = old <customer> + <customer>-v4 → <customer> fast-forwards
+```
 
-All work on a branch off `saas-base` in a separate worktree; the owner's checkout is
-untouched until hand-over. Each phase ends with `flutter analyze` clean and the
-full `flutter test` run diffed against the pre-change failure set.
+- Before anything moves, tag the then-current tips as rollback anchors:
+  `saas-base-pre-v4` and `<customer>-pre-v4`. Tags are named so they never match
+  upstream's release trigger (`v*`).
+- Upstream tags are never pushed to our origin.
+- All work happens in separate worktrees off the owner's checkout. The owner's
+  checkout (on the customer branch, with an uncommitted `ios/Podfile.lock`) is
+  only touched at hand-over, as the owner decides (R-8).
+- Completeness check before the join: every hunk of `git diff main saas-base-v4`
+  maps to a feature-group row, and every behaviour of the old
+  `git diff d81619b2 saas-base` maps to a row or an explicit drop in §2.
 
-1. **Test rig** — two local Open WebUI servers via `uv` (0.9.2 on :8092, 0.12.2 on
-   :8122, separate data dirs) and a small scripted OpenAI-compatible mock model that
-   streams reasoning, text, one tool call (`display_file`-shaped and a plain one)
-   and a code block, deterministically. Golden fixtures for the serializer are
-   generated by running 0.9.2's `serialize_output` on recorded 0.12.2 `output[]`
-   payloads. Capture real socket traffic from both servers as test fixtures.
-2. **Streaming (#1)** — reducer + tests (port), serializer + golden tests,
-   projection rule, wiring in `streaming_helper` and the message widget. Trace the
-   buffer → Drift → push path and add the `content` guard if needed (ARCH §1.3).
-3. **Protocol fixes (#2, #3, #4, #7, #8, #9, #10, #11, #12)** — each with a unit test
-   for both server behaviours (fake Dio adapter: 0.9.2 answer, 0.12.2 answer).
-4. **Model controls (#6)** — model parsing, per-chat choice store, sheet, request
-   shape, stale-choice 400 retry.
-5. **(optional) `ask_user` sheet (#13).**
-6. **Device E2E** on the Android emulator against both local servers (matrix in §4),
-   then hand-over: merge into `saas-base`, merge `saas-base` into the customer branch,
-   push, build.
+## 4. Feature groups (one commit each, in this order)
 
-Rough size: phases 1–4 ≈ 3–4 focused days; phase 5 ≈ 1 day; phase 6 ≈ 1 day.
-Track B ≈ 13–19 focused days (§9).
+| group | content | from |
+|---|---|---|
+| **G0 build** | `.gitignore`; `flutter_launcher_icons` dev dependency; docs folder carried over; `docs/FORK-INVENTORY.md` listing every fork hook in an upstream file | `aeda9289`, `8ce73b97`, `docs/` |
+| **G1 locked deployment** | generic build-time lock (`DeploymentPolicy` in core + one customer-owned `deployment.dart`): one Open WebUI server seeded before the first redirect, Open WebUI backend only; hides server/address/account management, backend chooser, Hermes, Direct connections, reviewer mode; **forces the on-device Apple models off** (upstream defaults them on and merges them into the model list); sign-out always keeps the server; sign-in modes from the policy (two-step kept); brand links/names from `BrandConfig`; ARB product-name rewrite tool (R-10) | `5b819447` (redesigned) |
+| **G2 small behaviour** | STT/TTS default to server; refresh models + tools on resume; image generation gated on the model capability; deletion reconcile on resume/cold start (throttled); reconcile valve per R-4; LaTeX fixture test | `cb5061c3`, `8c6378bb`, `9ac412ae`, `ab897bb7`, `6eb92672`, `37f6d355` test |
+| **G3 Email section** | Email tab in upstream's sidebar tab registry, shown only when the server has the email service; lazy webview; `email-*` protocol; **security fixes** over the fork's version (token only to the email origin, messages only from it, downloads through the app's authenticated client, external links https-only, storage cleared on logout) | `7cb530ef`, `c4ec13a8`, `45e840cc`, `6dcdd14d` |
+| **G4 Email push** | Firebase messaging (off when the config file is absent); device registration; foreground notifications through upstream's notification service (no second plugin init); tap → Email tab → that message; **iOS push added** (the fork's was Android-only) | `ec58aafb`, `b4a76fe0`, `1190c29d`, `ee95d7a2` |
+| **G5 terminal artifacts** | in-chat artifact card from `terminal:display_file` and from the durable record 0.12.2 writes as the `function_call_output` text JSON (`type:file, source:open_terminal`), so `display_file(inline=true)` is covered; HTML/SVG live render; full-screen viewer with download, also used by upstream's Files panel | `a5941903`, `1c776a2c`, `e08ff559`, `aefeb0fd`, `9f08774e` |
+| **G6 document previews** | object-embed preview contract preserved on save (upstream's sanitiser flattens it — data-corrupting); one fused card per document; PDF/HTML preview page; download of the real file | `0e360243`, `92d476c8`, `4237ee1c` |
+| **G7 confirmations** | upstream's prompt surface, patched to the fork's guarantees: full text (no 2000-char cut), scrollable, one at a time, answered exactly once, `false` on stream teardown | `a9dc4b2b` (re-expressed) |
+| **G8 Model controls** | generic per-model controls from `info.params.model_controls`; choice stored per user per model in `ui.params.model_controls` (shared with the web client); sent as `params.model_controls` with stale options dropped; picker in the model selector; replaces the thinking toggle | new (replaces `e864e3cb`) |
+| **G9 Open WebUI 0.12.2** | drift audit of the 208 server commits 0.12.0 → 0.12.2; bump `maxSupportedVersion` + its tests and the `openwebui-src` pin; memory default (`ui.memory ?? features.enable_memories`); reconnect after a server-initiated socket disconnect + refresh on `access:updated` (the one upstream gap the audit confirmed) | new |
 
-## 4. Test plan
+## 5. Toolchain
 
-**Unit / widget (CI-less, run locally):**
-- Reducer: upstream's test file ported as-is, plus recorded 0.12.2 event sequences
-  (text only; reasoning → text; text → tool call → tool output → text; code
-  interpreter continuation; `response.completed` merge; out-of-order `output_index`).
-- Serializer: golden equality with 0.9.2 Python output for each fixture (escaping of
-  quotes/ampersands/non-ASCII, `files`/`embeds` attributes, reasoning `summary` vs
-  `content`, done/in-progress inference).
-- Projection: 0.9.2 message (markup in `content`) unchanged; 0.12.2 message (plain
-  `content` + `output`) → markup; message with only `message` items → `content`.
-- Socket: each RPC acked exactly once, with no chat open, and never twice after
-  replay; `confirmation{tool_call}` renders name + args.
-- API: sign-out POST→GET fallback; delete DELETE→rewrite fallback and parent-first
-  order; settings clear sends `null`; memory default precedence; model-controls
-  request shape and 400 retry.
-- Regression: existing suites (streaming transport, conversation parsing, embeds,
-  LaTeX-details masking, confirmation coordinator, deletion reconcile) stay green.
+| need | have | action |
+|---|---|---|
+| Flutter ≥ 3.47 / Dart ≥ 3.13 (upstream `pubspec.yaml:6-8`) | 3.44.2 / 3.12.2 at `/Users/smk/Dev/SDK/flutter`, shared with other checkouts | install **3.47.7** (current stable, Dart 3.13.5) as a **second** SDK next to it (R-7); use it by absolute path in the rebuild worktree |
+| submodules `third_party/katex`, `third_party/mermaid` (required by `pub get`) | not initialised | `git submodule update --init --depth 1` in the worktree; `openwebui-src`, `hermes-src` stay reference-only |
+| Android: AGP 9.2.1, Gradle 9.4.1, Kotlin 2.4.0, compileSdk 37, NDK 29.0.14206865, JDK 17+ | NDK 29.0.14206865 ✓, JDK 17.0.19 ✓, platforms up to 36.1 | install platform `android-37` |
+| iOS: Xcode with SPM enabled, iOS 16+ | Xcode licence not accepted | owner runs `sudo xcodebuild -license` once |
+| Node (markdown web-safety check) | v22.23.1 ✓ | — |
 
-**Device E2E (Android emulator; iOS simulator once the Xcode licence is accepted),
-each against 0.9.2 and 0.12.2:**
+## 6. Phases (after approval)
+
+1. **Prep** — rollback tags; second SDK; Android platform 37; submodules; baseline:
+   run all upstream gates on pristine v4.2.0 and record the failure set.
+2. **`main` → v4.2.0** (fast-forward, pushed). Upstream's CI runs on our public repo
+   for pushes to `main` (R-6).
+3. **G0–G9** on `saas-base-v4`, one commit each; after each: gates (§7.1) green or
+   identical to baseline.
+4. **Completeness audit** (§3), then the **join** → `saas-base`, push.
+5. **Customer layer** on `<customer>-v4` → join → customer branch, push.
+6. **Device E2E** (§7.2) on Android emulator and iOS simulator against a local
+   Open WebUI 0.12.2; final pass against the real server once it is upgraded.
+7. **Hand-over** — owner's checkout per R-8; remove worktrees; verify local ==
+   remote for every branch and tag touched.
+
+Estimate per group: G1 3–4 d · G3+G4 2–3 d · G5 1.5–2 d · G6 1.5–2 d · G7 0.5 d ·
+G8 1–1.5 d · G0+G2+G9 1–1.5 d · prep/toolchain 1–1.5 d · customer layer 1 d ·
+device QA 2–3 d → **≈ 13–19 focused days**.
+
+## 7. Test plan
+
+### 7.1 Gates (every group commit)
+Upstream's CI, run locally with Flutter 3.47.7:
+`flutter pub get` → `dart run build_runner build` (app and `packages/conduit_core`)
+→ `dart tool/platform_ui_lint.dart` → `flutter analyze --no-fatal-warnings
+--no-fatal-infos` → `dart run tool/run_test_shards.dart` → per package `dart test`
+and `dart analyze --fatal-infos` → `dart run tool/check_package_boundaries.dart` →
+markdown web-safety (`dart compile js` + node) → `dart run
+tool/verify_arb_descriptions.dart` + `tool/validate_arb_locales.dart`.
+Failure sets are diffed against the pristine-v4.2.0 baseline; a new failure blocks
+the group.
+
+### 7.2 Tests carried or added per group
+- G1: router tests — a locked build never reaches server setup, backend chooser,
+  account switcher, Hermes/Direct/Apple routes; sign-in shows only the allowed
+  modes; two-step sign-in still completes.
+- G2: image-generation availability test (ours, re-pathed); reconcile-on-resume
+  throttle; reconcile valve per R-4; LaTeX-in-details incident fixture renders.
+- G3/G4: protocol message tests for the Email webview bridge; notification payload →
+  route; device-registration request shape.
+- G5: artifact paths from `terminal:display_file` and from the durable record
+  (`function_call_output` text JSON with `type: file, source: open_terminal`, inline
+  or not; `exists: false` skipped); de-duplication by resolved path.
+- G6: our contract tests (parsing / transport / embed utils) moved to the right
+  packages: object embeds survive a save round-trip; one card per delivery; legacy
+  string previews still render.
+- G7: long confirmation text is shown in full; exactly one ack; `false` on teardown
+  and on chat switch.
+- G8: model-controls parsing; choice round-trips through `ui.params.model_controls`;
+  request shape `params.model_controls`; options the model no longer offers are
+  dropped before sending.
+- G9: version gate accepts 0.12.2; memory default precedence; socket reconnects after
+  an `io server disconnect`; `access:updated` refreshes permissions and models.
+- G3 security: token script and messages restricted to the email origin; a message
+  from another frame/origin is ignored; download requests carry the bearer only to
+  the server's origin.
+
+### 7.3 Device E2E matrix (Android emulator + iOS simulator, Open WebUI 0.12.2)
 
 | scenario | pass when |
 |---|---|
-| plain reply | text streams token-by-token; final text matches the web client |
-| reasoning model | "Thinking…" card streams, then "Thought for N s"; same after reload and app restart |
-| tool call (native FC) | tool card shows Executing → Executed with arguments/result; same after reload |
-| terminal `display_file` (inline and not) | one artifact card per file, live and after reload; opens the viewer |
-| generated document (doc-generator tool) | one doc card, preview + download as today |
-| `ask_user` builtin on | model continues within seconds and asks in prose (or the sheet, if #13) |
-| MCP elicitation | tool continues within seconds |
-| tool approval "ask" | dialog shows tool name + args; approve/deny both work |
-| delete a message, pull-to-refresh, reopen | stays deleted on app and web |
-| sign out | server token revoked (old token gets 401 on `/api/v1/auths/`) |
-| memory | with the server default on, a fact from chat A is recalled in chat B |
-| thinking / model controls | Off/Auto/On reach the request (server log) and change behaviour |
-| clear default model / system prompt | cleared on the web too |
-| socket killed mid-reply (airplane mode toggle) | reply resumes or shows the saved result; no 409 loop |
-| upgrade-in-place | app open on 0.9.2, server swapped to 0.12.2, app keeps working after reconnect |
-| old chats | 0.9.2-era replies render exactly as before |
+| first launch | goes straight to sign-in for the locked server; no server/backend/account UI anywhere |
+| sign-in | password and SSO work; a two-step account completes its step |
+| plain reply | streams token by token |
+| reasoning model | thinking block streams, then collapses; same after reload |
+| tool call (native FC) | tool tile runs → done with args/result; same after reload |
+| terminal `display_file` (inline and not) | one artifact card per file live and after reload; HTML/SVG renders; full-screen + download |
+| generated document | one card; preview (PDF/HTML) and download of the real file; card still right on the web client after the app saved the chat |
+| long send-confirmation | full text scrolls; approve and deny both reach the server; leaving the chat denies |
+| Email tab | opens, Discuss works, attachment download works |
+| push | notification arrives; tap opens the Email tab on that message (device with real Firebase config) |
+| model controls | options from the server; the choice changes the request and behaviour |
+| memory | a fact from chat A is recalled in chat B with the server default on |
+| delete message / sign out / Stop (non-admin) | stays deleted; token revoked; server generation stops |
+| password change | app signs out cleanly |
 
-## 5. Rollout
+## 8. Decisions for the owner
 
-1. Owner approves this plan (and §6 decisions).
-2. Phases 1–6; build from the customer branch; distribute to users.
-3. Server upgrade deploys afterwards (server plan G-5). Because the build is
-   dual-version, there is no flag day and no rollback coupling: if the server rolls
-   back to 0.9.2, the app keeps working.
-4. Server-side settings that protect older app builds still in users' hands (until
-   adoption is confirmed): user-input builtin off, tool permissions off, no MFA, no
-   per-chat terminal context, no enforced temporary chats.
+- **R-1 History:** rebuild + join commit, no force-push (rec) · merge v4.2.0 into
+  `saas-base` (silently loses fork behaviour where upstream moved files) ·
+  force-push fresh branches.
+- **R-2 Thinking:** drop the thinking pill; Model controls sheet driven by the
+  server (rec) · keep a pill mapped onto a control named `thinking`.
+- **R-3 Confirmations:** adopt upstream's prompt surface and patch it to our
+  guarantees; delete our coordinator (rec) · port our coordinator as-is.
+- **R-4 Reconcile valve:** remove it as before, so a server-side "delete all"
+  propagates (rec) · keep upstream's valve (upstream kept it deliberately).
+- **R-5 Features a locked build hides:** server/address/account management,
+  backend chooser, Hermes, Direct connections, on-device Apple backend, reviewer
+  mode (rec, all hidden) · and also on-device web search (`conduit_ddgs`, sends
+  queries from the phone to DuckDuckGo) (rec: hidden) · keep any of them.
+- **R-6 Upstream CI on our GitHub:** let it run on pushes to `main` and on PRs
+  (rec — public repo, free, a useful signal) · disable Actions for the fork.
+- **R-7 Toolchain:** second Flutter SDK 3.47.7 beside the shared one (rec) ·
+  upgrade the shared SDK in place (breaks other checkouts on 3.44.2).
+- **R-8 Your uncommitted `ios/Podfile.lock`:** upstream builds iOS with Swift
+  Package Manager, so it becomes obsolete — you commit or discard it before the
+  checkout moves (rec) · leave it and I stop before touching that checkout.
+- **R-9 Test server:** local Open WebUI 0.12.2 (via `uv`) with a scripted mock model
+  for development, then one pass against the real server once upgraded (rec).
+- **R-10 Localised product name:** a base tool rewrites "Conduit" in ARB values from
+  the brand config, re-run by the customer branch after each sync (rec — keeps
+  upstream's ARB files mergeable) · template all locales with `{appName}` in the base
+  (large permanent diff against upstream).
+- **R-11 Terminal `display_file`:** in-chat card **and** upstream's automatic switch
+  to the Terminal → Files panel (rec — both are useful, the card survives reload) ·
+  card only, as the fork had.
+- **R-12 iOS push:** add it in G4 (rec; needs an APNs key uploaded to the Firebase
+  project and the iOS `GoogleService-Info.plist` — owner) · Android-only as before.
 
-## 6. Decisions for the owner
+## 9. Risks
 
-- **D-1 Track:** Track A now, Track B (rebase onto upstream) as a separate project
-  after the server upgrade (rec) · Track B now (blocks the server upgrade for longer,
-  needs Flutter 3.47+) · Track A only.
-- **D-2 `ask_user`:** answer with an error so the model asks in prose, keep the
-  builtin off server-side (rec) · also build the native question sheet (#13, ~1 day).
-- **D-3 Model controls:** generic sheet + keep the legacy pill for servers without
-  controls (rec) · keep only the pill and map it onto a control named `thinking`
-  (smaller, but bakes a key name into the base).
-- **D-4 Test servers:** local `uv` servers + mock model for development (rec), **plus**
-  one acceptance pass against the server upgrade's rehearsal copy booted on a side
-  port (real models, real migrated chats — the best check that old replies still
-  render) (rec, owner-run) · local servers only.
-- **D-5 Optional rows:** include #10–#12 in this release (rec) · defer to Track B.
-
-## 7. Pre-existing gaps found on the way (not caused by the upgrade)
-
-Routes the fork calls that exist in **neither** 0.9.2 nor 0.12.2 (failing today):
-chat tag delete/filter, `/api/v1/configs/suggestions`, knowledge create/update/delete/
-items/search, chat duplicate, message search, file metadata update, prompt/tool/
-function create, several channel writes, `HEAD /api/health`, and the active-chats
-check (`/api/tasks/active/chats`). Upstream Conduit has fixed most of these. They are
-listed for Track B, not fixed here.
-
-## 8. Risks
-
-- Projection drift: if a future server changes `output[]` item shapes, the projection
-  can lag; mitigated by golden tests from real payloads and by `content` always
-  holding the server's text.
-- Two writers of the visible buffer during a 0.12 stream (`response:completion`
-  deltas and `chat:completion` snapshots): snapshots always replace the reducer
-  state; covered by recorded-sequence tests.
-- The ported reducer is upstream code written for the same server contract; it is
-  ported verbatim with its tests to keep future Track B diffs small.
-- Track A widens the gap to upstream by ~2–3k lines; Track B absorbs that.
-
-## 9. Track B (rebase onto upstream) — for the record
-
-What it would bring: upstream's own 0.10–0.12 compatibility work (structured
-output, request acks, two-step sign-in, enforced temporary chats, shared folders,
-`active` chat state, knowledge API moves, the 409 recovery) and much cheaper future
-syncs. What it costs, from a commit-by-commit map of the 33 fork commits onto
-`upstream/main` v4.2.0:
-
-- 4 commits cancel out (two reverts), 3 are already covered upstream (output kept on
-  load, LaTeX-in-details masking by a different mechanism, overflow icon), ~26 need
-  porting plus the customer layer.
-- Hardest item: the white-label server lock. Upstream now routes through multiple
-  accounts, server addresses with failover, a backend chooser (Open WebUI / Hermes /
-  Direct / Apple) and reviewer mode; the lock must close all of them, and the fork's
-  deletion of the server-connection page is no longer possible (it holds the
-  connection hand-off). ≈ 3–4 days.
-- Core is now a Flutter-free package (`packages/conduit_core`, enforced by a
-  boundary check): fork code that mixed Flutter into core (sync triggers, push
-  service, confirmation dialog) must be split.
-- Native: Android AGP 8 → 9, Gradle 8 → 9, iOS Swift Package Manager — Firebase/FCM
-  compatibility to re-verify; upstream's notification service owns the single tap
-  callback the email push needs.
-- Upstream's embed sanitiser still flattens object embeds on chat save — porting
-  the preview contract is mandatory or document cards get corrupted server-side.
-- Toolchain: Flutter ≥ 3.47 (machine has 3.44.2, shared by other checkouts → install
-  a second SDK, e.g. fvm).
-- Estimate ≈ 13–19 focused days including device QA; upstream keeps moving fast
-  (611 commits in ~4 months).
-
-Recommended timing: after the server upgrade, as its own plan, starting from this
-Track A branch so its tests become the acceptance suite for the rebase.
+- **Locked-deployment completeness:** upstream keeps adding entry points (accounts,
+  backends, reviewer mode, on-device models). Mitigation: router-level guard plus
+  tests that walk every route and assert the model list has only server models;
+  re-run on each upstream sync.
+- **Email webview token handling** was unsafe in the fork (any origin, any frame);
+  G3 fixes it, and no build ships the old behaviour.
+- **Document cards corrupted on save** if G6 lands late or partially: upstream's
+  sanitiser flattens object embeds. G6 is one commit; no build ships without it.
+- **Native platform jumps** (AGP 9, Gradle 9, iOS SPM) for Firebase/FCM — verify G4
+  on a real device early in the group.
+- **Upstream velocity** (611 commits in ~4 months): the join leaves `saas-base` one
+  merge away from upstream; plan regular syncs rather than another rebuild.
+- **Server-side dependencies:** document previews rely on the server keeping the
+  fork's preview contract (server plan §3.3); Model controls rely on the admin
+  configuring them and granting `chat.controls` + `chat.params`.
