@@ -6,20 +6,32 @@
 library;
 
 import 'package:checks/checks.dart';
-import 'package:conduit/core/database/app_database.dart';
-import 'package:conduit/core/database/database_provider.dart';
-import 'package:conduit/core/models/folder.dart';
-import 'package:conduit/core/providers/app_providers.dart';
-import 'package:conduit/core/sync/sync_api_client.dart';
-import 'package:conduit/core/sync/sync_engine.dart';
-import 'package:conduit/features/auth/providers/unified_auth_providers.dart';
+import 'package:conduit_core/database/app_database.dart';
+import 'package:conduit_core/database/database_provider.dart';
+import 'package:conduit_core/models/folder.dart';
+import 'package:conduit_core/providers/app_providers.dart';
+import 'package:conduit_core/sync/pull_sync.dart';
+import 'package:conduit_core/sync/sync_api_client.dart';
+import 'package:conduit_core/sync/sync_engine.dart';
+import 'package:conduit_core/features/auth/providers/unified_auth_providers.dart';
 import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import '../../support/fake_open_webui_server.dart';
-import '../../support/fake_sync_api_client.dart';
+import 'package:conduit_core/testing.dart';
+
+class _RecordingSyncEngine extends SyncEngine {
+  _RecordingSyncEngine(this.pulls);
+
+  final List<String> pulls;
+
+  @override
+  Future<PullResult?> requestPull({required String reason}) {
+    pulls.add(reason);
+    return Future.value(null);
+  }
+}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -111,9 +123,8 @@ void main() {
         final state = container.read(foldersProvider);
         return (state.asData?.value ?? const <Folder>[]).length == 2;
       });
-      check(
-        namesOf(container.read(foldersProvider).requireValue),
-      ).deepEquals(['Archive', 'Work']);
+      check(namesOf(container.read(foldersProvider).requireValue))
+          .deepEquals(['Archive', 'Work']);
     });
 
     test(
@@ -134,9 +145,8 @@ void main() {
             );
 
         // Synchronous in-memory upsert.
-        check(
-          namesOf(container.read(foldersProvider).requireValue),
-        ).deepEquals(['Fresh']);
+        check(namesOf(container.read(foldersProvider).requireValue))
+            .deepEquals(['Fresh']);
 
         // Row write lands and the next emission agrees (no flicker revert).
         await waitFor(() async {
@@ -144,9 +154,8 @@ void main() {
           return rows.any((row) => row.name == 'Fresh');
         });
         await Future<void>.delayed(const Duration(milliseconds: 50));
-        check(
-          namesOf(container.read(foldersProvider).requireValue),
-        ).deepEquals(['Fresh']);
+        check(namesOf(container.read(foldersProvider).requireValue))
+            .deepEquals(['Fresh']);
       },
     );
 
@@ -169,18 +178,16 @@ void main() {
               ),
             );
 
-        check(
-          namesOf(container.read(foldersProvider).requireValue),
-        ).deepEquals(['Renamed']);
+        check(namesOf(container.read(foldersProvider).requireValue))
+            .deepEquals(['Renamed']);
 
         await waitFor(() async {
           final rows = await folderRows();
           return rows.any((row) => row.name == 'Renamed');
         });
         await Future<void>.delayed(const Duration(milliseconds: 50));
-        check(
-          namesOf(container.read(foldersProvider).requireValue),
-        ).deepEquals(['Renamed']);
+        check(namesOf(container.read(foldersProvider).requireValue))
+            .deepEquals(['Renamed']);
       },
     );
 
@@ -204,6 +211,28 @@ void main() {
       },
     );
 
+    test(
+      'missing remote folder update submits reconcile pull immediately',
+      () async {
+        final pulls = <String>[];
+        final container = makeContainer(
+          extraOverrides: [
+            syncEngineProvider.overrideWith(() => _RecordingSyncEngine(pulls)),
+          ],
+        );
+        await container.read(foldersProvider.future);
+
+        container
+            .read(foldersProvider.notifier)
+            .updateFolderFromRemote(
+              'missing-folder',
+              (_) => throw StateError('unexpected transform'),
+            );
+
+        check(pulls).deepEquals(['folders-reconcile']);
+      },
+    );
+
     test('removeFolderFromRemote hard-deletes the row', () async {
       await seedFolderRow('f1', 'Work');
       await seedFolderRow('f2', 'Play');
@@ -212,18 +241,16 @@ void main() {
 
       container.read(foldersProvider.notifier).removeFolderFromRemote('f1');
 
-      check(
-        namesOf(container.read(foldersProvider).requireValue),
-      ).deepEquals(['Play']);
+      check(namesOf(container.read(foldersProvider).requireValue))
+          .deepEquals(['Play']);
 
       await waitFor(() async {
         final rows = await folderRows();
         return rows.every((row) => row.id != 'f1');
       });
       await Future<void>.delayed(const Duration(milliseconds: 50));
-      check(
-        namesOf(container.read(foldersProvider).requireValue),
-      ).deepEquals(['Play']);
+      check(namesOf(container.read(foldersProvider).requireValue))
+          .deepEquals(['Play']);
     });
 
     test('warmIfNeeded and refresh converge on the sync engine pull', () async {

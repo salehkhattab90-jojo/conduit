@@ -1,50 +1,84 @@
 import 'dart:async';
+
 import 'package:flutter/foundation.dart';
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
+import 'package:material_ui/material_ui.dart';
+import 'package:riverpod/riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../auth/auth_state_manager.dart';
-import '../providers/app_providers.dart';
-import '../services/navigation_service.dart';
-import '../services/performance_profiler.dart';
-import '../utils/debug_logger.dart';
-import '../../features/auth/providers/unified_auth_providers.dart';
+import '../../shared/services/navigation_service.dart';
+
+import 'package:conduit_core/deployment/deployment_policy.dart';
+import 'package:conduit_core/services/performance_profiler.dart';
+import 'package:conduit_core/utils/debug_logger.dart';
+
 import '../../features/auth/views/authentication_page.dart';
+import '../../features/auth/views/backend_chooser_page.dart';
 import '../../features/auth/views/connect_signin_page.dart';
 import '../../features/auth/views/connection_issue_page.dart';
 import '../../features/auth/views/proxy_auth_page.dart';
+import '../../features/auth/views/server_connection_page.dart';
 import '../../features/auth/views/sso_auth_page.dart';
 import '../../features/chat/views/chat_page.dart';
 import '../../features/navigation/views/folder_page.dart';
-import '../../shared/widgets/drawer_shell_page.dart';
+import '../../features/navigation/widgets/drawer_shell_page.dart';
 import '../../features/navigation/views/splash_launcher_page.dart';
 import '../../features/notes/views/notes_list_page.dart';
 import '../../shared/widgets/adaptive_route_shell.dart';
+import '../../shared/widgets/platform_ui/platform_ui.dart';
 import '../../features/channels/views/channel_page.dart';
 import '../../features/notes/views/note_editor_page.dart';
 import '../../features/profile/views/about_page.dart';
 import '../../features/profile/views/account_settings_page.dart';
+import '../../features/profile/views/manage_accounts_page.dart';
+import '../../features/profile/views/server_addresses_page.dart';
 import '../../features/profile/views/app_customization_page.dart';
 import '../../features/profile/views/audio_settings_page.dart';
+import '../../features/profile/views/voice_provider_settings_page.dart';
+import '../../features/hermes/views/hermes_connections_page.dart';
+import '../../features/hermes/views/hermes_settings_page.dart';
+import '../../features/hermes/views/hermes_jobs_page.dart';
+import '../../features/hermes/views/hermes_mcp_page.dart';
 import '../../features/profile/views/personalization_page.dart';
 import '../../features/profile/views/profile_page.dart';
+import '../../features/notifications/views/notification_settings_page.dart';
+import '../../features/workspace/views/workspace_page.dart';
+import '../../features/workspace/workspace_navigation.dart';
+
+import 'package:conduit_core/features/direct_connections/controllers/direct_connection_editor_draft.dart';
+
+import '../../features/direct_connections/views/direct_connection_editor_page.dart';
+import '../../features/direct_connections/views/direct_connections_page.dart';
+import '../../features/integrations/views/personal_connection_editor_page.dart';
+import '../../features/integrations/views/personal_connections_page.dart';
+import '../../features/automations/views/scheduled_task_detail_page.dart';
+import '../../features/automations/views/scheduled_task_editor_page.dart';
+import '../../features/automations/views/scheduled_tasks_page.dart';
+import '../../features/calendar/views/calendar_page.dart';
+import '../../features/profile/views/chat_data_controls_page.dart';
+
+import 'package:conduit_core/features/integrations/personal_connection_settings.dart';
+
+import '../../features/direct_connections/views/direct_mcp_server_editor_page.dart';
 import '../../l10n/app_localizations.dart';
-import '../models/server_config.dart';
+
+import 'package:conduit_core/models/server_config.dart';
+import 'package:conduit_core/navigation/route_redirect.dart';
+
+// The redirect policy lives in conduit_core, where it is tested without
+// Flutter. Re-exported for the router policy tests.
+export 'package:conduit_core/navigation/route_redirect.dart'
+    show
+        incompleteHermesDestination,
+        isDirectConnectionsLocation,
+        isDirectOnlyAppLocation,
+        isHermesOnlyAppLocation;
 
 class RouterNotifier extends ChangeNotifier {
   RouterNotifier(this.ref) {
     _subscriptions = [
-      ref.listen<bool>(reviewerModeProvider, _onStateChanged),
-      ref.listen<AsyncValue<ServerConfig?>>(
-        activeServerProvider,
-        _onStateChanged,
-      ),
-      ref.listen<AuthNavigationState>(
-        authNavigationStateProvider,
-        _onStateChanged,
-      ),
+      for (final dependency in routeRedirectDependencies)
+        ref.listen<Object?>(dependency, _onStateChanged),
     ];
   }
 
@@ -66,90 +100,7 @@ class RouterNotifier extends ChangeNotifier {
 
   String? redirect(BuildContext context, GoRouterState state) {
     final location = state.uri.path.isEmpty ? Routes.splash : state.uri.path;
-    final reviewerMode = ref.read(reviewerModeProvider);
-    final activeServerAsync = ref.read(activeServerProvider);
-
-    // Check for API key forced logout first - redirect to authentication
-    final authSnapshot = ref
-        .read(authStateManagerProvider)
-        .maybeWhen(data: (s) => s, orElse: () => null);
-    if (authSnapshot?.error?.contains('apiKey') == true) {
-      return location == Routes.authentication ? null : Routes.authentication;
-    }
-
-    if (reviewerMode) {
-      // Stay on whatever route if already in chat; otherwise go to chat
-      if (location == Routes.chat) return null;
-      return Routes.chat;
-    }
-
-    if (activeServerAsync.isLoading) {
-      // Avoid redirect loops: do not override explicit auth routes while loading
-      if (_isAuthLocation(location)) return null;
-      // Keep splash during server loading otherwise
-      return location == Routes.splash ? null : Routes.splash;
-    }
-
-    if (activeServerAsync.hasError) {
-      return location == Routes.connectionIssue ? null : Routes.connectionIssue;
-    }
-
-    // Locked-server build: activeServerProvider always bootstraps a config,
-    // so the legacy "no server configured" branch has been removed. If
-    // activeServer is null here it means bootstrap is still in flight; keep
-    // the user on the splash/auth routes rather than redirecting elsewhere.
-    final activeServer = activeServerAsync.asData?.value;
-    if (activeServer == null) {
-      if (_isAuthLocation(location) || location == Routes.splash) return null;
-      return Routes.splash;
-    }
-
-    final authState = ref.read(authNavigationStateProvider);
-
-    switch (authState) {
-      case AuthNavigationState.loading:
-        // Keep user on auth routes while loading to prevent bounce
-        if (_isAuthLocation(location)) return null;
-        // Otherwise keep splash during session establishment
-        return location == Routes.splash ? null : Routes.splash;
-      case AuthNavigationState.needsLogin:
-        if (location == Routes.connectionIssue) return null;
-        // Redirect to authentication page if not already on an auth route
-        // This handles the post-logout case where we want sign-in, not server setup
-        if (_isAuthLocation(location)) return null;
-        return Routes.authentication;
-      case AuthNavigationState.error:
-        final authSnapshot = ref
-            .read(authStateManagerProvider)
-            .maybeWhen(data: (state) => state, orElse: () => null);
-        final hasValidToken = authSnapshot?.hasValidToken ?? false;
-        final isAuthFormRoute =
-            location == Routes.login || location == Routes.authentication;
-        if (!hasValidToken && isAuthFormRoute) {
-          // Keep user on the login/authentication flow to show inline errors
-          return null;
-        }
-        // Otherwise show connection issue page for recoverable auth errors
-        return location == Routes.connectionIssue
-            ? null
-            : Routes.connectionIssue;
-      case AuthNavigationState.authenticated:
-        // Avoid unnecessary redirects if already on a non-auth route
-        if (_isAuthLocation(location) ||
-            location == Routes.splash ||
-            location == Routes.connectionIssue) {
-          return Routes.chat;
-        }
-        return null;
-    }
-  }
-
-  bool _isAuthLocation(String location) {
-    return location == Routes.login ||
-        location == Routes.authentication ||
-        location == Routes.connectionIssue ||
-        location == Routes.ssoAuth ||
-        location == Routes.proxyAuth;
+    return resolveRouteRedirect(location, ref.read);
   }
 
   @override
@@ -171,7 +122,7 @@ final routerNotifierProvider = Provider<RouterNotifier>((ref) {
 final goRouterProvider = Provider<GoRouter>((ref) {
   final notifier = ref.watch(routerNotifierProvider);
 
-  final routes = <RouteBase>[
+  final appRoutes = <RouteBase>[
     GoRoute(
       path: Routes.splash,
       name: RouteNames.splash,
@@ -240,6 +191,42 @@ final goRouterProvider = Provider<GoRouter>((ref) {
           _buildPlatformPage(state: state, child: const ConnectAndSignInPage()),
     ),
     GoRoute(
+      path: Routes.backendChooser,
+      name: RouteNames.backendChooser,
+      pageBuilder: (context, state) =>
+          _buildPlatformPage(state: state, child: const BackendChooserPage()),
+    ),
+    GoRoute(
+      path: Routes.serverConnection,
+      name: RouteNames.serverConnection,
+      pageBuilder: (context, state) => _buildPlatformPage(
+        state: state,
+        child: ServerConnectionPage(
+          handoff: state.extra is ServerConnectionHandoff
+              ? state.extra as ServerConnectionHandoff
+              : null,
+        ),
+      ),
+    ),
+    GoRoute(
+      path: Routes.addServer,
+      name: RouteNames.addServer,
+      pageBuilder: (context, state) => _buildPlatformPage(
+        state: state,
+        child: ServerConnectionPage(
+          addingAccount: true,
+          serverId: switch (state.extra) {
+            final String serverId => serverId,
+            ServerConnectionHandoff(:final serverId) => serverId,
+            _ => null,
+          },
+          handoff: state.extra is ServerConnectionHandoff
+              ? state.extra as ServerConnectionHandoff
+              : null,
+        ),
+      ),
+    ),
+    GoRoute(
       path: Routes.connectionIssue,
       name: RouteNames.connectionIssue,
       pageBuilder: (context, state) =>
@@ -277,6 +264,7 @@ final goRouterProvider = Provider<GoRouter>((ref) {
           state: state,
           child: SsoAuthPage(
             serverConfig: config is ServerConfig ? config : null,
+            initialPath: ref.read(deploymentPolicyProvider).ssoInitialPath,
           ),
         );
       },
@@ -287,11 +275,10 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       pageBuilder: (context, state) {
         final config = state.extra;
         if (config is! ProxyAuthConfig) {
-          // Fallback - should not happen in normal flow.
-          // Locked-server build has no connection page, so route to sign-in.
+          // Fallback - should not happen in normal flow
           return _buildPlatformPage(
             state: state,
-            child: const AuthenticationPage(),
+            child: const ServerConnectionPage(),
           );
         }
         return _buildPlatformPage(
@@ -319,16 +306,237 @@ final goRouterProvider = Provider<GoRouter>((ref) {
           _buildPlatformPage(state: state, child: const AudioSettingsPage()),
     ),
     GoRoute(
+      path: Routes.voiceProviderSettings,
+      name: RouteNames.voiceProviderSettings,
+      pageBuilder: (context, state) => _buildPlatformPage(
+        state: state,
+        child: const VoiceProviderSettingsPage(),
+      ),
+    ),
+    GoRoute(
       path: Routes.accountSettings,
       name: RouteNames.accountSettings,
       pageBuilder: (context, state) =>
           _buildPlatformPage(state: state, child: const AccountSettingsPage()),
     ),
     GoRoute(
-      path: Routes.appCustomization,
-      name: RouteNames.appCustomization,
+      path: Routes.accounts,
+      name: RouteNames.accounts,
       pageBuilder: (context, state) =>
-          _buildPlatformPage(state: state, child: const AppCustomizationPage()),
+          _buildPlatformPage(state: state, child: const ManageAccountsPage()),
+    ),
+    GoRoute(
+      path: Routes.serverAddresses,
+      name: RouteNames.serverAddresses,
+      pageBuilder: (context, state) {
+        final serverId = state.extra;
+        return _buildPlatformPage(
+          state: state,
+          child: serverId is String
+              ? ServerAddressesPage(serverId: serverId)
+              : const ManageAccountsPage(),
+        );
+      },
+    ),
+    GoRoute(
+      path: Routes.serverAddressEditor,
+      name: RouteNames.serverAddressEditor,
+      pageBuilder: (context, state) {
+        final request = state.extra;
+        return _buildPlatformPage(
+          state: state,
+          child: request is ServerAddressEditorRequest
+              ? ServerConnectionPage(
+                  routesOfServerId: request.serverId,
+                  endpointId: request.endpointId,
+                )
+              : const ManageAccountsPage(),
+        );
+      },
+    ),
+    GoRoute(
+      path: Routes.appearanceSettings,
+      name: RouteNames.appearanceSettings,
+      pageBuilder: (context, state) => _buildPlatformPage(
+        state: state,
+        child: const AppCustomizationPage(
+          section: AppCustomizationSection.appearance,
+        ),
+      ),
+    ),
+    GoRoute(
+      path: Routes.chatSettings,
+      name: RouteNames.chatSettings,
+      pageBuilder: (context, state) => _buildPlatformPage(
+        state: state,
+        child: const AppCustomizationPage(
+          section: AppCustomizationSection.chat,
+        ),
+      ),
+    ),
+    GoRoute(
+      path: Routes.dataConnectionSettings,
+      name: RouteNames.dataConnectionSettings,
+      pageBuilder: (context, state) => _buildPlatformPage(
+        state: state,
+        child: const AppCustomizationPage(
+          section: AppCustomizationSection.dataConnection,
+        ),
+      ),
+    ),
+    GoRoute(
+      path: Routes.notificationSettings,
+      name: RouteNames.notificationSettings,
+      pageBuilder: (context, state) => _buildPlatformPage(
+        state: state,
+        child: const NotificationSettingsPage(),
+      ),
+    ),
+    GoRoute(
+      path: Routes.personalConnections,
+      name: RouteNames.personalConnections,
+      pageBuilder: (context, state) => _buildPlatformPage(
+        state: state,
+        child: const PersonalConnectionsPage(),
+      ),
+    ),
+    GoRoute(
+      path: Routes.personalConnectionEditor,
+      name: RouteNames.personalConnectionEditor,
+      pageBuilder: (context, state) {
+        final kind = personalConnectionKindFromRouteValue(
+          state.pathParameters['kind'] ?? '',
+        );
+        return _buildPlatformPage(
+          state: state,
+          child: kind == null
+              ? const PersonalConnectionsPage()
+              : PersonalConnectionEditorPage(
+                  kind: kind,
+                  identity: state.pathParameters['identity']!,
+                ),
+        );
+      },
+    ),
+    GoRoute(
+      path: Routes.chatDataControls,
+      name: RouteNames.chatDataControls,
+      pageBuilder: (context, state) =>
+          _buildPlatformPage(state: state, child: const ChatDataControlsPage()),
+    ),
+    GoRoute(
+      path: Routes.scheduledTasks,
+      name: RouteNames.scheduledTasks,
+      pageBuilder: (context, state) =>
+          _buildPlatformPage(state: state, child: const ScheduledTasksPage()),
+    ),
+    // `new` is declared before `:id` so it is never read as a task id.
+    GoRoute(
+      path: Routes.scheduledTaskNew,
+      name: RouteNames.scheduledTaskNew,
+      pageBuilder: (context, state) => _buildPlatformPage(
+        state: state,
+        child: const ScheduledTaskEditorPage(),
+      ),
+    ),
+    GoRoute(
+      path: Routes.scheduledTaskDetail,
+      name: RouteNames.scheduledTaskDetail,
+      pageBuilder: (context, state) => _buildPlatformPage(
+        state: state,
+        child: ScheduledTaskDetailPage(taskId: state.pathParameters['id']!),
+      ),
+    ),
+    GoRoute(
+      path: Routes.scheduledTaskEdit,
+      name: RouteNames.scheduledTaskEdit,
+      pageBuilder: (context, state) => _buildPlatformPage(
+        state: state,
+        child: ScheduledTaskEditorPage(taskId: state.pathParameters['id']!),
+      ),
+    ),
+    GoRoute(
+      path: Routes.calendar,
+      name: RouteNames.calendar,
+      pageBuilder: (context, state) =>
+          _buildPlatformPage(state: state, child: const CalendarPage()),
+    ),
+    GoRoute(
+      path: Routes.directConnections,
+      name: RouteNames.directConnections,
+      pageBuilder: (context, state) => _buildPlatformPage(
+        state: state,
+        child: DirectConnectionsPage(
+          isOnboarding: state.uri.queryParameters['onboarding'] == 'true',
+        ),
+      ),
+    ),
+    GoRoute(
+      path: Routes.directMcpServerEditor,
+      name: RouteNames.directMcpServerEditor,
+      pageBuilder: (context, state) => _buildPlatformPage(
+        state: state,
+        child: DirectMcpServerEditorPage(serverId: state.pathParameters['id']!),
+      ),
+    ),
+    GoRoute(
+      path: Routes.directConnectionEditor,
+      name: RouteNames.directConnectionEditor,
+      pageBuilder: (context, state) => _buildPlatformPage(
+        state: state,
+        child: DirectConnectionEditorPage(
+          mode: DirectConnectionEditorMode.fromRoute(
+            profileId: state.pathParameters['id']!,
+            source:
+                state.uri.queryParameters['source'] ==
+                    openWebUiDirectConnectionSourceQueryValue
+                ? DirectConnectionEditorSource.openWebUi
+                : DirectConnectionEditorSource.local,
+          ),
+          isOnboarding: state.uri.queryParameters['onboarding'] == 'true',
+          entry: state.uri.queryParameters['entry'] == 'chooser'
+              ? DirectEditorEntry.chooser
+              : DirectEditorEntry.overview,
+        ),
+      ),
+    ),
+    GoRoute(
+      path: Routes.hermesSettings,
+      name: RouteNames.hermesSettings,
+      pageBuilder: (context, state) => _buildPlatformPage(
+        state: state,
+        // Onboarding sets up the first connection directly; afterwards this
+        // is the list of saved connections.
+        child: state.extra == true
+            ? const HermesSettingsPage(isOnboarding: true)
+            : const HermesConnectionsPage(),
+      ),
+    ),
+    GoRoute(
+      path: Routes.hermesConnectionEditor,
+      name: RouteNames.hermesConnectionEditor,
+      pageBuilder: (context, state) {
+        final id = state.pathParameters['id']!;
+        return _buildPlatformPage(
+          state: state,
+          child: HermesSettingsPage(
+            key: ValueKey<String>('hermes-connection-editor-$id'),
+            connectionId: id == Routes.hermesNewConnectionId ? null : id,
+          ),
+        );
+      },
+    ),
+    GoRoute(
+      path: Routes.hermesJobs,
+      name: RouteNames.hermesJobs,
+      pageBuilder: (context, state) =>
+          _buildPlatformPage(state: state, child: const HermesJobsPage()),
+    ),
+    GoRoute(
+      path: Routes.hermesMcp,
+      name: RouteNames.hermesMcp,
+      pageBuilder: (context, state) =>
+          _buildPlatformPage(state: state, child: const HermesMcpPage()),
     ),
     GoRoute(
       path: Routes.about,
@@ -336,6 +544,7 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       pageBuilder: (context, state) =>
           _buildPlatformPage(state: state, child: const AboutPage()),
     ),
+    ..._workspaceRoutes(),
     GoRoute(
       path: Routes.notes,
       name: RouteNames.notes,
@@ -349,8 +558,11 @@ final goRouterProvider = Provider<GoRouter>((ref) {
     initialLocation: Routes.splash,
     refreshListenable: notifier,
     redirect: notifier.redirect,
-    routes: routes,
-    observers: [NavigationLoggingObserver()],
+    routes: appRoutes,
+    observers: [
+      NavigationLoggingObserver(),
+      if (PlatformUiCapabilities.usesNativeIOS26) CNTabBarRouteObserver(),
+    ],
     errorBuilder: (context, state) {
       final l10n = AppLocalizations.of(context);
       final message =
@@ -365,6 +577,59 @@ final goRouterProvider = Provider<GoRouter>((ref) {
   NavigationService.attachRouter(router);
   return router;
 });
+
+List<GoRoute> _workspaceRoutes() {
+  GoRoute route({
+    required String path,
+    required String name,
+    required WorkspaceSection? section,
+    WorkspaceRouteMode mode = WorkspaceRouteMode.collection,
+  }) {
+    return GoRoute(
+      path: path,
+      name: name,
+      pageBuilder: (context, state) => _buildPlatformPage(
+        state: state,
+        noTransition: usesNoTransitionForWorkspaceRoute(mode, state.extra),
+        child: WorkspacePage(
+          section: section,
+          mode: mode,
+          resourceId: state.pathParameters['id'],
+          openedFromNativeSheet: state.extra is NativeSheetNavigationOrigin,
+        ),
+      ),
+    );
+  }
+
+  return [
+    route(path: Routes.workspace, name: RouteNames.workspace, section: null),
+    for (final descriptor in workspaceRouteDescriptors) ...[
+      route(
+        path: descriptor.collectionPath,
+        name: descriptor.collectionName,
+        section: descriptor.section,
+      ),
+      route(
+        path: descriptor.createPattern,
+        name: descriptor.createName,
+        section: descriptor.section,
+        mode: WorkspaceRouteMode.create,
+      ),
+      route(
+        path: descriptor.detailPattern,
+        name: descriptor.detailName,
+        section: descriptor.section,
+        mode: WorkspaceRouteMode.detail,
+      ),
+      route(
+        path: descriptor.editPattern,
+        name: descriptor.editName,
+        section: descriptor.section,
+        mode: WorkspaceRouteMode.edit,
+      ),
+    ],
+  ];
+}
 
 class NavigationLoggingObserver extends NavigatorObserver {
   @override
@@ -420,7 +685,12 @@ Page<void> _buildNoTransitionPage({
 Page<void> _buildPlatformPage({
   required GoRouterState state,
   required Widget child,
+  bool? noTransition,
 }) {
+  if (noTransition ?? usesNoTransitionForNativeSheet(state.extra)) {
+    return _buildNoTransitionPage(state: state, child: child);
+  }
+
   switch (defaultTargetPlatform) {
     case TargetPlatform.iOS:
     case TargetPlatform.macOS:
@@ -437,3 +707,18 @@ Page<void> _buildPlatformPage({
       );
   }
 }
+
+@visibleForTesting
+bool usesNoTransitionForNativeSheet(Object? extra) =>
+    extra is NativeSheetNavigationOrigin;
+
+/// Only a Workspace collection is entered from native Settings. Resource
+/// pages are pushed over it in Flutter and keep the native-sheet origin for
+/// their back target, but need a real transition so the edge swipe pops them.
+@visibleForTesting
+bool usesNoTransitionForWorkspaceRoute(
+  WorkspaceRouteMode mode,
+  Object? extra,
+) =>
+    mode == WorkspaceRouteMode.collection &&
+    usesNoTransitionForNativeSheet(extra);

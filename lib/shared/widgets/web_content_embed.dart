@@ -1,19 +1,22 @@
 import 'dart:async';
-import 'dart:convert';
+import 'dart:collection';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:conduit/l10n/app_localizations.dart';
+import 'package:conduit_core/features/web_embed/web_embed_document.dart';
+import 'package:conduit_core/features/web_embed/web_embed_policy.dart';
 
 import '../theme/theme_extensions.dart';
+import '../utils/external_link_launcher.dart';
 import 'webview_content_height.dart';
 
-const _embedDefaultHeight = 360.0;
-const _embedFallbackHeight = 160.0;
-const _embedMinHeight = 220.0;
-const _embedMaxHeight = 900.0;
+const _embedDefaultHeight = kWebEmbedDefaultHeight;
+const _embedFallbackHeight = kWebEmbedFallbackHeight;
+const _embedMinHeight = kWebEmbedMinHeight;
+const _embedMaxHeight = kWebEmbedMaxHeight;
 
 class WebContentEmbed extends StatefulWidget {
   const WebContentEmbed({
@@ -47,9 +50,104 @@ class WebContentEmbed extends StatefulWidget {
   final VoidCallback? debugOnControllerReset;
 
   @visibleForTesting
-  static String debugWrapHtmlDocument(String source, {String argsText = ''}) {
-    return _WebContentEmbedState._wrapHtmlDocument(source, argsText: argsText);
+  static String debugWrapHtmlDocument(
+    String source, {
+    String argsText = '',
+    bool fillAvailableHeight = false,
+  }) {
+    return _WebContentEmbedState._wrapHtmlDocument(
+      source,
+      argsText: argsText,
+      fillAvailableHeight: fillAvailableHeight,
+    );
   }
+
+  @visibleForTesting
+  static String debugWrapRemoteDocument(
+    String source, {
+    bool fillAvailableHeight = false,
+  }) => _WebContentEmbedState._wrapRemoteDocument(
+    Uri.parse(source),
+    fillAvailableHeight: fillAvailableHeight,
+  );
+
+  @visibleForTesting
+  static String debugFrameBootstrapScript(String argsText) =>
+      _WebContentEmbedState._frameBootstrapScript(argsText);
+
+  @visibleForTesting
+  static String debugAllFrameBootstrapScript() =>
+      _WebContentEmbedState._allFrameBootstrapScript;
+
+  @visibleForTesting
+  static String debugInlineArgumentsScript(String argsText) =>
+      _WebContentEmbedState._inlineArgumentsScript(argsText);
+
+  @visibleForTesting
+  static Future<bool> debugOpenExternalLink(
+    String rawUrl, {
+    required Future<bool> Function(String url) launcher,
+  }) => _WebContentEmbedState._openAllowedExternalLink(
+    rawUrl,
+    launcher: launcher,
+  );
+
+  @visibleForTesting
+  static bool debugShouldOpenNavigationExternally({
+    required String targetUrl,
+    String? currentUrl,
+    required bool userActivated,
+  }) => _WebContentEmbedState._shouldOpenNavigationExternally(
+    targetUrl: targetUrl,
+    currentUrl: currentUrl,
+    userActivated: userActivated,
+  );
+
+  @visibleForTesting
+  static bool debugShouldAllowAutomaticNavigation(String targetUrl) =>
+      _WebContentEmbedState._shouldAllowAutomaticNavigation(targetUrl);
+
+  @visibleForTesting
+  static bool debugShouldHandleCreateWindow({
+    required bool requestIsCurrent,
+    required String? targetUrl,
+  }) => _WebContentEmbedState._shouldHandleCreateWindow(
+    requestIsCurrent: requestIsCurrent,
+    targetUrl: targetUrl,
+  );
+
+  @visibleForTesting
+  static bool debugShouldResolveMissingPopupUrl({
+    required bool requestIsCurrent,
+    required String? targetUrl,
+  }) => _WebContentEmbedState._shouldResolveMissingPopupUrl(
+    requestIsCurrent: requestIsCurrent,
+    targetUrl: targetUrl,
+  );
+
+  @visibleForTesting
+  static bool debugHasUserActivationEvidence({
+    required bool? hasGesture,
+    required bool linkActivated,
+  }) => _WebContentEmbedState._hasUserActivationEvidence(
+    hasGesture: hasGesture,
+    linkActivated: linkActivated,
+  );
+
+  @visibleForTesting
+  static bool debugShouldAllowInlineFragmentNavigation(String targetUrl) =>
+      _WebContentEmbedState._shouldAllowInlineFragmentNavigation(targetUrl);
+
+  @visibleForTesting
+  static bool debugShouldSurfaceLoadFailure({
+    required bool isForMainFrame,
+    required Iterable<String> remoteEmbedUrls,
+    required String requestUrl,
+  }) => _WebContentEmbedState._shouldSurfaceLoadFailure(
+    isForMainFrame: isForMainFrame,
+    remoteEmbedUrls: remoteEmbedUrls,
+    requestUrl: requestUrl,
+  );
 
   @override
   State<WebContentEmbed> createState() => _WebContentEmbedState();
@@ -62,6 +160,8 @@ class _WebContentEmbedState extends State<WebContentEmbed> {
       };
 
   InAppWebViewController? _controller;
+  final Set<HeadlessInAppWebView> _popupWebViews = {};
+  final Set<String> _remoteFrameDocumentUrls = {};
   double _height = _embedDefaultHeight;
   bool _isLoading = true;
   bool _loadScheduled = false;
@@ -97,21 +197,9 @@ class _WebContentEmbedState extends State<WebContentEmbed> {
     };
   }
 
-  bool get _isRemoteUrl {
-    final raw = widget.source.trim();
-    return raw.startsWith('http://') ||
-        raw.startsWith('https://') ||
-        raw.startsWith('//');
-  }
+  bool get _isRemoteUrl => isRemoteWebEmbedSource(widget.source);
 
-  Uri? get _resolvedRemoteUri {
-    if (!_isRemoteUrl) {
-      return null;
-    }
-    return Uri.tryParse(
-      widget.source.startsWith('//') ? 'https:${widget.source}' : widget.source,
-    );
-  }
+  Uri? get _resolvedRemoteUri => resolveRemoteWebEmbedUri(widget.source);
 
   bool get _hasController =>
       _controller != null || _debugHasSeededController || _shouldRenderWebView;
@@ -126,6 +214,7 @@ class _WebContentEmbedState extends State<WebContentEmbed> {
   @override
   void initState() {
     super.initState();
+    _resetRemoteFrameDocumentUrls();
     _isExpanded = widget.initiallyExpanded || !widget.deferUntilExpanded;
     if (widget.debugSeedControllerForTesting) {
       _debugHasSeededController = true;
@@ -139,7 +228,8 @@ class _WebContentEmbedState extends State<WebContentEmbed> {
     if (oldWidget.source != widget.source ||
         oldWidget.argsText != widget.argsText ||
         oldWidget.deferUntilExpanded != widget.deferUntilExpanded ||
-        oldWidget.initiallyExpanded != widget.initiallyExpanded) {
+        oldWidget.initiallyExpanded != widget.initiallyExpanded ||
+        oldWidget.fillAvailableHeight != widget.fillAvailableHeight) {
       _loadScheduled = false;
       _retryLoadScheduled = false;
       _isExpanded = widget.initiallyExpanded || !widget.deferUntilExpanded;
@@ -151,6 +241,8 @@ class _WebContentEmbedState extends State<WebContentEmbed> {
   }
 
   void _resetControllerState({required bool isLoading}) {
+    _disposePopupWebViews();
+    _resetRemoteFrameDocumentUrls();
     final hadController = _hasController;
     if (mounted) {
       setState(() {
@@ -174,6 +266,28 @@ class _WebContentEmbedState extends State<WebContentEmbed> {
     if (hadController) {
       widget.debugOnControllerReset?.call();
     }
+  }
+
+  void _resetRemoteFrameDocumentUrls() {
+    _remoteFrameDocumentUrls.clear();
+    final remoteUri = _resolvedRemoteUri;
+    if (remoteUri != null) {
+      _remoteFrameDocumentUrls.add(remoteUri.toString());
+    }
+  }
+
+  void _disposePopupWebViews() {
+    final popupWebViews = _popupWebViews.toList(growable: false);
+    _popupWebViews.clear();
+    for (final popupWebView in popupWebViews) {
+      unawaited(popupWebView.dispose());
+    }
+  }
+
+  @override
+  void dispose() {
+    _disposePopupWebViews();
+    super.dispose();
   }
 
   void _scheduleControllerInitialization(BuildContext context) {
@@ -265,20 +379,26 @@ class _WebContentEmbedState extends State<WebContentEmbed> {
     }
 
     try {
-      if (_isRemoteUrl) {
-        final uri = _resolvedRemoteUri;
-        if (uri == null) {
-          throw StateError('Invalid embed URL');
-        }
-        await controller.loadUrl(urlRequest: URLRequest(url: WebUri.uri(uri)));
-      } else {
-        final baseUrl = WebUri('https://embed.conduit.local/');
-        await controller.loadData(
-          data: _wrapHtmlDocument(widget.source, argsText: widget.argsText),
-          baseUrl: baseUrl,
-          historyUrl: baseUrl,
-        );
+      final remoteUri = _resolvedRemoteUri;
+      if (_isRemoteUrl && remoteUri == null) {
+        throw StateError('Invalid embed URL');
       }
+      final document = remoteUri != null
+          ? _wrapRemoteDocument(
+              remoteUri,
+              fillAvailableHeight: widget.fillAvailableHeight,
+            )
+          : _wrapHtmlDocument(
+              widget.source,
+              argsText: widget.argsText,
+              fillAvailableHeight: widget.fillAvailableHeight,
+            );
+      final baseUrl = WebUri('https://embed.conduit.local/');
+      await controller.loadData(
+        data: document,
+        baseUrl: baseUrl,
+        historyUrl: baseUrl,
+      );
     } catch (_) {
       if (!mounted || requestId != _loadRequestId) {
         return;
@@ -292,17 +412,161 @@ class _WebContentEmbedState extends State<WebContentEmbed> {
     }
   }
 
-  Future<void> _injectArguments(InAppWebViewController controller) async {
-    final argsText = widget.argsText.trim();
-    if (argsText.isEmpty) {
-      return;
+  Future<NavigationActionPolicy> _handleNavigationAction(
+    InAppWebViewController controller,
+    NavigationAction navigationAction,
+    int requestId,
+  ) async {
+    if (requestId != _loadRequestId) {
+      return NavigationActionPolicy.CANCEL;
     }
 
+    final targetUrl = navigationAction.request.url?.toString();
+    if (targetUrl == null || targetUrl.isEmpty) {
+      return NavigationActionPolicy.CANCEL;
+    }
+
+    final userActivated = _isUserActivatedNavigation(navigationAction);
+    if (!userActivated) {
+      if (!_shouldAllowAutomaticNavigation(targetUrl)) {
+        return NavigationActionPolicy.CANCEL;
+      }
+      _rememberRemoteFrameDocumentUrl(navigationAction, targetUrl);
+      return NavigationActionPolicy.ALLOW;
+    }
+    if (_shouldAllowInlineFragmentNavigation(targetUrl)) {
+      return NavigationActionPolicy.ALLOW;
+    }
+    if (parseAllowedExternalLink(targetUrl) == null) {
+      return NavigationActionPolicy.CANCEL;
+    }
+
+    String? currentUrl;
     try {
-      await controller.evaluateJavascript(
-        source: 'window.args = ${jsonEncode(argsText)};',
-      );
+      currentUrl = (await controller.getUrl())?.toString();
     } catch (_) {}
+    if (!mounted || requestId != _loadRequestId) {
+      return NavigationActionPolicy.CANCEL;
+    }
+    if (!_shouldOpenNavigationExternally(
+      targetUrl: targetUrl,
+      currentUrl: currentUrl,
+      userActivated: userActivated,
+    )) {
+      _rememberRemoteFrameDocumentUrl(navigationAction, targetUrl);
+      return NavigationActionPolicy.ALLOW;
+    }
+
+    await _openAllowedExternalLink(targetUrl);
+    return NavigationActionPolicy.CANCEL;
+  }
+
+  void _rememberRemoteFrameDocumentUrl(
+    NavigationAction navigationAction,
+    String targetUrl,
+  ) {
+    if (_isRemoteUrl && !navigationAction.isForMainFrame) {
+      _remoteFrameDocumentUrls.add(targetUrl);
+    }
+  }
+
+  Future<bool> _handleCreateWindow(
+    CreateWindowAction createWindowAction,
+    int requestId,
+  ) async {
+    if (!mounted) {
+      return false;
+    }
+    final targetUrl = createWindowAction.request.url?.toString();
+    if (_shouldHandleCreateWindow(
+      requestIsCurrent: requestId == _loadRequestId,
+      targetUrl: targetUrl,
+    )) {
+      await _openAllowedExternalLink(targetUrl!);
+      return false;
+    }
+
+    // javaScriptCanOpenWindowsAutomatically is false, so the platform has
+    // already approved this popup. Do not re-gate on Android's unreliable
+    // hasGesture metadata when recovering its omitted URL.
+    if (!_shouldResolveMissingPopupUrl(
+      requestIsCurrent: requestId == _loadRequestId,
+      targetUrl: targetUrl,
+    )) {
+      return false;
+    }
+
+    // Android's WebChromeClient omits request.url for JavaScript window.open
+    // calls. Attach a non-scriptable headless WebView to the pending window so
+    // its first URL can be recovered, cancelled, and validated before launch.
+    late final HeadlessInAppWebView popupWebView;
+    var resolved = false;
+
+    Future<void> disposePopup() async {
+      if (_popupWebViews.remove(popupWebView)) {
+        await popupWebView.dispose();
+      }
+    }
+
+    Future<void> resolvePopupUrl(WebUri? url) async {
+      final rawUrl = url?.toString();
+      if (resolved || rawUrl == null || rawUrl.isEmpty) {
+        return;
+      }
+      final uri = Uri.tryParse(rawUrl);
+      if (uri?.scheme.toLowerCase() == 'about') {
+        return;
+      }
+
+      resolved = true;
+      try {
+        if (mounted && requestId == _loadRequestId) {
+          await _openAllowedExternalLink(rawUrl);
+        }
+      } finally {
+        await disposePopup();
+      }
+    }
+
+    popupWebView = HeadlessInAppWebView(
+      windowId: createWindowAction.windowId,
+      initialSettings: InAppWebViewSettings(
+        javaScriptEnabled: false,
+        allowContentAccess: false,
+        allowFileAccess: false,
+        allowFileAccessFromFileURLs: false,
+        allowUniversalAccessFromFileURLs: false,
+        supportMultipleWindows: false,
+        useShouldOverrideUrlLoading: true,
+      ),
+      shouldOverrideUrlLoading: (controller, navigationAction) async {
+        unawaited(resolvePopupUrl(navigationAction.request.url));
+        return NavigationActionPolicy.CANCEL;
+      },
+    );
+    _popupWebViews.add(popupWebView);
+
+    try {
+      await popupWebView.run();
+    } catch (_) {
+      await disposePopup();
+      return false;
+    }
+
+    Future<void>.delayed(const Duration(seconds: 5), disposePopup);
+    return true;
+  }
+
+  void _surfaceLoadError(int requestId, String description) {
+    if (!mounted || requestId != _loadRequestId) {
+      return;
+    }
+    setState(() {
+      _controller = null;
+      _shouldRenderWebView = false;
+      _isLoading = false;
+      _loadError = description;
+    });
   }
 
   void _scheduleHeightUpdates(
@@ -398,9 +662,26 @@ class _WebContentEmbedState extends State<WebContentEmbed> {
           child: InAppWebView(
             key: ValueKey<int>(requestId),
             gestureRecognizers: _gestureRecognizers,
+            initialUserScripts: UnmodifiableListView([
+              UserScript(
+                // This script reaches remote frames too, so it must not contain
+                // tool arguments. Inline srcdoc content receives its private
+                // argument bootstrap from _injectSandboxBootstrap instead.
+                source: _allFrameBootstrapScript,
+                injectionTime: UserScriptInjectionTime.AT_DOCUMENT_START,
+                forMainFrameOnly: false,
+                allowedOriginRules: const {'*'},
+              ),
+            ]),
             initialSettings: InAppWebViewSettings(
               javaScriptEnabled: true,
+              // Keep script-created popups disabled. onCreateWindow therefore
+              // represents a platform-approved user popup request even when
+              // Android omits its gesture/navigation metadata.
+              javaScriptCanOpenWindowsAutomatically: false,
+              supportMultipleWindows: true,
               transparentBackground: true,
+              useShouldOverrideUrlLoading: true,
             ),
             onWebViewCreated: (controller) {
               unawaited(_handleWebViewCreated(controller, requestId));
@@ -409,24 +690,42 @@ class _WebContentEmbedState extends State<WebContentEmbed> {
               if (requestId != _loadRequestId) {
                 return;
               }
-              if (_isRemoteUrl) {
-                await _injectArguments(controller);
-              }
               _scheduleHeightUpdates(controller, requestId);
             },
             onReceivedError: (controller, request, error) {
-              if (requestId != _loadRequestId ||
-                  !(request.isForMainFrame ?? false) ||
-                  !mounted) {
+              if (!_shouldSurfaceLoadFailure(
+                isForMainFrame: request.isForMainFrame ?? false,
+                remoteEmbedUrls: _remoteFrameDocumentUrls,
+                requestUrl: request.url.toString(),
+              )) {
                 return;
               }
-              setState(() {
-                _controller = null;
-                _shouldRenderWebView = false;
-                _isLoading = false;
-                _loadError = error.description;
-              });
+              _surfaceLoadError(requestId, error.description);
             },
+            onReceivedHttpError: (controller, request, errorResponse) {
+              if (!_shouldSurfaceLoadFailure(
+                isForMainFrame: request.isForMainFrame ?? false,
+                remoteEmbedUrls: _remoteFrameDocumentUrls,
+                requestUrl: request.url.toString(),
+              )) {
+                return;
+              }
+              final statusCode = errorResponse.statusCode;
+              _surfaceLoadError(
+                requestId,
+                statusCode == null
+                    ? 'Unable to load embedded content.'
+                    : 'Unable to load embedded content (HTTP $statusCode).',
+              );
+            },
+            shouldOverrideUrlLoading: (controller, navigationAction) =>
+                _handleNavigationAction(
+                  controller,
+                  navigationAction,
+                  requestId,
+                ),
+            onCreateWindow: (controller, createWindowAction) =>
+                _handleCreateWindow(createWindowAction, requestId),
           ),
         ),
         if (_isLoading)
@@ -468,136 +767,104 @@ class _WebContentEmbedState extends State<WebContentEmbed> {
     );
   }
 
-  static String _wrapHtmlDocument(String source, {String argsText = ''}) {
-    final sandboxedSource = _injectSandboxBootstrap(source, argsText: argsText);
-    final encodedSource = _escapeHtmlAttribute(sandboxedSource);
-    return '''
-<!DOCTYPE html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <style>
-      html, body {
-        margin: 0;
-        padding: 0;
-        background: transparent;
-        width: 100%;
-      }
-      #embed-frame {
-        display: block;
-        width: 100%;
-        height: ${_embedDefaultHeight}px;
-        min-height: ${_embedMinHeight}px;
-        border: 0;
-        background: transparent;
-      }
-    </style>
-    <script>
-      (() => {
-        const minHeight = $_embedMinHeight;
-        const maxHeight = $_embedMaxHeight;
-        window.addEventListener('message', (event) => {
-          const data = event.data || {};
-          if (data.type !== 'conduit-embed-height') return;
-
-          const height = Number(data.height);
-          if (!Number.isFinite(height) || height <= 0) return;
-
-          const frame = document.getElementById('embed-frame');
-          if (!frame) return;
-
-          const clamped = Math.min(Math.max(height, minHeight), maxHeight);
-          frame.style.height = `\${clamped}px`;
-        });
-      })();
-    </script>
-  </head>
-  <body>
-    <iframe
-      id="embed-frame"
-      sandbox="allow-scripts allow-forms"
-      referrerpolicy="no-referrer"
-      srcdoc="$encodedSource"
-    ></iframe>
-  </body>
-</html>
-''';
-  }
-
-  static String _injectSandboxBootstrap(
+  // The documents and the policy decisions are conduit_core's
+  // (features/web_embed/), tested there.
+  static String _wrapHtmlDocument(
     String source, {
-    required String argsText,
-  }) {
-    final assignments = <String>[];
-    if (argsText.trim().isNotEmpty) {
-      assignments.add('window.args = ${_jsonForInlineScript(argsText)};');
+    String argsText = '',
+    bool fillAvailableHeight = false,
+  }) => wrapSandboxedHtmlDocument(
+    source,
+    argsText: argsText,
+    fillAvailableHeight: fillAvailableHeight,
+  );
+
+  static String _wrapRemoteDocument(
+    Uri source, {
+    bool fillAvailableHeight = false,
+  }) => wrapSandboxedRemoteDocument(
+    source,
+    fillAvailableHeight: fillAvailableHeight,
+  );
+
+  static String _frameBootstrapScript(String argsText) =>
+      webEmbedFrameBootstrapScript(argsText);
+
+  static String _inlineArgumentsScript(String argsText) =>
+      webEmbedInlineArgumentsScript(argsText);
+
+  static const String _allFrameBootstrapScript =
+      webEmbedAllFrameBootstrapScript;
+
+  static bool _isUserActivatedNavigation(NavigationAction action) =>
+      _hasUserActivationEvidence(
+        hasGesture: action.hasGesture,
+        linkActivated: action.navigationType == NavigationType.LINK_ACTIVATED,
+      );
+
+  static bool _hasUserActivationEvidence({
+    required bool? hasGesture,
+    required bool linkActivated,
+  }) => webEmbedHasUserActivationEvidence(
+    hasGesture: hasGesture,
+    linkActivated: linkActivated,
+  );
+
+  static bool _shouldAllowAutomaticNavigation(String targetUrl) =>
+      webEmbedShouldAllowAutomaticNavigation(targetUrl);
+
+  static bool _shouldAllowInlineFragmentNavigation(String targetUrl) =>
+      webEmbedShouldAllowInlineFragmentNavigation(targetUrl);
+
+  static bool _shouldSurfaceLoadFailure({
+    required bool isForMainFrame,
+    required Iterable<String> remoteEmbedUrls,
+    required String requestUrl,
+  }) => webEmbedShouldSurfaceLoadFailure(
+    isForMainFrame: isForMainFrame,
+    remoteEmbedUrls: remoteEmbedUrls,
+    requestUrl: requestUrl,
+  );
+
+  static bool _shouldHandleCreateWindow({
+    required bool requestIsCurrent,
+    required String? targetUrl,
+  }) => webEmbedShouldHandleCreateWindow(
+    requestIsCurrent: requestIsCurrent,
+    targetUrl: targetUrl,
+  );
+
+  static bool _shouldResolveMissingPopupUrl({
+    required bool requestIsCurrent,
+    required String? targetUrl,
+  }) => webEmbedShouldResolveMissingPopupUrl(
+    requestIsCurrent: requestIsCurrent,
+    targetUrl: targetUrl,
+  );
+
+  static bool _shouldOpenNavigationExternally({
+    required String targetUrl,
+    required String? currentUrl,
+    required bool userActivated,
+  }) => webEmbedShouldOpenNavigationExternally(
+    targetUrl: targetUrl,
+    currentUrl: currentUrl,
+    userActivated: userActivated,
+  );
+
+  static Future<bool> _openAllowedExternalLink(
+    String rawUrl, {
+    Future<bool> Function(String url)? launcher,
+  }) async {
+    final uri = parseAllowedExternalLink(rawUrl);
+    if (uri == null) {
+      return false;
     }
-
-    final bootstrap =
-        '''
-<script>
-  ${assignments.join('\n  ')}
-  (() => {
-    const reportHeight = () => {
-      const body = document.body;
-      const html = document.documentElement;
-      const height = Math.ceil(Math.max(
-        body?.scrollHeight || 0,
-        body?.offsetHeight || 0,
-        html?.clientHeight || 0,
-        html?.scrollHeight || 0,
-        html?.offsetHeight || 0
-      ));
-      parent.postMessage({ type: 'conduit-embed-height', height }, '*');
-    };
-
-    window.addEventListener('load', reportHeight);
-    if (typeof ResizeObserver !== 'undefined') {
-      const observer = new ResizeObserver(reportHeight);
-      observer.observe(document.documentElement);
-      if (document.body) observer.observe(document.body);
+    final normalizedUrl = uri.toString();
+    if (launcher != null) {
+      return launcher(normalizedUrl);
     }
-    setTimeout(reportHeight, 0);
-    setTimeout(reportHeight, 250);
-    setTimeout(reportHeight, 1000);
-  })();
-</script>
-''';
-
-    final headMatch = RegExp(
-      r'<head\b[^>]*>',
-      caseSensitive: false,
-    ).firstMatch(source);
-    if (headMatch != null) {
-      return source.replaceRange(headMatch.end, headMatch.end, bootstrap);
-    }
-
-    final htmlMatch = RegExp(
-      r'<html\b[^>]*>',
-      caseSensitive: false,
-    ).firstMatch(source);
-    if (htmlMatch != null) {
-      return source.replaceRange(htmlMatch.end, htmlMatch.end, bootstrap);
-    }
-
-    return '$bootstrap$source';
-  }
-
-  static String _jsonForInlineScript(String value) {
-    return jsonEncode(value)
-        .replaceAll('&', r'\u0026')
-        .replaceAll('<', r'\u003C')
-        .replaceAll('>', r'\u003E');
-  }
-
-  static String _escapeHtmlAttribute(String value) {
-    return value
-        .replaceAll('&', '&amp;')
-        .replaceAll('<', '&lt;')
-        .replaceAll('>', '&gt;')
-        .replaceAll('"', '&quot;')
-        .replaceAll("'", '&#39;');
+    return launchExternalLink(normalizedUrl, scope: 'embeds/navigation');
   }
 }
 

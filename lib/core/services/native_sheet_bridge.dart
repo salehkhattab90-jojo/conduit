@@ -4,8 +4,9 @@ import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
-import '../platform/conduit_platform_apis.g.dart';
-import '../utils/debug_logger.dart';
+import '../../platform/conduit_platform_apis.g.dart';
+
+import 'package:conduit_core/utils/debug_logger.dart';
 
 void _logNativeSheetBridgeError(
   String method,
@@ -22,6 +23,85 @@ void _logNativeSheetBridgeError(
   );
 }
 
+@immutable
+class NativeSheetThemeConfig {
+  const NativeSheetThemeConfig({
+    required this.isDark,
+    required this.backgroundArgb,
+    required this.surfaceArgb,
+    required this.elevatedSurfaceArgb,
+    required this.inputArgb,
+    required this.foregroundArgb,
+    required this.secondaryForegroundArgb,
+    required this.iconArgb,
+    required this.borderArgb,
+    required this.accentArgb,
+    required this.onAccentArgb,
+    required this.destructiveArgb,
+  });
+
+  final bool isDark;
+  final int backgroundArgb;
+  final int surfaceArgb;
+  final int elevatedSurfaceArgb;
+  final int inputArgb;
+  final int foregroundArgb;
+  final int secondaryForegroundArgb;
+  final int iconArgb;
+  final int borderArgb;
+  final int accentArgb;
+  final int onAccentArgb;
+  final int destructiveArgb;
+
+  PlatformNativeSheetTheme toPlatform() => PlatformNativeSheetTheme(
+    isDark: isDark,
+    backgroundArgb: backgroundArgb,
+    surfaceArgb: surfaceArgb,
+    elevatedSurfaceArgb: elevatedSurfaceArgb,
+    inputArgb: inputArgb,
+    foregroundArgb: foregroundArgb,
+    secondaryForegroundArgb: secondaryForegroundArgb,
+    iconArgb: iconArgb,
+    borderArgb: borderArgb,
+    accentArgb: accentArgb,
+    onAccentArgb: onAccentArgb,
+    destructiveArgb: destructiveArgb,
+  );
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is NativeSheetThemeConfig &&
+          isDark == other.isDark &&
+          backgroundArgb == other.backgroundArgb &&
+          surfaceArgb == other.surfaceArgb &&
+          elevatedSurfaceArgb == other.elevatedSurfaceArgb &&
+          inputArgb == other.inputArgb &&
+          foregroundArgb == other.foregroundArgb &&
+          secondaryForegroundArgb == other.secondaryForegroundArgb &&
+          iconArgb == other.iconArgb &&
+          borderArgb == other.borderArgb &&
+          accentArgb == other.accentArgb &&
+          onAccentArgb == other.onAccentArgb &&
+          destructiveArgb == other.destructiveArgb;
+
+  @override
+  int get hashCode => Object.hash(
+    isDark,
+    backgroundArgb,
+    surfaceArgb,
+    elevatedSurfaceArgb,
+    inputArgb,
+    foregroundArgb,
+    secondaryForegroundArgb,
+    iconArgb,
+    borderArgb,
+    accentArgb,
+    onAccentArgb,
+    destructiveArgb,
+  );
+}
+
 class NativeSheetRoutes {
   const NativeSheetRoutes._();
 
@@ -34,10 +114,21 @@ class NativeSheetRoutes {
   static const appearance = 'appearance';
   static const chats = 'chats';
   static const voice = 'voice';
+  static const voiceProvider = 'voice-provider';
   static const aiMemory = 'ai-memory';
   static const dataConnection = 'data-connection';
+  static const hermes = 'hermes';
+  static const directConnections = 'open-direct-connections';
+  static const personalConnections = 'open-personal-connections';
+  static const scheduledTasks = 'open-scheduled-tasks';
+  static const calendar = 'open-calendar';
+  static const chatDataControls = 'open-chat-data-controls';
   static const helpAbout = 'help-about';
   static const about = 'about';
+  static const notificationSettings = 'notification-settings';
+  static const workspace = 'workspace-entry';
+  static const releaseNotesManual = 'release-notes-manual';
+  static const openSourceLicenses = 'open-source-licenses';
 }
 
 class NativeSheetBridge implements NativeSheetFlutterApi {
@@ -48,10 +139,21 @@ class NativeSheetBridge implements NativeSheetFlutterApi {
   static final NativeSheetBridge instance = NativeSheetBridge._();
 
   final NativeSheetHostApi _api = NativeSheetHostApi();
+
+  /// Method channel for host calls the generated API does not carry.
+  static const nativeSheetChannelName = 'app.cogwheel.conduit/native_sheet';
+  final MethodChannel _profileChannel = const MethodChannel(
+    nativeSheetChannelName,
+  );
   final StreamController<NativeSheetEvent> _events =
       StreamController<NativeSheetEvent>.broadcast();
   Future<void> Function(String modelId)? _modelPinToggleHandler;
   Object? _modelPinToggleHandlerOwner;
+  Future<void> Function(String value)? _reasoningEffortChangedHandler;
+  Object? _reasoningEffortChangedHandlerOwner;
+  Object? _reasoningEffortUpdateOwner;
+  Future<void> _reasoningEffortUpdateQueue = Future<void>.value();
+  NativeSheetThemeConfig? _lastTheme;
 
   @visibleForTesting
   bool? debugIsIOSOverride;
@@ -59,6 +161,25 @@ class NativeSheetBridge implements NativeSheetFlutterApi {
   Stream<NativeSheetEvent> get events => _events.stream;
 
   bool get _isIOS => debugIsIOSOverride ?? Platform.isIOS;
+
+  Future<void> syncTheme(NativeSheetThemeConfig theme) async {
+    if (!_isIOS || theme == _lastTheme) return;
+    _lastTheme = theme;
+    try {
+      await _api.setTheme(theme.toPlatform());
+    } on PlatformException catch (error, stackTrace) {
+      _lastTheme = null;
+      _logNativeSheetBridgeError('setTheme', error, stackTrace);
+    } catch (error, stackTrace) {
+      _lastTheme = null;
+      _logNativeSheetBridgeError('setTheme', error, stackTrace);
+    }
+  }
+
+  @visibleForTesting
+  void debugResetThemeCache() {
+    _lastTheme = null;
+  }
 
   Future<bool> presentProfileMenu(NativeProfileSheetConfig config) async {
     if (!_isIOS) return false;
@@ -86,33 +207,82 @@ class NativeSheetBridge implements NativeSheetFlutterApi {
     }
   }
 
+  Future<bool> requestAppStoreReview() async {
+    if (!_isIOS) return false;
+    try {
+      return await _api.requestAppStoreReview();
+    } on PlatformException catch (error, stackTrace) {
+      _logNativeSheetBridgeError('requestAppStoreReview', error, stackTrace);
+      return false;
+    } catch (error, stackTrace) {
+      _logNativeSheetBridgeError('requestAppStoreReview', error, stackTrace);
+      return false;
+    }
+  }
+
   Future<String?> presentModelSelector({
+    required String presentationId,
     required String title,
     required List<NativeSheetModelOption> models,
     String? selectedModelId,
     List<String> pinnedModelIds = const <String>[],
+    List<String> featuredModelIds = const <String>[],
     String? pinTitle,
     String? unpinTitle,
+    String moreModelsTitle = 'More models',
+    String searchModelsTitle = 'Search models',
+    String reasoningEffortTitle = 'Effort',
+    String reasoningEffortValue = 'medium',
+    List<String> reasoningEffortOptions = const <String>[
+      'low',
+      'medium',
+      'high',
+    ],
+    Map<String, String> reasoningEffortLabels = const <String, String>{},
+    bool allowsCustomReasoningEffort = true,
+    String customReasoningEffortTitle = 'Custom effort',
+    String customReasoningEffortHint = 'Enter effort',
     Future<void> Function(String modelId)? onTogglePinned,
+    Future<void> Function(String value)? onReasoningEffortChanged,
     bool rethrowErrors = false,
   }) async {
-    if (!_isIOS || models.isEmpty) return null;
+    final normalizedPresentationId = presentationId.trim();
+    if (!_isIOS || models.isEmpty || normalizedPresentationId.isEmpty) {
+      return null;
+    }
     final previousPinToggleHandler = _modelPinToggleHandler;
     final previousPinToggleHandlerOwner = _modelPinToggleHandlerOwner;
+    final previousEffortHandler = _reasoningEffortChangedHandler;
+    final previousEffortHandlerOwner = _reasoningEffortChangedHandlerOwner;
+    final previousEffortUpdateOwner = _reasoningEffortUpdateOwner;
     final pinToggleHandlerOwner = Object();
     var shouldClearPinToggleHandler = false;
     _modelPinToggleHandler = onTogglePinned;
     _modelPinToggleHandlerOwner = pinToggleHandlerOwner;
+    _reasoningEffortChangedHandler = onReasoningEffortChanged;
+    _reasoningEffortChangedHandlerOwner = pinToggleHandlerOwner;
+    _reasoningEffortUpdateOwner = null;
     try {
       final result = await _api.presentModelSelector(
         PlatformNativeSheetModelSelectorRequest(
+          presentationId: normalizedPresentationId,
           title: title,
           selectedModelId: selectedModelId,
           models: models.map((model) => model.toPlatform()).toList(),
           pinnedModelIds: pinnedModelIds,
+          featuredModelIds: featuredModelIds,
           allowsPinning: onTogglePinned != null,
           pinTitle: pinTitle,
           unpinTitle: unpinTitle,
+          moreModelsTitle: moreModelsTitle,
+          searchModelsTitle: searchModelsTitle,
+          reasoningEffortTitle: reasoningEffortTitle,
+          reasoningEffortValue: reasoningEffortValue,
+          reasoningEffortOptions: reasoningEffortOptions,
+          reasoningEffortLabels: reasoningEffortLabels,
+          allowsCustomReasoningEffort: allowsCustomReasoningEffort,
+          customReasoningEffortTitle: customReasoningEffortTitle,
+          customReasoningEffortHint: customReasoningEffortHint,
         ),
       );
       shouldClearPinToggleHandler = true;
@@ -126,6 +296,12 @@ class NativeSheetBridge implements NativeSheetFlutterApi {
           owner: pinToggleHandlerOwner,
           previousHandler: previousPinToggleHandler,
           previousOwner: previousPinToggleHandlerOwner,
+        );
+        _restorePreviousReasoningEffortHandler(
+          owner: pinToggleHandlerOwner,
+          previousHandler: previousEffortHandler,
+          previousOwner: previousEffortHandlerOwner,
+          previousUpdateOwner: previousEffortUpdateOwner,
         );
       }
       _logNativeSheetBridgeError(
@@ -143,6 +319,12 @@ class NativeSheetBridge implements NativeSheetFlutterApi {
           previousHandler: previousPinToggleHandler,
           previousOwner: previousPinToggleHandlerOwner,
         );
+        _restorePreviousReasoningEffortHandler(
+          owner: pinToggleHandlerOwner,
+          previousHandler: previousEffortHandler,
+          previousOwner: previousEffortHandlerOwner,
+          previousUpdateOwner: previousEffortUpdateOwner,
+        );
       }
       _logNativeSheetBridgeError(
         'presentModelSelector',
@@ -157,7 +339,79 @@ class NativeSheetBridge implements NativeSheetFlutterApi {
           identical(_modelPinToggleHandlerOwner, pinToggleHandlerOwner)) {
         _modelPinToggleHandler = null;
         _modelPinToggleHandlerOwner = null;
+        if (identical(
+          _reasoningEffortChangedHandlerOwner,
+          pinToggleHandlerOwner,
+        )) {
+          _reasoningEffortChangedHandler = null;
+          _reasoningEffortChangedHandlerOwner = null;
+          _reasoningEffortUpdateOwner = null;
+        }
       }
+    }
+  }
+
+  Future<void> updateModelSelectorModels(
+    List<NativeSheetModelOption> models, {
+    required String presentationId,
+  }) async {
+    final normalizedPresentationId = presentationId.trim();
+    if (!_isIOS || models.isEmpty || normalizedPresentationId.isEmpty) return;
+    try {
+      await _api.updateModelSelectorModels(
+        normalizedPresentationId,
+        models.map((model) => model.toPlatform()).toList(growable: false),
+      );
+    } catch (error, stackTrace) {
+      _logNativeSheetBridgeError(
+        'updateModelSelectorModels',
+        error,
+        stackTrace,
+        data: {'modelCount': models.length},
+      );
+    }
+  }
+
+  Future<void> updateModelSelectorReasoningEffort({
+    required String presentationId,
+    required String value,
+    required List<String> options,
+    required bool allowsCustom,
+    Future<void> Function(String value)? onReasoningEffortChanged,
+  }) async {
+    final normalizedPresentationId = presentationId.trim();
+    if (!_isIOS || normalizedPresentationId.isEmpty) return;
+    final previousUpdate = _reasoningEffortUpdateQueue;
+    final updateComplete = Completer<void>();
+    _reasoningEffortUpdateQueue = updateComplete.future;
+    await previousUpdate;
+    try {
+      final previousHandler = _reasoningEffortChangedHandler;
+      final previousUpdateOwner = _reasoningEffortUpdateOwner;
+      final updateOwner = Object();
+      _reasoningEffortChangedHandler = onReasoningEffortChanged;
+      _reasoningEffortUpdateOwner = updateOwner;
+      try {
+        await _api.updateModelSelectorReasoningEffort(
+          normalizedPresentationId,
+          value,
+          options,
+          allowsCustom,
+        );
+      } catch (error, stackTrace) {
+        if (identical(_reasoningEffortUpdateOwner, updateOwner)) {
+          _reasoningEffortChangedHandler = previousHandler;
+          _reasoningEffortUpdateOwner = previousUpdateOwner;
+        }
+        _logNativeSheetBridgeError(
+          'updateModelSelectorReasoningEffort',
+          error,
+          stackTrace,
+          data: {'optionCount': options.length},
+        );
+      }
+    } finally {
+      updateComplete.complete();
     }
   }
 
@@ -171,6 +425,18 @@ class NativeSheetBridge implements NativeSheetFlutterApi {
     }
     _modelPinToggleHandler = previousHandler;
     _modelPinToggleHandlerOwner = previousOwner;
+  }
+
+  void _restorePreviousReasoningEffortHandler({
+    required Object owner,
+    required Future<void> Function(String value)? previousHandler,
+    required Object? previousOwner,
+    required Object? previousUpdateOwner,
+  }) {
+    if (!identical(_reasoningEffortChangedHandlerOwner, owner)) return;
+    _reasoningEffortChangedHandler = previousHandler;
+    _reasoningEffortChangedHandlerOwner = previousOwner;
+    _reasoningEffortUpdateOwner = previousUpdateOwner;
   }
 
   Future<String?> presentOptionsSelector({
@@ -320,21 +586,33 @@ class NativeSheetBridge implements NativeSheetFlutterApi {
   }
 
   /// Replace items for an already-presented detail screen (lazy hydration).
+  ///
+  /// [NativeSheetRoutes.profileMenu] is reserved for the Settings root
+  /// itself: its [sections] (and [title]) replace the open root's rows.
   Future<bool> applyDetailPatch({
     required String detailId,
     required List<NativeSheetItemConfig> items,
+    List<NativeSheetSectionConfig> sections = const [],
     String? title,
     String? subtitle,
+    bool clearSubtitle = false,
     List<NativeSheetDetailConfig> detailSheets = const [],
   }) async {
+    if (items.isNotEmpty && sections.isNotEmpty) {
+      throw ArgumentError(
+        'A native detail patch must use either items or sections, not both.',
+      );
+    }
     if (!_isIOS) return false;
     try {
       return await _api.applyDetailPatch(
         PlatformNativeSheetApplyDetailPatchRequest(
           detailId: detailId,
           items: items.map((item) => item.toPlatform()).toList(),
+          sections: sections.map((section) => section.toPlatform()).toList(),
           title: title,
           subtitle: subtitle,
+          clearSubtitle: clearSubtitle,
           detailSheets: detailSheets.isEmpty
               ? null
               : detailSheets.map((detail) => detail.toPlatform()).toList(),
@@ -355,6 +633,24 @@ class NativeSheetBridge implements NativeSheetFlutterApi {
         stackTrace,
         data: {'detailId': detailId},
       );
+      return false;
+    }
+  }
+
+  /// Hands the open native Settings sheet a newer copy of the account profile,
+  /// so its header and profile editors start from what the server holds now
+  /// instead of the copy the sheet opened with. Returns false when no
+  /// Settings sheet is open to take it.
+  Future<bool> updateProfile(NativeProfileSheetUser profile) async {
+    if (!_isIOS) return false;
+    try {
+      return await _profileChannel.invokeMethod<bool>(
+            'updateProfile',
+            profile.toMap(),
+          ) ??
+          false;
+    } catch (error, stackTrace) {
+      _logNativeSheetBridgeError('updateProfile', error, stackTrace);
       return false;
     }
   }
@@ -385,6 +681,27 @@ class NativeSheetBridge implements NativeSheetFlutterApi {
   void onModelPinToggled(PlatformNativeSheetModelPinToggledEvent event) {
     if (event.modelId.isEmpty) return;
     unawaited(_handleModelPinToggled(event.modelId));
+  }
+
+  @override
+  void onReasoningEffortChanged(
+    PlatformNativeSheetReasoningEffortChangedEvent event,
+  ) {
+    if (event.value.isEmpty) return;
+    unawaited(_handleReasoningEffortChanged(event.value));
+  }
+
+  Future<void> _handleReasoningEffortChanged(String value) async {
+    try {
+      await _reasoningEffortChangedHandler?.call(value);
+    } catch (error, stackTrace) {
+      _logNativeSheetBridgeError(
+        'onReasoningEffortChanged',
+        error,
+        stackTrace,
+        data: {'value': value},
+      );
+    }
   }
 
   Future<void> _handleModelPinToggled(String modelId) async {
@@ -570,6 +887,7 @@ class NativeProfileSheetUser {
     required this.initials,
     this.avatarUrl,
     this.avatarBytes,
+    this.avatarIsTemplate = false,
     this.avatarHeaders = const {},
     this.bio,
     this.gender,
@@ -582,6 +900,7 @@ class NativeProfileSheetUser {
   final String initials;
   final String? avatarUrl;
   final Uint8List? avatarBytes;
+  final bool avatarIsTemplate;
   final Map<String, String> avatarHeaders;
 
   /// Account profile fields (parity with Flutter account settings).
@@ -599,6 +918,7 @@ class NativeProfileSheetUser {
       'initials': initials,
       'avatarUrl': avatarUrl,
       'avatarBytes': avatarBytes,
+      'avatarIsTemplate': avatarIsTemplate,
       'avatarHeaders': avatarHeaders,
       if (bio != null) 'bio': bio,
       if (gender != null) 'gender': gender,
@@ -622,7 +942,12 @@ class NativeSheetDetailConfig {
     /// maximum sheet height (matches capped Material bottom sheets). Ignored
     /// on non-iOS.
     this.maxHeightFraction,
-  });
+    this.trailingActionId,
+    this.trailingActionSfSymbol,
+  }) : assert(
+         items.length == 0 || sections.length == 0,
+         'A native detail must use either items or sections, not both.',
+       );
 
   final String id;
   final String title;
@@ -635,6 +960,11 @@ class NativeSheetDetailConfig {
   /// Portion of the largest allowable sheet height (typically ~full screen).
   final double? maxHeightFraction;
 
+  /// A bar button, drawn as [trailingActionSfSymbol], that closes the sheet
+  /// and then sends this action.
+  final String? trailingActionId;
+  final String? trailingActionSfSymbol;
+
   Map<String, Object?> toMap() {
     return {
       'id': id,
@@ -646,6 +976,9 @@ class NativeSheetDetailConfig {
       if (confirmActionId != null) 'confirmActionId': confirmActionId,
       if (confirmActionLabel != null) 'confirmActionLabel': confirmActionLabel,
       if (maxHeightFraction != null) 'maxHeightFraction': maxHeightFraction,
+      if (trailingActionId != null) 'trailingActionId': trailingActionId,
+      if (trailingActionSfSymbol != null)
+        'trailingActionSfSymbol': trailingActionSfSymbol,
     };
   }
 }
@@ -668,7 +1001,13 @@ class NativeSheetItemConfig {
     required this.title,
     this.subtitle,
     this.sfSymbol = 'circle',
+    this.iconAsset,
+    this.iconSize,
+    this.showsDisclosure,
     this.destructive = false,
+    this.dismissOnSelect = false,
+    this.actionId,
+    this.actionValue,
     this.url,
     this.kind = NativeSheetItemKind.navigation,
     this.value,
@@ -685,13 +1024,24 @@ class NativeSheetItemConfig {
     this.min,
     this.max,
     this.divisions,
+    this.avatarName,
+    this.avatarBytes,
+    this.checked = false,
+    this.accent = false,
+    this.usesProfileAvatar = false,
   });
 
   final String id;
   final String title;
   final String? subtitle;
   final String sfSymbol;
+  final String? iconAsset;
+  final double? iconSize;
+  final bool? showsDisclosure;
   final bool destructive;
+  final bool dismissOnSelect;
+  final String? actionId;
+  final Object? actionValue;
   final String? url;
   final NativeSheetItemKind kind;
   final Object? value;
@@ -713,13 +1063,34 @@ class NativeSheetItemConfig {
   /// Optional discrete steps for `UISlider` (`0` = continuous).
   final int? divisions;
 
+  /// Shown as a round picture -- [avatarBytes], else this name's initials --
+  /// in place of [sfSymbol].
+  final String? avatarName;
+  final Uint8List? avatarBytes;
+
+  /// Marks the row in use with a check.
+  final bool checked;
+
+  /// Draws the row in the accent color, as an action.
+  final bool accent;
+
+  /// Draws the row as the sheet's profile summary: its large avatar beside
+  /// this row's own title and subtitle.
+  final bool usesProfileAvatar;
+
   Map<String, Object?> toMap() {
     return {
       'id': id,
       'title': title,
       'subtitle': subtitle,
       'sfSymbol': sfSymbol,
+      if (iconAsset != null) 'iconAsset': iconAsset,
+      if (iconSize != null) 'iconSize': iconSize,
+      if (showsDisclosure != null) 'showsDisclosure': showsDisclosure,
       'destructive': destructive,
+      'dismissOnSelect': dismissOnSelect,
+      if (actionId != null) 'actionId': actionId,
+      if (actionValue != null) 'actionValue': actionValue,
       'url': url,
       'kind': kind.name,
       'value': value,
@@ -736,6 +1107,11 @@ class NativeSheetItemConfig {
       if (min != null) 'min': min,
       if (max != null) 'max': max,
       if (divisions != null) 'divisions': divisions,
+      if (avatarName != null) 'avatarName': avatarName,
+      if (avatarBytes != null) 'avatarBytes': avatarBytes,
+      if (checked) 'checked': checked,
+      if (accent) 'accent': accent,
+      if (usesProfileAvatar) 'usesProfileAvatar': usesProfileAvatar,
     };
   }
 }
@@ -987,6 +1363,7 @@ extension on NativeProfileSheetUser {
       initials: initials,
       avatarUrl: avatarUrl,
       avatarBytes: avatarBytes,
+      avatarIsTemplate: avatarIsTemplate,
       avatarHeaders: avatarHeaders,
       bio: bio,
       gender: gender,
@@ -1007,6 +1384,8 @@ extension on NativeSheetDetailConfig {
       confirmActionId: confirmActionId,
       confirmActionLabel: confirmActionLabel,
       maxHeightFraction: maxHeightFraction,
+      trailingActionId: trailingActionId,
+      trailingActionSfSymbol: trailingActionSfSymbol,
     );
   }
 }
@@ -1028,7 +1407,13 @@ extension on NativeSheetItemConfig {
       title: title,
       subtitle: subtitle,
       sfSymbol: sfSymbol,
+      iconAsset: iconAsset,
+      iconSize: iconSize,
+      showsDisclosure: showsDisclosure,
       destructive: destructive,
+      dismissOnSelect: dismissOnSelect,
+      actionId: actionId,
+      actionValue: actionValue,
       url: url,
       kind: kind.toPlatform(),
       value: value,
@@ -1045,6 +1430,11 @@ extension on NativeSheetItemConfig {
       min: min,
       max: max,
       divisions: divisions,
+      avatarName: avatarName,
+      avatarBytes: avatarBytes,
+      checked: checked,
+      accent: accent,
+      usesProfileAvatar: usesProfileAvatar,
     );
   }
 }

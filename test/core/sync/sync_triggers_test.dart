@@ -7,22 +7,26 @@
 library;
 
 import 'package:checks/checks.dart';
-import 'package:conduit/core/database/app_database.dart';
-import 'package:conduit/core/database/database_provider.dart';
-import 'package:conduit/core/services/connectivity_service.dart';
-import 'package:conduit/core/sync/pull_sync.dart';
-import 'package:conduit/core/sync/sync_api_client.dart';
-import 'package:conduit/core/sync/sync_engine.dart';
-import 'package:conduit/core/sync/sync_triggers.dart';
-import 'package:conduit/features/auth/providers/unified_auth_providers.dart';
+import 'package:conduit_core/database/app_database.dart';
+import 'package:conduit_core/database/database_provider.dart';
+import 'package:conduit_core/models/conversation.dart';
+import 'package:conduit_core/providers/app_providers.dart';
+import 'package:conduit_core/providers/host_ports.dart';
+import 'package:conduit_core/services/connectivity_service.dart';
+import 'package:conduit_core/sync/clock.dart';
+import 'package:conduit_core/sync/pull_sync.dart';
+import 'package:conduit_core/sync/sync_api_client.dart';
+import 'package:conduit_core/sync/sync_engine.dart';
+import 'package:conduit_core/sync/sync_triggers.dart';
+import 'package:conduit_core/features/auth/providers/unified_auth_providers.dart';
+import 'package:conduit/platform/flutter_app_lifecycle.dart';
 import 'package:drift/native.dart';
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import '../../support/fake_open_webui_server.dart';
-import '../../support/fake_sync_api_client.dart';
+import 'package:conduit_core/testing.dart';
 
 /// Externally mutable provider value, so `ref.listen`ers inside
 /// [SyncTriggers] observe edges without recreating the notifier.
@@ -55,15 +59,40 @@ final _clientProvider =
 /// Recreated (with the same shared list) whenever its watched dependencies
 /// flap, exactly like the production engine.
 class _RecordingSyncEngine extends SyncEngine {
-  _RecordingSyncEngine(this.pulls);
+  _RecordingSyncEngine(this.pulls, this.drains, [this.reconciles]);
 
   final List<String> pulls;
+  final List<String> drains;
+  final List<String>? reconciles;
+
+  @override
+  Future<void> reconcileNow() async {
+    reconciles?.add('now');
+  }
 
   @override
   Future<PullResult?> requestPull({required String reason}) {
     pulls.add(reason);
     return Future.value(null);
   }
+
+  @override
+  Future<void> drainNow() async {
+    drains.add('now');
+  }
+
+  @override
+  Future<void> drainOutbox() async {
+    drains.add('outbox');
+  }
+}
+
+/// Settable epoch-seconds clock for the reconcile debounce.
+class _ManualSyncClock implements SyncClock {
+  int seconds = 1700000000;
+
+  @override
+  int nowEpochSeconds() => seconds;
 }
 
 void main() {
@@ -72,14 +101,22 @@ void main() {
   late AppDatabase db;
   late FakeSyncApiClient client;
   late List<String> pulls;
+  late List<String> drains;
+  // The real adapter, not a fake: these tests drive lifecycle through
+  // `binding.handleAppLifecycleStateChanged`, so using the production port
+  // keeps them end-to-end and covers the adapter's mapping too.
+  late FlutterAppLifecycle lifecycle;
 
   setUp(() {
     db = AppDatabase(NativeDatabase.memory());
     client = FakeSyncApiClient(FakeOpenWebUiServer());
     pulls = <String>[];
+    drains = <String>[];
+    lifecycle = FlutterAppLifecycle();
   });
 
   tearDown(() async {
+    lifecycle.dispose();
     await db.close();
   });
 
@@ -96,19 +133,24 @@ void main() {
     container.listen(syncApiClientProvider, (_, _) {});
   }
 
-  ProviderContainer makeContainer() {
+  ProviderContainer makeContainer({bool autoDispose = true}) {
     final container = ProviderContainer(
       overrides: [
+        appLifecycleProvider.overrideWithValue(lifecycle),
         isAuthenticatedProvider2.overrideWith(
           (ref) => ref.watch(_authProvider),
         ),
         isOnlineProvider.overrideWith((ref) => ref.watch(_onlineProvider)),
         appDatabaseProvider.overrideWith((ref) => ref.watch(_dbProvider)),
         syncApiClientProvider.overrideWith((ref) => ref.watch(_clientProvider)),
-        syncEngineProvider.overrideWith(() => _RecordingSyncEngine(pulls)),
+        syncEngineProvider.overrideWith(
+          () => _RecordingSyncEngine(pulls, drains),
+        ),
       ],
     );
-    addTearDown(container.dispose);
+    if (autoDispose) {
+      addTearDown(container.dispose);
+    }
     materializeReadiness(container);
     return container;
   }
@@ -161,20 +203,17 @@ void main() {
       check(countOf('auth')).equals(2);
     });
 
-    test(
-      'start fires immediately when everything is ready at install',
-      () async {
-        final container = makeContainer();
-        container.read(_authProvider.notifier).set(true);
-        container.read(_dbProvider.notifier).set(db);
-        container.read(_clientProvider.notifier).set(client);
+    test('start pull is submitted before immediate disposal can skip it', () {
+      final container = makeContainer(autoDispose: false);
+      container.read(_authProvider.notifier).set(true);
+      container.read(_dbProvider.notifier).set(db);
+      container.read(_clientProvider.notifier).set(client);
 
-        container.read(syncTriggersProvider);
-        await flushMicrotasks();
+      container.read(syncTriggersProvider);
+      container.dispose();
 
-        check(countOf('start')).equals(1);
-      },
-    );
+      check(countOf('start')).equals(1);
+    });
 
     test(
       'start fires again when the ready database/client pair changes',
@@ -204,6 +243,48 @@ void main() {
         check(countOf('start')).equals(2);
       },
     );
+
+    test(
+      'post-certification pull waits for auth, database, and client readiness',
+      () async {
+        final container = makeContainer();
+        final triggers = container.read(syncTriggersProvider.notifier);
+
+        triggers.requestPostCertificationSync();
+        await flushMicrotasks();
+        check(pulls).isEmpty();
+
+        container.read(_authProvider.notifier).set(true);
+        await flushMicrotasks();
+        container.read(_clientProvider.notifier).set(client);
+        await flushMicrotasks();
+        check(pulls).isEmpty();
+
+        container.read(_dbProvider.notifier).set(db);
+        await flushMicrotasks();
+
+        check(pulls).deepEquals(<String>['account-certified']);
+        check(countOf('start')).equals(0);
+      },
+    );
+
+    test(
+      'post-certification request does not duplicate a start for the same pair',
+      () async {
+        final container = makeContainer();
+        container.read(_authProvider.notifier).set(true);
+        container.read(_dbProvider.notifier).set(db);
+        container.read(_clientProvider.notifier).set(client);
+        final triggers = container.read(syncTriggersProvider.notifier);
+        await flushMicrotasks();
+        check(pulls).deepEquals(<String>['start']);
+
+        triggers.requestPostCertificationSync();
+        await flushMicrotasks();
+
+        check(pulls).deepEquals(<String>['start']);
+      },
+    );
   });
 
   group('connectivity edge', () {
@@ -230,12 +311,35 @@ void main() {
     );
   });
 
+  group('active conversation edge', () {
+    test(
+      'chat-open drain is submitted before immediate disposal can skip it',
+      () {
+        final container = makeContainer(autoDispose: false);
+        container.read(_authProvider.notifier).set(true);
+        container.read(_dbProvider.notifier).set(db);
+        container.read(_clientProvider.notifier).set(client);
+        container.read(syncTriggersProvider);
+        pulls.clear();
+        drains.clear();
+
+        container
+            .read(activeConversationProvider.notifier)
+            .set(_conversation('chat-open'));
+        container.dispose();
+
+        check(drains).deepEquals(['outbox']);
+      },
+    );
+  });
+
   group('lifecycle observer + periodic timer', () {
     test('resume fires a foreground pull and restarts the timer; pause '
         'cancels it; dispose removes the observer', () {
       fakeAsync((async) {
         final container = ProviderContainer(
           overrides: [
+            appLifecycleProvider.overrideWithValue(lifecycle),
             isAuthenticatedProvider2.overrideWith(
               (ref) => ref.watch(_authProvider),
             ),
@@ -244,7 +348,9 @@ void main() {
             syncApiClientProvider.overrideWith(
               (ref) => ref.watch(_clientProvider),
             ),
-            syncEngineProvider.overrideWith(() => _RecordingSyncEngine(pulls)),
+            syncEngineProvider.overrideWith(
+              () => _RecordingSyncEngine(pulls, drains),
+            ),
           ],
         );
         materializeReadiness(container);
@@ -311,6 +417,7 @@ void main() {
       fakeAsync((async) {
         final container = ProviderContainer(
           overrides: [
+            appLifecycleProvider.overrideWithValue(lifecycle),
             isAuthenticatedProvider2.overrideWith(
               (ref) => ref.watch(_authProvider),
             ),
@@ -319,7 +426,9 @@ void main() {
             syncApiClientProvider.overrideWith(
               (ref) => ref.watch(_clientProvider),
             ),
-            syncEngineProvider.overrideWith(() => _RecordingSyncEngine(pulls)),
+            syncEngineProvider.overrideWith(
+              () => _RecordingSyncEngine(pulls, drains),
+            ),
           ],
         );
         materializeReadiness(container);
@@ -353,4 +462,68 @@ void main() {
       });
     });
   });
+  group('deletion reconcile on start and resume', () {
+    test('runs once on start, is debounced on a quick resume, and runs again '
+        'after the minimum interval', () async {
+      final reconciles = <String>[];
+      final clock = _ManualSyncClock();
+      final container = ProviderContainer(
+        overrides: [
+          appLifecycleProvider.overrideWithValue(lifecycle),
+          isAuthenticatedProvider2.overrideWith(
+            (ref) => ref.watch(_authProvider),
+          ),
+          isOnlineProvider.overrideWith((ref) => ref.watch(_onlineProvider)),
+          appDatabaseProvider.overrideWith((ref) => ref.watch(_dbProvider)),
+          syncApiClientProvider.overrideWith(
+            (ref) => ref.watch(_clientProvider),
+          ),
+          syncClockProvider.overrideWithValue(clock),
+          syncEngineProvider.overrideWith(
+            () => _RecordingSyncEngine(pulls, drains, reconciles),
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+      materializeReadiness(container);
+      container.read(syncTriggersProvider);
+      await flushMicrotasks();
+
+      // Not ready yet: a resume neither reconciles nor starts the debounce.
+      binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await flushMicrotasks();
+      check(reconciles).isEmpty();
+
+      // Start (auth + db + client ready) reconciles once.
+      container.read(_dbProvider.notifier).set(db);
+      container.read(_clientProvider.notifier).set(client);
+      container.read(_authProvider.notifier).set(true);
+      await flushMicrotasks();
+      check(reconciles).length.equals(1);
+
+      // A quick background/foreground round-trip is debounced.
+      binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      clock.seconds += 60;
+      binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await flushMicrotasks();
+      check(reconciles).length.equals(1);
+
+      // After the minimum interval, the next resume reconciles again.
+      binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      clock.seconds += kResumeReconcileMinInterval.inSeconds;
+      binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await flushMicrotasks();
+      check(reconciles).length.equals(2);
+    });
+  });
+}
+
+Conversation _conversation(String id) {
+  final now = DateTime.fromMillisecondsSinceEpoch(1000);
+  return Conversation(
+    id: id,
+    title: 'Title $id',
+    createdAt: now,
+    updatedAt: now,
+  );
 }

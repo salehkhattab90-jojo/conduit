@@ -1,22 +1,34 @@
 import 'dart:async';
 import 'dart:io' show Platform;
 
-import 'package:adaptive_platform_ui/adaptive_platform_ui.dart';
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart';
+import 'package:conduit/shared/widgets/platform_ui/platform_ui.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../core/models/model.dart';
+import 'package:conduit_core/models/model.dart';
+
 import '../../../core/services/ios_native_dropdown_bridge.dart';
 import '../../../core/services/native_sheet_bridge.dart';
-import '../../../core/services/settings_service.dart';
+
+import 'package:conduit_core/features/chat/server_speech/server_speech_providers.dart';
+import 'package:conduit_core/services/settings_service.dart';
+import 'package:conduit_core/utils/debug_logger.dart';
+
+import '../../../core/utils/tts_voice_utils.dart';
 import '../../../shared/theme/theme_extensions.dart';
 import '../../../shared/theme/tweakcn_themes.dart';
-import '../../tools/providers/tools_providers.dart';
-import '../../../core/models/tool.dart';
+import '../../../shared/widgets/adaptive_selection_sheet.dart';
+
+import 'package:conduit_core/features/tools/providers/tools_providers.dart';
+
+import 'package:conduit_core/models/tool.dart';
+
 import '../../../shared/widgets/conduit_components.dart';
 import '../../../shared/utils/ui_utils.dart';
-import '../../../core/providers/app_providers.dart';
+
+import 'package:conduit_core/providers/app_providers.dart';
+
 import '../../../l10n/app_localizations.dart';
 import '../../chat/providers/text_to_speech_provider.dart';
 import '../../chat/services/voice_input_service.dart';
@@ -24,13 +36,19 @@ import '../widgets/adaptive_segmented_selector.dart';
 import '../widgets/customization_tile.dart';
 import '../widgets/expandable_card.dart';
 import '../widgets/settings_page_scaffold.dart';
+import '../../../shared/widgets/utility_components.dart';
 import '../widgets/socket_health_card.dart';
 import '../widgets/stt_language_picker.dart';
+import '../../../shared/theme/theme_providers.dart';
 
 const _sectionGap = SizedBox(height: Spacing.lg);
 
+enum AppCustomizationSection { appearance, chat, dataConnection }
+
 class AppCustomizationPage extends ConsumerWidget {
-  const AppCustomizationPage({super.key});
+  const AppCustomizationPage({super.key, required this.section});
+
+  final AppCustomizationSection section;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -45,6 +63,7 @@ class AppCustomizationPage extends ConsumerWidget {
     }());
 
     final settings = ref.watch(appSettingsProvider);
+    final hasOpenWebUiAccount = ref.watch(openWebUiAccountAvailableProvider);
     final themeMode = ref.watch(appThemeModeProvider);
     final platformBrightness = MediaQuery.platformBrightnessOf(context);
     final l10n = AppLocalizations.of(context)!;
@@ -64,28 +83,46 @@ class AppCustomizationPage extends ConsumerWidget {
     final currentLanguageCode = locale?.toLanguageTag() ?? 'system';
     final languageLabel = _resolveLanguageLabel(context, currentLanguageCode);
     final activeTheme = ref.watch(appThemePaletteProvider);
-
-    return SettingsPageScaffold(
-      title: l10n.appAndChat,
-      children: [
+    final title = switch (section) {
+      AppCustomizationSection.appearance => l10n.settingsAppearance,
+      AppCustomizationSection.chat => l10n.chatSettings,
+      AppCustomizationSection.dataConnection => l10n.settingsDataAndConnection,
+    };
+    final children = switch (section) {
+      AppCustomizationSection.appearance => <Widget>[
         _buildThemesDropdownSection(
           context,
           ref,
           themeMode,
           themeDescription,
           activeTheme,
-          settings,
         ),
         _sectionGap,
         _buildLanguageSection(context, ref, currentLanguageCode, languageLabel),
-        _sectionGap,
+      ],
+      AppCustomizationSection.chat => <Widget>[
+        if (hasOpenWebUiAccount) ...[
+          _buildQuickPillsSection(context, ref, settings),
+          _sectionGap,
+        ],
         _buildChatSection(context, ref, settings),
+        if (hasOpenWebUiAccount) ...[
+          _sectionGap,
+          _buildSystemPromptsSection(context, ref),
+        ],
+        // Advanced stays last and on its own: it changes what the rest of
+        // the app shows, not how chats behave.
         _sectionGap,
-        _buildSystemPromptsSection(context, ref),
+        _buildAdvancedSection(context, ref, settings),
+      ],
+      AppCustomizationSection.dataConnection => <Widget>[
+        _buildDataConnectionSection(context, ref, settings),
         _sectionGap,
         _buildSocketHealthSection(context, ref),
       ],
-    );
+    };
+
+    return UtilityPageScaffold.settings(title: title, children: children);
   }
 
   Widget _buildThemesDropdownSection(
@@ -94,23 +131,28 @@ class AppCustomizationPage extends ConsumerWidget {
     ThemeMode themeMode,
     String themeDescription,
     TweakcnThemeDefinition activeTheme,
-    AppSettings settings,
   ) {
+    final theme = context.conduitTheme;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _SectionHeader(title: AppLocalizations.of(context)!.display),
-        const SizedBox(height: Spacing.sm),
-        ExpandableCard(
-          title: AppLocalizations.of(context)!.darkMode,
-          subtitle: themeDescription,
-          icon: UiUtils.platformIcon(
-            ios: CupertinoIcons.moon_stars,
-            android: Icons.dark_mode,
-          ),
+        InsetGroupedSection(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              Text(
+                AppLocalizations.of(context)!.colorScheme,
+                style: theme.bodyMedium?.copyWith(
+                  color: theme.textPrimary,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: Spacing.xxs),
+              Text(
+                themeDescription,
+                style: theme.bodySmall?.copyWith(color: theme.textSecondary),
+              ),
+              const SizedBox(height: Spacing.sm),
               ThemeModeSegmentedControl(
                 value: themeMode,
                 onChanged: (mode) {
@@ -120,10 +162,10 @@ class AppCustomizationPage extends ConsumerWidget {
             ],
           ),
         ),
-        const SizedBox(height: Spacing.md),
-        _buildPaletteSelector(context, ref, activeTheme),
-        const SizedBox(height: Spacing.md),
-        _buildQuickPillsSection(context, ref, settings),
+        const SizedBox(height: Spacing.sm),
+        InsetGroupedList(
+          children: [_buildPaletteSelector(context, ref, activeTheme)],
+        ),
       ],
     );
   }
@@ -139,34 +181,36 @@ class AppCustomizationPage extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _SectionHeader(title: AppLocalizations.of(context)!.appLanguage),
-        const SizedBox(height: Spacing.sm),
-        CustomizationTile(
-          leading: _buildIconBadge(
-            context,
-            UiUtils.platformIcon(
-              ios: CupertinoIcons.globe,
-              android: Icons.language,
+        InsetGroupedList(
+          children: [
+            UtilityRow(
+              leading: _buildIconBadge(
+                context,
+                UiUtils.platformIcon(
+                  ios: CupertinoIcons.globe,
+                  android: Icons.language,
+                ),
+                color: theme.buttonPrimary,
+              ),
+              title: AppLocalizations.of(context)!.appLanguage,
+              subtitle: languageLabel,
+              onTap: () async {
+                final selected = await _showLanguageSelector(
+                  context,
+                  currentLanguageTag,
+                );
+                if (selected == null) return;
+                if (selected == 'system') {
+                  await ref.read(appLocaleProvider.notifier).setLocale(null);
+                } else {
+                  final parsed = _parseLocaleTag(selected);
+                  await ref
+                      .read(appLocaleProvider.notifier)
+                      .setLocale(parsed ?? Locale(selected));
+                }
+              },
             ),
-            color: theme.buttonPrimary,
-          ),
-          title: AppLocalizations.of(context)!.appLanguage,
-          subtitle: languageLabel,
-          onTap: () async {
-            final selected = await _showLanguageSelector(
-              context,
-              currentLanguageTag,
-            );
-            if (selected == null) return;
-            if (selected == 'system') {
-              await ref.read(appLocaleProvider.notifier).setLocale(null);
-            } else {
-              final parsed = _parseLocaleTag(selected);
-              await ref
-                  .read(appLocaleProvider.notifier)
-                  .setLocale(parsed ?? Locale(selected));
-            }
-          },
+          ],
         ),
       ],
     );
@@ -180,7 +224,7 @@ class AppCustomizationPage extends ConsumerWidget {
     final l10n = AppLocalizations.of(context)!;
     final theme = context.conduitTheme;
 
-    return CustomizationTile(
+    return UtilityRow(
       leading: _buildIconBadge(
         context,
         UiUtils.platformIcon(
@@ -287,8 +331,10 @@ class AppCustomizationPage extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          ConduitCard(
-            padding: EdgeInsets.zero,
+          // These rows sit directly on the enclosing disclosure section's
+          // grouped surface; a nested card here would stack surface on surface.
+          Material(
+            color: Colors.transparent,
             child: Theme(
               data: Theme.of(context).copyWith(
                 visualDensity: VisualDensity.compact,
@@ -301,11 +347,11 @@ class AppCustomizationPage extends ConsumerWidget {
                       leading: Icon(options[i].icon, size: IconSize.small),
                       title: Text(
                         options[i].label,
-                        style: context.conduitTheme.bodyMedium?.copyWith(
-                          color: context.conduitTheme.sidebarForeground,
+                        style: AppTypography.bodyMediumStyle.copyWith(
+                          color: context.conduitTheme.textPrimary,
                         ),
                       ),
-                      trailing: Checkbox.adaptive(
+                      trailing: AdaptiveCheckbox(
                         value: selected.contains(options[i].id),
                         visualDensity: VisualDensity.compact,
                         materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -323,10 +369,9 @@ class AppCustomizationPage extends ConsumerWidget {
                     ),
                     if (i != options.length - 1)
                       Divider(
-                        height: 1,
-                        color: Theme.of(
-                          context,
-                        ).dividerColor.withValues(alpha: 0.2),
+                        height: BorderWidth.thin,
+                        thickness: BorderWidth.thin,
+                        color: context.conduitTheme.dividerColor,
                       ),
                   ],
                 ],
@@ -368,6 +413,134 @@ class AppCustomizationPage extends ConsumerWidget {
   ) {
     final theme = context.conduitTheme;
     final l10n = AppLocalizations.of(context)!;
+    final assistantTriggerLabel = _androidAssistantTriggerLabel(
+      l10n,
+      settings.androidAssistantTrigger,
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        CustomizationTile(
+          leading: _buildIconBadge(
+            context,
+            Platform.isIOS ? CupertinoIcons.paperplane : Icons.keyboard_return,
+            color: theme.buttonPrimary,
+          ),
+          title: l10n.sendOnEnter,
+          subtitle: l10n.sendOnEnterDescription,
+          toggled: settings.sendOnEnter,
+          trailing: AdaptiveSwitch(
+            value: settings.sendOnEnter,
+            onChanged: (value) =>
+                ref.read(appSettingsProvider.notifier).setSendOnEnter(value),
+          ),
+          showChevron: false,
+          onTap: () => ref
+              .read(appSettingsProvider.notifier)
+              .setSendOnEnter(!settings.sendOnEnter),
+        ),
+        const SizedBox(height: Spacing.sm),
+        CustomizationTile(
+          leading: _buildIconBadge(
+            context,
+            Icons.history_toggle_off,
+            color: theme.buttonPrimary,
+          ),
+          title: l10n.temporaryChatByDefault,
+          subtitle: l10n.temporaryChatByDefaultDescription,
+          toggled: settings.temporaryChatByDefault,
+          trailing: AdaptiveSwitch(
+            value: settings.temporaryChatByDefault,
+            onChanged: (value) => ref
+                .read(appSettingsProvider.notifier)
+                .setTemporaryChatByDefault(value),
+          ),
+          showChevron: false,
+          onTap: () => ref
+              .read(appSettingsProvider.notifier)
+              .setTemporaryChatByDefault(!settings.temporaryChatByDefault),
+        ),
+        const SizedBox(height: Spacing.sm),
+        CustomizationTile(
+          leading: _buildIconBadge(
+            context,
+            Icons.link_rounded,
+            color: theme.buttonPrimary,
+          ),
+          title: l10n.citationShowTitles,
+          subtitle: l10n.citationShowTitlesDescription,
+          toggled: settings.citationShowTitles,
+          trailing: AdaptiveSwitch(
+            value: settings.citationShowTitles,
+            onChanged: (value) => ref
+                .read(appSettingsProvider.notifier)
+                .setCitationShowTitles(value),
+          ),
+          showChevron: false,
+          onTap: () => ref
+              .read(appSettingsProvider.notifier)
+              .setCitationShowTitles(!settings.citationShowTitles),
+        ),
+        if (Platform.isAndroid) ...[
+          const SizedBox(height: Spacing.sm),
+          CustomizationTile(
+            leading: _buildIconBadge(
+              context,
+              Icons.assistant,
+              color: theme.buttonPrimary,
+            ),
+            title: l10n.androidAssistantTitle,
+            subtitle: assistantTriggerLabel,
+            onTap: () =>
+                _showAndroidAssistantTriggerSheet(context, ref, settings),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildAdvancedSection(
+    BuildContext context,
+    WidgetRef ref,
+    AppSettings settings,
+  ) {
+    final l10n = AppLocalizations.of(context)!;
+    final enabled = settings.advancedFeaturesEnabled;
+    void setEnabled(bool value) => ref
+        .read(appSettingsProvider.notifier)
+        .setAdvancedFeaturesEnabled(value);
+    return InsetGroupedList(
+      key: const Key('chat-settings-advanced-section'),
+      footer: l10n.advancedFeaturesFooter,
+      children: [
+        UtilityRow(
+          key: const Key('chat-settings-advanced-toggle'),
+          leading: _buildIconBadge(
+            context,
+            UiUtils.platformIcon(
+              ios: CupertinoIcons.gear_alt,
+              android: Icons.settings_suggest_outlined,
+            ),
+            color: context.conduitTheme.buttonPrimary,
+          ),
+          title: l10n.advancedFeatures,
+          subtitle: l10n.advancedFeaturesDescription,
+          subtitleMaxLines: 2,
+          toggled: enabled,
+          trailing: AdaptiveSwitch(value: enabled, onChanged: setEnabled),
+          onTap: () => setEnabled(!enabled),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDataConnectionSection(
+    BuildContext context,
+    WidgetRef ref,
+    AppSettings settings,
+  ) {
+    final theme = context.conduitTheme;
+    final l10n = AppLocalizations.of(context)!;
     final transportAvailability = ref.watch(socketTransportOptionsProvider);
     var activeTransportMode = settings.socketTransportMode;
     if (!transportAvailability.allowPolling &&
@@ -380,15 +553,10 @@ class AppCustomizationPage extends ConsumerWidget {
     final transportLabel = activeTransportMode == 'polling'
         ? l10n.transportModePolling
         : l10n.transportModeWs;
-    final assistantTriggerLabel = _androidAssistantTriggerLabel(
-      l10n,
-      settings.androidAssistantTrigger,
-    );
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _SectionHeader(title: l10n.chatSettings),
-        const SizedBox(height: Spacing.sm),
         CustomizationTile(
           leading: _buildIconBadge(
             context,
@@ -424,50 +592,12 @@ class AppCustomizationPage extends ConsumerWidget {
         CustomizationTile(
           leading: _buildIconBadge(
             context,
-            Platform.isIOS ? CupertinoIcons.paperplane : Icons.keyboard_return,
-            color: theme.buttonPrimary,
-          ),
-          title: l10n.sendOnEnter,
-          subtitle: l10n.sendOnEnterDescription,
-          trailing: AdaptiveSwitch(
-            value: settings.sendOnEnter,
-            onChanged: (value) =>
-                ref.read(appSettingsProvider.notifier).setSendOnEnter(value),
-          ),
-          showChevron: false,
-          onTap: () => ref
-              .read(appSettingsProvider.notifier)
-              .setSendOnEnter(!settings.sendOnEnter),
-        ),
-        const SizedBox(height: Spacing.sm),
-        CustomizationTile(
-          leading: _buildIconBadge(
-            context,
-            Icons.history_toggle_off,
-            color: theme.buttonPrimary,
-          ),
-          title: l10n.temporaryChatByDefault,
-          subtitle: l10n.temporaryChatByDefaultDescription,
-          trailing: AdaptiveSwitch(
-            value: settings.temporaryChatByDefault,
-            onChanged: (value) => ref
-                .read(appSettingsProvider.notifier)
-                .setTemporaryChatByDefault(value),
-          ),
-          showChevron: false,
-          onTap: () => ref
-              .read(appSettingsProvider.notifier)
-              .setTemporaryChatByDefault(!settings.temporaryChatByDefault),
-        ),
-        const SizedBox(height: Spacing.sm),
-        CustomizationTile(
-          leading: _buildIconBadge(
-            context,
             Icons.vibration,
             color: theme.buttonPrimary,
           ),
           title: l10n.disableHapticsWhileStreaming,
           subtitle: l10n.disableHapticsWhileStreamingDescription,
+          toggled: settings.disableHapticsWhileStreaming,
           trailing: AdaptiveSwitch(
             value: settings.disableHapticsWhileStreaming,
             onChanged: (value) => ref
@@ -481,20 +611,6 @@ class AppCustomizationPage extends ConsumerWidget {
                 !settings.disableHapticsWhileStreaming,
               ),
         ),
-        if (Platform.isAndroid) ...[
-          const SizedBox(height: Spacing.sm),
-          CustomizationTile(
-            leading: _buildIconBadge(
-              context,
-              Icons.assistant,
-              color: theme.buttonPrimary,
-            ),
-            title: l10n.androidAssistantTitle,
-            subtitle: assistantTriggerLabel,
-            onTap: () =>
-                _showAndroidAssistantTriggerSheet(context, ref, settings),
-          ),
-        ],
       ],
     );
   }
@@ -506,7 +622,7 @@ class AppCustomizationPage extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _SectionHeader(title: l10n.advancedPromptOverrides),
+        SettingsSectionHeader(title: l10n.promptOverridesTitle),
         const SizedBox(height: Spacing.sm),
         ExpandableCard(
           title: l10n.modelSystemPrompts,
@@ -562,22 +678,11 @@ class AppCustomizationPage extends ConsumerWidget {
   }
 
   Widget _buildPromptLoadingTile(BuildContext context, String title) {
-    final theme = context.conduitTheme;
-    final color = theme.buttonPrimary;
     return CustomizationTile(
-      leading: Container(
-        width: 40,
-        height: 40,
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.1),
-          borderRadius: BorderRadius.circular(AppBorderRadius.small),
-          border: Border.all(
-            color: color.withValues(alpha: 0.2),
-            width: BorderWidth.thin,
-          ),
-        ),
-        alignment: Alignment.center,
-        child: const ConduitLoadingIndicator(isCompact: true),
+      leading: const SizedBox(
+        width: IconSize.xl,
+        height: IconSize.xl,
+        child: Center(child: ConduitLoadingIndicator(isCompact: true)),
       ),
       title: title,
       subtitle: '',
@@ -615,9 +720,7 @@ class AppCustomizationPage extends ConsumerWidget {
       padding: const EdgeInsets.all(Spacing.md),
       child: Text(
         text,
-        style: theme.bodyMedium?.copyWith(
-          color: theme.sidebarForeground.withValues(alpha: 0.75),
-        ),
+        style: theme.bodySmall?.copyWith(color: theme.textSecondary),
       ),
     );
   }
@@ -670,7 +773,19 @@ class AppCustomizationPage extends ConsumerWidget {
       onSave: (value) async {
         await api.updateModelSystemPrompt(model.id, value);
       },
-      afterSave: () => ref.invalidate(modelsProvider),
+      afterSave: () => unawaited(
+        ref.read(modelsProvider.notifier).refresh().onError((
+          error,
+          stackTrace,
+        ) {
+          DebugLogger.error(
+            'refresh-failed',
+            scope: 'settings/models',
+            error: error,
+            stackTrace: stackTrace,
+          );
+        }),
+      ),
     );
   }
 
@@ -741,7 +856,7 @@ class AppCustomizationPage extends ConsumerWidget {
       return;
     }
 
-    await showSettingsSheet<void>(
+    await showAdaptiveSelectionSheet<void>(
       context: context,
       builder: (sheetContext) => _ServerPromptEditorSheet(
         title: title,
@@ -793,13 +908,9 @@ class AppCustomizationPage extends ConsumerWidget {
       return const SizedBox.shrink();
     }
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _SectionHeader(title: AppLocalizations.of(context)!.connectionHealth),
-        const SizedBox(height: Spacing.sm),
-        SocketHealthCard(socketService: socketService),
-      ],
+    return SocketHealthCard(
+      socketService: socketService,
+      title: AppLocalizations.of(context)!.connectionHealth,
     );
   }
 
@@ -838,10 +949,10 @@ class AppCustomizationPage extends ConsumerWidget {
       ),
     ];
 
-    await showSettingsSheet<void>(
+    await showAdaptiveSelectionSheet<void>(
       context: context,
       builder: (sheetContext) {
-        return SettingsSelectorSheet(
+        return AdaptiveSelectionSheet(
           title: l10n.androidAssistantTitle,
           description: l10n.androidAssistantDescription,
           itemCount: options.length,
@@ -851,7 +962,7 @@ class AppCustomizationPage extends ConsumerWidget {
           itemBuilder: (context, index) {
             final option = options[index];
             final selected = settings.androidAssistantTrigger == option.value;
-            return SettingsSelectorTile(
+            return AdaptiveSelectionTile(
               title: option.label,
               selected: selected,
               onTap: () {
@@ -905,10 +1016,8 @@ class AppCustomizationPage extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _SectionHeader(title: l10n.sttSettings),
-        const SizedBox(height: Spacing.sm),
-        ConduitCard(
-          padding: const EdgeInsets.all(Spacing.md),
+        InsetGroupedSection(
+          title: l10n.sttSettings,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -927,7 +1036,7 @@ class AppCustomizationPage extends ConsumerWidget {
                     child: Text(
                       l10n.sttEngineLabel,
                       style: theme.bodyMedium?.copyWith(
-                        color: theme.sidebarForeground,
+                        color: theme.textPrimary,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
@@ -971,9 +1080,7 @@ class AppCustomizationPage extends ConsumerWidget {
                   key: ValueKey<String>(
                     'stt-desc-${settings.sttPreference.name}',
                   ),
-                  style: theme.bodyMedium?.copyWith(
-                    color: theme.sidebarForeground.withValues(alpha: 0.9),
-                  ),
+                  style: theme.bodySmall?.copyWith(color: theme.textSecondary),
                 ),
               ),
               if (warnings.isNotEmpty) ...[
@@ -1008,7 +1115,7 @@ class AppCustomizationPage extends ConsumerWidget {
                           Text(
                             l10n.sttSilenceDuration,
                             style: theme.bodyMedium?.copyWith(
-                              color: theme.sidebarForeground,
+                              color: theme.textPrimary,
                               fontWeight: FontWeight.w600,
                             ),
                           ),
@@ -1016,9 +1123,7 @@ class AppCustomizationPage extends ConsumerWidget {
                           Text(
                             '${settings.voiceSilenceDuration}ms',
                             style: theme.bodySmall?.copyWith(
-                              color: theme.sidebarForeground.withValues(
-                                alpha: 0.7,
-                              ),
+                              color: theme.textSecondary,
                             ),
                           ),
                         ],
@@ -1049,9 +1154,7 @@ class AppCustomizationPage extends ConsumerWidget {
                 ),
                 Text(
                   l10n.sttSilenceDurationDescription,
-                  style: theme.bodySmall?.copyWith(
-                    color: theme.sidebarForeground.withValues(alpha: 0.7),
-                  ),
+                  style: theme.bodySmall?.copyWith(color: theme.textSecondary),
                 ),
               ],
             ],
@@ -1068,52 +1171,20 @@ class AppCustomizationPage extends ConsumerWidget {
   ) {
     final theme = context.conduitTheme;
     final l10n = AppLocalizations.of(context)!;
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: () => showSttLanguagePickerSheet(context, ref, settings),
-      child: Row(
-        children: [
-          _buildIconBadge(
-            context,
-            UiUtils.platformIcon(
-              ios: CupertinoIcons.globe,
-              android: Icons.language,
-            ),
-            color: theme.buttonPrimary,
-          ),
-          const SizedBox(width: Spacing.md),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  l10n.sttTranscriptionLanguage,
-                  style: theme.bodyMedium?.copyWith(
-                    color: theme.sidebarForeground,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: Spacing.xs),
-                Text(
-                  sttLanguageSubtitle(l10n, settings),
-                  style: theme.bodySmall?.copyWith(
-                    color: theme.sidebarForeground.withValues(alpha: 0.7),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: Spacing.sm),
-          Icon(
-            UiUtils.platformIcon(
-              ios: CupertinoIcons.chevron_right,
-              android: Icons.chevron_right,
-            ),
-            color: theme.iconSecondary,
-            size: IconSize.small,
-          ),
-        ],
+    return UtilityRow(
+      padding: EdgeInsets.zero,
+      leading: _buildIconBadge(
+        context,
+        UiUtils.platformIcon(
+          ios: CupertinoIcons.globe,
+          android: Icons.language,
+        ),
+        color: theme.buttonPrimary,
       ),
+      title: l10n.sttTranscriptionLanguage,
+      subtitle: sttLanguageSubtitle(l10n, settings),
+      showChevron: true,
+      onTap: () => showSttLanguagePickerSheet(context, ref, settings),
     );
   }
 
@@ -1127,7 +1198,12 @@ class AppCustomizationPage extends ConsumerWidget {
     final ttsService = ref.watch(textToSpeechServiceProvider);
     final bool deviceAvailable =
         ttsService.deviceEngineAvailable || !ttsService.isInitialized;
-    final bool serverAvailable = ttsService.serverEngineAvailable;
+    final serverSpeech = ref.watch(serverSpeechProviderProvider);
+    final bool serverAvailable = serverSpeech?.canSynthesize == true;
+    // Only Open WebUI lists voices; the others speak with their own.
+    final bool showsVoicePicker =
+        settings.ttsEngine == TtsEngine.device ||
+        serverSpeech?.offersVoiceChoice == true;
     final bool deviceSelectable = deviceAvailable;
     final bool serverSelectable = serverAvailable;
     final ttsDescription = _ttsPreferenceDescription(l10n, settings);
@@ -1147,10 +1223,8 @@ class AppCustomizationPage extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        _SectionHeader(title: l10n.ttsSettings),
-        const SizedBox(height: Spacing.sm),
-        ConduitCard(
-          padding: const EdgeInsets.all(Spacing.md),
+        InsetGroupedSection(
+          title: l10n.ttsSettings,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -1168,7 +1242,7 @@ class AppCustomizationPage extends ConsumerWidget {
                   Text(
                     l10n.ttsEngineLabel,
                     style: theme.bodyMedium?.copyWith(
-                      color: theme.sidebarForeground,
+                      color: theme.textPrimary,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -1177,12 +1251,9 @@ class AppCustomizationPage extends ConsumerWidget {
               const SizedBox(height: Spacing.sm),
               AdaptiveSegmentedSelector<TtsEngine>(
                 value: settings.ttsEngine,
-                onChanged: (engine) {
+                onChanged: (engine) async {
                   final notifier = ref.read(appSettingsProvider.notifier);
-                  if (engine == TtsEngine.server) {
-                    notifier.setTtsVoice(null);
-                  }
-                  notifier.setTtsEngine(engine);
+                  await notifier.setTtsEngineSelection(engine);
                 },
                 options: [
                   (
@@ -1207,9 +1278,7 @@ class AppCustomizationPage extends ConsumerWidget {
                 child: Text(
                   ttsDescription,
                   key: ValueKey<String>('tts-desc-${settings.ttsEngine.name}'),
-                  style: theme.bodyMedium?.copyWith(
-                    color: theme.sidebarForeground.withValues(alpha: 0.9),
-                  ),
+                  style: theme.bodySmall?.copyWith(color: theme.textSecondary),
                 ),
               ),
               if (warnings.isNotEmpty) ...[
@@ -1242,19 +1311,20 @@ class AppCustomizationPage extends ConsumerWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               // Voice Selection
-              CustomizationTile(
-                leading: _buildIconBadge(
-                  context,
-                  UiUtils.platformIcon(
-                    ios: CupertinoIcons.speaker_3,
-                    android: Icons.record_voice_over,
+              if (showsVoicePicker)
+                CustomizationTile(
+                  leading: _buildIconBadge(
+                    context,
+                    UiUtils.platformIcon(
+                      ios: CupertinoIcons.speaker_3,
+                      android: Icons.record_voice_over,
+                    ),
+                    color: theme.buttonPrimary,
                   ),
-                  color: theme.buttonPrimary,
+                  title: l10n.ttsVoice,
+                  subtitle: _ttsVoiceSubtitle(l10n, settings),
+                  onTap: () => _showVoicePickerSheet(context, ref, settings),
                 ),
-                title: l10n.ttsVoice,
-                subtitle: _ttsVoiceSubtitle(l10n, settings),
-                onTap: () => _showVoicePickerSheet(context, ref, settings),
-              ),
               if (settings.ttsEngine == TtsEngine.device) ...[
                 const SizedBox(height: Spacing.md),
                 // Speech rate is device-only. Server TTS uses backend defaults.
@@ -1323,13 +1393,14 @@ class AppCustomizationPage extends ConsumerWidget {
   }
 
   String _ttsVoiceSubtitle(AppLocalizations l10n, AppSettings settings) {
-    final deviceName = _getDisplayVoiceName(
-      settings.ttsVoice,
-      l10n.ttsSystemDefault,
+    final deviceName = formatTtsVoiceDisplayName(
+      settings.ttsVoiceName ?? settings.ttsVoice ?? l10n.ttsSystemDefault,
     );
     final serverVoice =
-        (settings.ttsServerVoiceName ?? settings.ttsServerVoiceId) ?? '';
-    final serverName = _getDisplayVoiceName(serverVoice, l10n.ttsSystemDefault);
+        settings.ttsServerVoiceName ??
+        settings.ttsServerVoiceId ??
+        l10n.ttsSystemDefault;
+    final serverName = formatTtsVoiceDisplayName(serverVoice);
 
     switch (settings.ttsEngine) {
       case TtsEngine.device:
@@ -1352,39 +1423,36 @@ class AppCustomizationPage extends ConsumerWidget {
     required ValueChanged<double> onChanged,
   }) {
     final theme = context.conduitTheme;
-    return ConduitCard(
-      padding: const EdgeInsets.all(Spacing.md),
+    return InsetGroupedSection(
+      padding: EdgeInsets.zero,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              _buildIconBadge(context, icon, color: theme.buttonPrimary),
-              const SizedBox(width: Spacing.sm),
-              Expanded(
-                child: Text(
-                  title,
-                  style: theme.bodyMedium?.copyWith(
-                    color: theme.sidebarForeground,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
+          UtilityRow(
+            leading: _buildIconBadge(context, icon, color: theme.buttonPrimary),
+            title: title,
+            status: Text(
+              label,
+              style: AppTypography.bodySmallStyle.copyWith(
+                color: theme.textSecondary,
+                fontWeight: FontWeight.w600,
               ),
-              Text(
-                label,
-                style: theme.bodyMedium?.copyWith(
-                  color: theme.sidebarForeground.withValues(alpha: 0.75),
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ],
+            ),
           ),
-          AdaptiveSlider(
-            value: value,
-            min: min,
-            max: max,
-            divisions: divisions,
-            onChanged: onChanged,
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              Spacing.md,
+              0,
+              Spacing.md,
+              Spacing.sm,
+            ),
+            child: AdaptiveSlider(
+              value: value,
+              min: min,
+              max: max,
+              divisions: divisions,
+              onChanged: onChanged,
+            ),
           ),
         ],
       ),
@@ -1458,32 +1526,24 @@ class AppCustomizationPage extends ConsumerWidget {
 
     // Combine: matching voices first, then others
     final voices = [...matchingVoices, ...otherVoices];
-    const systemDefaultId = '__system_default__';
+    final voiceOptions = buildTtsVoiceOptions(l10n, settings.ttsEngine, voices);
+    final selectedOptionId = selectedTtsVoiceOptionId(settings, voices);
     if (Platform.isIOS) {
       try {
         final selectedId = await NativeSheetBridge.instance
             .presentOptionsSelector(
               title: l10n.ttsSelectVoice,
-              selectedOptionId:
-                  ((settings.ttsEngine == TtsEngine.server
-                              ? settings.ttsServerVoiceId
-                              : settings.ttsVoice)
-                          ?.isNotEmpty ??
-                      false)
-                  ? settings.ttsEngine == TtsEngine.server
-                        ? settings.ttsServerVoiceId
-                        : settings.ttsVoice
-                  : systemDefaultId,
+              selectedOptionId: selectedOptionId,
               options: [
                 NativeSheetOptionConfig(
-                  id: systemDefaultId,
+                  id: ttsSystemDefaultVoiceId,
                   label: l10n.ttsSystemDefault,
                 ),
-                for (final voice in voices)
+                for (final option in voiceOptions)
                   NativeSheetOptionConfig(
-                    id: _getVoiceIdentifier(voice, settings.ttsEngine),
-                    label: _formatVoiceName(l10n, voice),
-                    subtitle: _getVoiceSubtitle(voice),
+                    id: option.id,
+                    label: option.label,
+                    subtitle: option.subtitle,
                   ),
               ],
               rethrowErrors: true,
@@ -1492,25 +1552,33 @@ class AppCustomizationPage extends ConsumerWidget {
           return;
         }
         final notifier = ref.read(appSettingsProvider.notifier);
-        if (selectedId == systemDefaultId) {
+        if (selectedId == ttsSystemDefaultVoiceId) {
           if (settings.ttsEngine == TtsEngine.server) {
-            notifier.setTtsServerVoiceId(null);
-            notifier.setTtsServerVoiceName(null);
+            await notifier.setTtsServerVoiceSelection(null, null);
           } else {
-            notifier.setTtsVoice(null);
+            await notifier.setTtsDeviceVoiceSelection(null, null);
           }
           return;
         }
-        final selectedVoice = voices.firstWhere(
-          (voice) =>
-              _getVoiceIdentifier(voice, settings.ttsEngine) == selectedId,
+        final selectedVoice = findTtsVoiceOption(
+          l10n,
+          settings.ttsEngine,
+          voices,
+          selectedId,
         );
-        final displayName = _formatVoiceName(l10n, selectedVoice);
+        if (selectedVoice == null) {
+          return;
+        }
         if (settings.ttsEngine == TtsEngine.server) {
-          notifier.setTtsServerVoiceId(selectedId);
-          notifier.setTtsServerVoiceName(displayName);
+          await notifier.setTtsServerVoiceSelection(
+            selectedVoice.id,
+            selectedVoice.label,
+          );
         } else {
-          notifier.setTtsVoice(selectedId);
+          await notifier.setTtsDeviceVoiceSelection(
+            selectedVoice.id,
+            selectedVoice.label,
+          );
         }
         return;
       } catch (_) {
@@ -1520,31 +1588,41 @@ class AppCustomizationPage extends ConsumerWidget {
       }
     }
 
-    final entries = <({String? section, Map<String, dynamic>? voice})>[
-      (section: null, voice: null),
+    final matchingOptions = buildTtsVoiceOptions(
+      l10n,
+      settings.ttsEngine,
+      matchingVoices,
+    );
+    final otherOptions = buildTtsVoiceOptions(
+      l10n,
+      settings.ttsEngine,
+      otherVoices,
+    );
+    final entries = <({String? section, TtsVoiceOptionData? option})>[
+      (section: null, option: null),
       if (matchingVoices.isNotEmpty && otherVoices.isNotEmpty)
         (
           section: l10n.ttsVoicesForLanguage(appLanguageCode.toUpperCase()),
-          voice: null,
+          option: null,
         ),
       if (matchingVoices.isNotEmpty && otherVoices.isNotEmpty)
-        for (final voice in matchingVoices) (section: null, voice: voice),
+        for (final option in matchingOptions) (section: null, option: option),
       if (matchingVoices.isNotEmpty && otherVoices.isNotEmpty)
-        (section: l10n.ttsOtherVoices, voice: null),
+        (section: l10n.ttsOtherVoices, option: null),
       if (matchingVoices.isNotEmpty && otherVoices.isNotEmpty)
-        for (final voice in otherVoices) (section: null, voice: voice),
+        for (final option in otherOptions) (section: null, option: option),
       if (matchingVoices.isEmpty || otherVoices.isEmpty)
-        for (final voice in voices) (section: null, voice: voice),
+        for (final option in voiceOptions) (section: null, option: option),
     ];
 
     if (!context.mounted) {
       return;
     }
 
-    showSettingsSheet<void>(
+    showAdaptiveSelectionSheet<void>(
       context: context,
       builder: (BuildContext sheetContext) {
-        return SettingsSelectorSheet(
+        return AdaptiveSelectionSheet(
           title: l10n.ttsSelectVoice,
           itemCount: entries.length,
           initialChildSize: 0.7,
@@ -1570,46 +1648,42 @@ class AppCustomizationPage extends ConsumerWidget {
               );
             }
 
-            final voice = entry.voice;
-            if (voice == null) {
-              final selected = settings.ttsEngine == TtsEngine.server
-                  ? settings.ttsServerVoiceId == null
-                  : settings.ttsVoice == null;
-              return SettingsSelectorTile(
+            final option = entry.option;
+            if (option == null) {
+              return AdaptiveSelectionTile(
                 title: l10n.ttsSystemDefault,
-                selected: selected,
-                onTap: () {
+                selected: selectedOptionId == ttsSystemDefaultVoiceId,
+                onTap: () async {
                   final notifier = ref.read(appSettingsProvider.notifier);
                   if (settings.ttsEngine == TtsEngine.server) {
-                    notifier.setTtsServerVoiceId(null);
-                    notifier.setTtsServerVoiceName(null);
+                    await notifier.setTtsServerVoiceSelection(null, null);
                   } else {
-                    notifier.setTtsVoice(null);
+                    await notifier.setTtsDeviceVoiceSelection(null, null);
                   }
+                  if (!sheetContext.mounted) return;
                   Navigator.of(sheetContext).pop();
                 },
               );
             }
 
-            final voiceId = _getVoiceIdentifier(voice, settings.ttsEngine);
-            final displayName = _formatVoiceName(l10n, voice);
-            final subtitle = _getVoiceSubtitle(voice);
-            final selected = settings.ttsEngine == TtsEngine.server
-                ? settings.ttsServerVoiceId == voiceId
-                : settings.ttsVoice == voiceId;
-
-            return SettingsSelectorTile(
-              title: displayName,
-              subtitle: subtitle.isEmpty ? null : subtitle,
-              selected: selected,
-              onTap: () {
+            return AdaptiveSelectionTile(
+              title: option.label,
+              subtitle: option.subtitle,
+              selected: option.id == selectedOptionId,
+              onTap: () async {
                 final notifier = ref.read(appSettingsProvider.notifier);
                 if (settings.ttsEngine == TtsEngine.server) {
-                  notifier.setTtsServerVoiceId(voiceId);
-                  notifier.setTtsServerVoiceName(displayName);
+                  await notifier.setTtsServerVoiceSelection(
+                    option.id,
+                    option.label,
+                  );
                 } else {
-                  notifier.setTtsVoice(voiceId);
+                  await notifier.setTtsDeviceVoiceSelection(
+                    option.id,
+                    option.label,
+                  );
                 }
+                if (!sheetContext.mounted) return;
                 Navigator.of(sheetContext).pop();
               },
             );
@@ -1655,169 +1729,6 @@ class AppCustomizationPage extends ConsumerWidget {
     }
   }
 
-  String _getDisplayVoiceName(String? voiceName, String defaultLabel) {
-    if (voiceName == null || voiceName.isEmpty) {
-      return defaultLabel;
-    }
-
-    // Format Android-style voice names with # separator
-    if (voiceName.contains('#')) {
-      final parts = voiceName.split('#');
-      if (parts.length > 1) {
-        var friendlyName = parts[1]
-            .replaceAll('-local', '')
-            .replaceAll('-network', '')
-            .replaceAll('_', ' ')
-            .split(' ')
-            .map(
-              (word) =>
-                  word.isEmpty ? '' : word[0].toUpperCase() + word.substring(1),
-            )
-            .join(' ');
-
-        final localeInfo = parts[0].toUpperCase().replaceAll('_', '-');
-        return '$localeInfo - $friendlyName';
-      }
-    }
-
-    // Handle Android-style voice IDs without # (e.g., "es-us-x-sfb-local")
-    if (voiceName.contains('-x-') ||
-        voiceName.endsWith('-local') ||
-        voiceName.endsWith('-network') ||
-        voiceName.endsWith('-language')) {
-      var localePart = '';
-      var qualityPart = '';
-
-      if (voiceName.contains('-x-')) {
-        final xParts = voiceName.split('-x-');
-        localePart = xParts[0];
-        qualityPart = xParts.length > 1 ? xParts[1] : '';
-      } else if (voiceName.contains('-language')) {
-        localePart = voiceName.replaceAll('-language', '');
-      } else {
-        final dashIndex = voiceName.indexOf('-', 3);
-        if (dashIndex > 0) {
-          localePart = voiceName.substring(0, dashIndex);
-        } else {
-          localePart = voiceName;
-        }
-      }
-
-      final formattedLocale = localePart.toUpperCase();
-
-      if (qualityPart.isNotEmpty) {
-        qualityPart = qualityPart
-            .replaceAll('-local', '')
-            .replaceAll('-network', '')
-            .toUpperCase();
-        return '$formattedLocale ($qualityPart)';
-      }
-
-      return formattedLocale;
-    }
-
-    // For iOS or other platforms with proper names, return as-is
-    return voiceName;
-  }
-
-  String _formatVoiceName(AppLocalizations l10n, Map<String, dynamic> voice) {
-    final name = voice['name'] as String? ?? l10n.unknownLabel;
-    final locale = voice['locale'] as String? ?? '';
-
-    // Handle Android-style voice IDs with # separator (e.g., "en-us-x-sfg#male_1-local")
-    if (name.contains('#')) {
-      final parts = name.split('#');
-      if (parts.length > 1) {
-        var friendlyName = parts[1]
-            .replaceAll('-local', '')
-            .replaceAll('-network', '')
-            .replaceAll('_', ' ')
-            .split(' ')
-            .map(
-              (word) =>
-                  word.isEmpty ? '' : word[0].toUpperCase() + word.substring(1),
-            )
-            .join(' ');
-
-        if (locale.isNotEmpty) {
-          final localeUpper = locale.toUpperCase().replaceAll('_', '-');
-          return '$localeUpper - $friendlyName';
-        }
-        return friendlyName;
-      }
-    }
-
-    // Handle Android-style voice IDs without # (e.g., "es-us-x-sfb-local", "ja-jp-x-htm-network")
-    if (name.contains('-x-') ||
-        name.endsWith('-local') ||
-        name.endsWith('-network') ||
-        name.endsWith('-language')) {
-      // Extract the main locale part (first 2-5 chars before -x- or other markers)
-      var localePart = '';
-      var qualityPart = '';
-
-      if (name.contains('-x-')) {
-        final xParts = name.split('-x-');
-        localePart = xParts[0];
-        qualityPart = xParts.length > 1 ? xParts[1] : '';
-      } else if (name.contains('-language')) {
-        localePart = name.replaceAll('-language', '');
-      } else {
-        // Try to extract locale (first 5 chars like "es-us" or "ja-jp")
-        final dashIndex = name.indexOf('-', 3);
-        if (dashIndex > 0) {
-          localePart = name.substring(0, dashIndex);
-        } else {
-          localePart = name;
-        }
-      }
-
-      // Format the locale part
-      final formattedLocale = localePart.toUpperCase();
-
-      // Format quality indicators
-      if (qualityPart.isNotEmpty) {
-        qualityPart = qualityPart
-            .replaceAll('-local', '')
-            .replaceAll('-network', '')
-            .toUpperCase();
-        return '$formattedLocale ($qualityPart)';
-      }
-
-      return formattedLocale;
-    }
-
-    // For iOS or other platforms with proper names, return as-is
-    return name;
-  }
-
-  String _getVoiceIdentifier(Map<String, dynamic> voice, TtsEngine engine) {
-    final id = voice['id'] as String?;
-    final name = voice['name'] as String?;
-    final identifier = voice['identifier'] as String?;
-
-    return switch (engine) {
-      TtsEngine.server => id ?? name ?? identifier ?? 'unknown',
-      TtsEngine.device => name ?? identifier ?? id ?? 'unknown',
-    };
-  }
-
-  String _getVoiceSubtitle(Map<String, dynamic> voice) {
-    final locale = voice['locale'] as String? ?? '';
-    final name = voice['name'] as String? ?? '';
-
-    // If name contains technical info, show the locale part
-    if (name.contains('#')) {
-      final parts = name.split('#');
-      if (parts.isNotEmpty) {
-        final localeInfo = parts[0].toUpperCase().replaceAll('_', '-');
-        return localeInfo;
-      }
-    }
-
-    return locale.isNotEmpty ? locale : '';
-  }
-
   String _resolveLanguageLabel(BuildContext context, String code) {
     final normalizedCode = code.replaceAll('_', '-');
 
@@ -1828,6 +1739,8 @@ class AppCustomizationPage extends ConsumerWidget {
         return AppLocalizations.of(context)!.czech;
       case 'sk':
         return AppLocalizations.of(context)!.slovak;
+      case 'pl':
+        return AppLocalizations.of(context)!.polish;
       case 'de':
         return AppLocalizations.of(context)!.deutsch;
       case 'fr':
@@ -1866,6 +1779,9 @@ class AppCustomizationPage extends ConsumerWidget {
         }
         if (normalizedCode == 'sk') {
           return AppLocalizations.of(context)!.slovak;
+        }
+        if (normalizedCode == 'pl') {
+          return AppLocalizations.of(context)!.polish;
         }
         return AppLocalizations.of(context)!.system;
     }
@@ -1938,10 +1854,10 @@ class AppCustomizationPage extends ConsumerWidget {
       return;
     }
 
-    await showSettingsSheet<void>(
+    await showAdaptiveSelectionSheet<void>(
       context: context,
       builder: (sheetContext) {
-        return SettingsSelectorSheet(
+        return AdaptiveSelectionSheet(
           title: l10n.transportMode,
           itemCount: options.length,
           initialChildSize: 0.42,
@@ -1950,7 +1866,7 @@ class AppCustomizationPage extends ConsumerWidget {
           itemBuilder: (context, index) {
             final option = options[index];
             final selected = current == option.value;
-            return SettingsSelectorTile(
+            return AdaptiveSelectionTile(
               title: option.title,
               subtitle: option.subtitle,
               selected: selected,
@@ -1969,28 +1885,13 @@ class AppCustomizationPage extends ConsumerWidget {
     );
   }
 
+  /// Current value shown trailing a row in secondary ink, the way iOS
+  /// settings show values ("System", "English").
   Widget _buildValueBadge(BuildContext context, String label) {
     final theme = context.conduitTheme;
-    return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: Spacing.md,
-        vertical: Spacing.xs,
-      ),
-      decoration: BoxDecoration(
-        color: theme.buttonPrimary.withValues(alpha: 0.15),
-        borderRadius: BorderRadius.circular(AppBorderRadius.small),
-        border: Border.all(
-          color: theme.buttonPrimary.withValues(alpha: 0.25),
-          width: BorderWidth.thin,
-        ),
-      ),
-      child: Text(
-        label,
-        style: theme.bodySmall?.copyWith(
-          color: theme.buttonPrimary,
-          fontWeight: FontWeight.w600,
-        ),
-      ),
+    return Text(
+      label,
+      style: AppTypography.bodyMediumStyle.copyWith(color: theme.textSecondary),
     );
   }
 
@@ -1999,20 +1900,7 @@ class AppCustomizationPage extends ConsumerWidget {
     IconData icon, {
     required Color color,
   }) {
-    return Container(
-      width: 40,
-      height: 40,
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(AppBorderRadius.small),
-        border: Border.all(
-          color: color.withValues(alpha: 0.2),
-          width: BorderWidth.thin,
-        ),
-      ),
-      alignment: Alignment.center,
-      child: Icon(icon, color: color, size: IconSize.medium),
-    );
+    return SettingsIconBadge(icon: icon, color: color);
   }
 
   Future<void> _showPaletteSelectorSheet(
@@ -2056,10 +1944,10 @@ class AppCustomizationPage extends ConsumerWidget {
       return;
     }
 
-    await showSettingsSheet<void>(
+    await showAdaptiveSelectionSheet<void>(
       context: context,
       builder: (sheetContext) {
-        return SettingsSelectorSheet(
+        return AdaptiveSelectionSheet(
           title: l10n.themePalette,
           itemCount: palettes.length,
           initialChildSize: 0.66,
@@ -2067,7 +1955,7 @@ class AppCustomizationPage extends ConsumerWidget {
           maxChildSize: 0.86,
           itemBuilder: (context, index) {
             final palette = palettes[index];
-            return SettingsSelectorTile(
+            return AdaptiveSelectionTile(
               title: palette.label(l10n),
               subtitle: palette.description(l10n),
               selected: palette.id == activePaletteId,
@@ -2103,6 +1991,7 @@ class AppCustomizationPage extends ConsumerWidget {
       (value: 'en', label: l10n.english),
       (value: 'cs', label: l10n.czech),
       (value: 'sk', label: l10n.slovak),
+      (value: 'pl', label: l10n.polish),
       (value: 'de', label: l10n.deutsch),
       (value: 'es', label: l10n.espanol),
       (value: 'fr', label: l10n.francais),
@@ -2144,10 +2033,10 @@ class AppCustomizationPage extends ConsumerWidget {
       return null;
     }
 
-    return showSettingsSheet<String>(
+    return showAdaptiveSelectionSheet<String>(
       context: context,
       builder: (sheetContext) {
-        return SettingsSelectorSheet(
+        return AdaptiveSelectionSheet(
           title: AppLocalizations.of(sheetContext)!.appLanguage,
           itemCount: options.length,
           initialChildSize: 0.72,
@@ -2155,7 +2044,7 @@ class AppCustomizationPage extends ConsumerWidget {
           maxChildSize: 0.86,
           itemBuilder: (context, index) {
             final option = options[index];
-            return SettingsSelectorTile(
+            return AdaptiveSelectionTile(
               title: option.label,
               selected: normalizedCurrent == option.value,
               onTap: () => Navigator.pop(sheetContext, option.value),
@@ -2360,21 +2249,6 @@ class _PaletteColorDot extends StatelessWidget {
           width: BorderWidth.thin,
         ),
       ),
-    );
-  }
-}
-
-class _SectionHeader extends StatelessWidget {
-  const _SectionHeader({required this.title});
-
-  final String title;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = context.conduitTheme;
-    return Text(
-      title,
-      style: theme.headingSmall?.copyWith(color: theme.sidebarForeground),
     );
   }
 }

@@ -10,18 +10,18 @@ upgrade (server plan decision **G-5** resolves to "deploy the server; the app
 follows"). The rebuilt app is tested against a local Open WebUI 0.12.2 first, then
 against fadi.furqaan.ai once that server is upgraded.
 
-## 2. Customer layer on the rebuilt base (`fadi-v4`, then joined into `fadi`)
+## 2. Customer layer on the rebuilt base (built as `fadi-v4`, joined into `fadi`)
 
 | piece | value |
 |---|---|
 | `lib/core/deployment/deployment.dart` → `DeploymentPolicy` | locked server `id: 'locked-server'`, name `fadi.furqaan.ai`, urls `['https://fadi.furqaan.ai']`; `allowedBackends: {owui}`; `allowAccountManagement: false`; `authModes: {credentials, sso}`; `ssoProviders: ['google']` (straight to `/oauth/google/login`, as today); on-device web search off |
 | `BrandConfig` | appName `FADI`; tagline `FADI (Furqaan AI Data & Intelligence)`; no GitHub / donation / store-review links; release notes off; CallKit and license name `FADI` |
-| ARB product name (R-10) | run `tool/apply_brand_strings.dart` with `FADI` (today's branch localises "FADI" in all locales; upstream now has 14) |
-| Android | `applicationId "app.furqaan.fadi"` (+ upstream's debug suffix), labels `FADI` / `Ask FADI`, widget name; `namespace` unchanged |
-| iOS | bundle ids `app.furqaan.fadi`, `.debug`, `.ShareExtension`, `.ConduitWidget`, `.RunnerTests` (and debug variants) across the 12 pbxproj entries; app group to match `home_widget_service.dart`; `CFBundleDisplayName FADI` + 13 `InfoPlist.strings`; Share extension "Ask FADI" |
-| icons, splash, sign-in mark | the faceted-gem kit (`/Users/smk/Dev/logo`): Android adaptive + legacy mipmaps (debug variant too), iOS AppIcon (+ AppIcon-Debug), splash, `assets/icons/brand_mark.png`; generated with `flutter_launcher_icons` (G0) |
+| ARB product name (R-10) | `dart run tool/apply_brand_strings.dart --name FADI` over all 14 locales (whole-word only: inflected forms such as cs/sk/pl "Conduitu" stay); then `flutter gen-l10n` |
+| Android | `applicationId "app.furqaan.fadi"` (+ upstream's `.debug` suffix), manifest labels `FADI` / `Ask FADI`, `strings.xml` values, assistant overlay label; `namespace`, Kotlin package and channel names unchanged |
+| iOS | bundle ids `app.furqaan.fadi`, `.debug`, `.ShareExtension`, `.ConduitWidget`, `.RunnerTests` (12 pbxproj entries); `Info.plist` and every `*.lproj/*.strings` **value** says FADI (keys untouched: App Intents uses them); Share extension "Ask FADI". **App group is still upstream's** `group.app.cogwheel.conduit` (as in the earlier fork): an iOS release needs FADI's own app group on its Apple team, changed in the pbxproj (`APP_GROUP_ID`, 4 entries) and `lib/platform/home_widget_service.dart` together |
+| icons, splash | Faceted Gem sources in `assets/icons/` (`icon.png`, `icon_foreground.png`, `splash.png`, `splash_dark.png`; masters in `/Users/smk/Dev/logo`); `flutter_launcher_icons` + `flutter_native_splash` config in `pubspec.yaml`, regenerate with `dart run flutter_launcher_icons` and `dart run flutter_native_splash:create`. Debug builds show the FADI icon too (Android debug mipmaps removed; iOS `AppIcon-Debug` holds the FADI icons). The sign-in page has no logo upstream, so the old sign-in mark is gone (optional follow-up: a `BrandConfig` sign-in image) |
 | Email | default `<server>/email/app`; no `EMAIL_APP_URL` define needed |
-| Firebase (push) | `android/app/google-services.json` and `ios/Runner/GoogleService-Info.plist` from the FADI Firebase project — **gitignored**, supplied at build time; APNs key uploaded to that project for iOS (R-12, owner) |
+| Firebase (push) | `android/app/google-services.json` and `ios/Runner/GoogleService-Info.plist` from the FADI Firebase project — **gitignored**, supplied at build time. Android: dropping the file in is enough. iOS (owner, once): add the iOS app with bundle id `app.furqaan.fadi` in Firebase; upload an APNs Auth Key (.p8, Key ID + Team ID) under Cloud Messaging; in Xcode add Push Notifications (writes `aps-environment`) and Background Modes → Remote notifications; App ID/profile with Push; `pod install`; on a device check token, foreground notification, tap → Email message, and that sign-out stops pushes. Don't set foreground presentation options in the AppDelegate (pushes would show twice) |
 
 ## 3. Server settings the app expects (fadi.furqaan.ai on 0.12.2)
 

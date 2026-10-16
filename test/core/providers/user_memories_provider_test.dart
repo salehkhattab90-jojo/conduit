@@ -1,10 +1,12 @@
 import 'package:checks/checks.dart';
-import 'package:conduit/core/models/server_config.dart';
-import 'package:conduit/core/models/server_memory.dart';
-import 'package:conduit/core/providers/app_providers.dart';
-import 'package:conduit/core/services/api_service.dart';
-import 'package:conduit/core/services/optimized_storage_service.dart';
-import 'package:conduit/core/services/worker_manager.dart';
+import 'package:conduit_core/auth/api_auth_interceptor.dart';
+import 'package:conduit_core/features/auth/providers/unified_auth_providers.dart';
+import 'package:conduit_core/models/server_config.dart';
+import 'package:conduit_core/models/server_memory.dart';
+import 'package:conduit_core/providers/app_providers.dart';
+import 'package:conduit_core/services/api_service.dart';
+import 'package:conduit_core/services/optimized_storage_service.dart';
+import 'package:conduit_core/services/worker_manager.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -29,9 +31,8 @@ void main() {
 
       final memories = await _loadMemories(container);
 
-      check(
-        memories.map((memory) => memory.id).toList(),
-      ).deepEquals(['memory-2', 'memory-1']);
+      check(memories.map((memory) => memory.id).toList())
+          .deepEquals(['memory-2', 'memory-1']);
     });
 
     test('add, update, and delete keep local state sorted', () async {
@@ -68,15 +69,13 @@ void main() {
 
       final updated = await notifier.updateItem('memory-1', 'revise first');
       check(updated.content).equals('First updated');
-      check(
-        api.updatedRequests,
-      ).deepEquals([(memoryId: 'memory-1', content: 'revise first')]);
+      check(api.updatedRequests)
+          .deepEquals([(memoryId: 'memory-1', content: 'revise first')]);
       final currentAfterUpdate = container
           .read(userMemoriesProvider)
           .requireValue;
-      check(
-        currentAfterUpdate.map((it) => it.id),
-      ).deepEquals(['memory-1', 'memory-3', 'memory-2']);
+      check(currentAfterUpdate.map((it) => it.id))
+          .deepEquals(['memory-1', 'memory-3', 'memory-2']);
       check(currentAfterUpdate.first.content).equals('First updated');
 
       await notifier.deleteItem('memory-2');
@@ -107,9 +106,8 @@ void main() {
           .updateItem('missing', 'ignored locally');
 
       final memories = container.read(userMemoriesProvider).requireValue;
-      check(
-        memories.map((memory) => memory.id).toList(),
-      ).deepEquals(['memory-1']);
+      check(memories.map((memory) => memory.id).toList())
+          .deepEquals(['memory-1']);
     });
 
     test(
@@ -173,6 +171,9 @@ ProviderContainer _container(_FakeUserMemoriesApiService api) {
   return ProviderContainer(
     overrides: [
       apiServiceProvider.overrideWithValue(api),
+      isAuthenticatedProvider2.overrideWithValue(true),
+      authTokenProvider3.overrideWithValue('token'),
+      currentUserProvider2.overrideWithValue(null),
       optimizedStorageServiceProvider.overrideWithValue(
         _FakeOptimizedStorageService(),
       ),
@@ -188,7 +189,15 @@ Future<List<ServerMemory>> _loadMemories(ProviderContainer container) async {
 class _FakeOptimizedStorageService extends Fake
     implements OptimizedStorageService {
   @override
+  bool isUncommittedServerConfigCandidate(ServerConfig config) => false;
+
+  @override
   Future<List<ServerConfig>> getServerConfigs() async => const [_serverConfig];
+
+  @override
+  Future<List<ServerConfig>> getServerConfigsStrict() async => const [
+    _serverConfig,
+  ];
 
   @override
   Future<String?> getActiveServerId() async => _serverConfig.id;
@@ -212,13 +221,25 @@ class _FakeUserMemoriesApiService extends ApiService {
   int getMemoriesCalls = 0;
 
   @override
-  Future<List<ServerMemory>> getMemories() async {
+  Future<Map<String, dynamic>> getUserPermissions({
+    ApiAuthSnapshot? authSnapshot,
+  }) async => const {};
+
+  @override
+  Future<List<ServerMemory>> getMemories({
+    ApiAuthSnapshot? authSnapshot,
+  }) async {
     getMemoriesCalls += 1;
     return initialMemories;
   }
 
   @override
-  Future<ServerMemory> createMemory({required String content}) async {
+  Future<ServerMemory> createMemory({
+    required String content,
+    String type = ServerMemory.userType,
+    String? path,
+    ApiAuthSnapshot? authSnapshot,
+  }) async {
     createdContents.add(content);
     final created = createdMemory;
     if (created == null) {
@@ -231,6 +252,9 @@ class _FakeUserMemoriesApiService extends ApiService {
   Future<ServerMemory> updateMemory({
     required String memoryId,
     required String content,
+    String? type,
+    String? path,
+    ApiAuthSnapshot? authSnapshot,
   }) async {
     updatedRequests.add((memoryId: memoryId, content: content));
     final updated = updatedMemories[memoryId];
@@ -241,12 +265,15 @@ class _FakeUserMemoriesApiService extends ApiService {
   }
 
   @override
-  Future<void> deleteMemory(String memoryId) async {
+  Future<void> deleteMemory(
+    String memoryId, {
+    ApiAuthSnapshot? authSnapshot,
+  }) async {
     deletedIds.add(memoryId);
   }
 
   @override
-  Future<void> clearAllMemories() async {
+  Future<void> clearAllMemories({ApiAuthSnapshot? authSnapshot}) async {
     clearAllCalls += 1;
   }
 }

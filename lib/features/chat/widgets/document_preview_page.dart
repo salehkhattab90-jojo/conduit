@@ -1,57 +1,49 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
-import 'package:adaptive_platform_ui/adaptive_platform_ui.dart';
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart';
+import 'package:conduit_core/features/chat/utils/document_deliveries.dart';
+import 'package:conduit_core/features/terminal/controllers/terminal_controller_gateways.dart'
+    show safeTerminalFileName;
+import 'package:conduit_core/providers/app_providers.dart';
+import 'package:conduit_core/services/api_service.dart';
+import 'package:conduit_core/services/worker_manager.dart';
+import 'package:conduit_core/utils/debug_logger.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
-import '../../../core/providers/app_providers.dart';
-import '../../../core/services/api_service.dart';
-import '../../../core/utils/debug_logger.dart';
+import '../../../l10n/app_localizations.dart';
 import '../../../shared/theme/theme_extensions.dart';
 import '../../../shared/utils/utf16_sanitizer.dart';
 import '../../../shared/widgets/adaptive_route_shell.dart';
 import '../../../shared/widgets/markdown/renderer/pdf_inline_view.dart';
+import '../../../shared/widgets/platform_ui/platform_ui.dart';
+import '../../../shared/widgets/platform_ui/vocabulary.dart';
 import '../../../shared/widgets/web_content_embed.dart';
 
-/// Full-screen preview of a generated delivery.
+/// Full-screen preview of a generated document, with the download of its
+/// real file.
 ///
-/// Two modes, matching the two embed shapes the middleware produces:
-///
-/// - [previewUrl]: the post-0.4.0 docgen contract — a preview FILE (a PDF
-///   rendered FROM the real file's bytes) fetched with authentication and
-///   displayed via the in-repo PDF viewer.
-/// - [previewHtml]: legacy docgen HTML side-previews and `show`-delivered
-///   artifacts — a self-contained HTML string rendered in a sandboxed,
-///   zoomable web view (for artifacts the HTML IS the deliverable, live).
-///
-/// The Download action fetches the REAL file (the user opens it in whatever
-/// app they prefer); artifacts carry no file id, so download is disabled.
+/// A structured preview (a rendered PDF of the real file) is fetched with the
+/// session's authentication and shown by [PdfInlineView]; a legacy HTML
+/// preview or an HTML artifact renders in the sandboxed [WebContentEmbed].
+/// Download fetches the real file through the files API and hands it to the
+/// share sheet, so it opens in whatever app the user prefers; with no real
+/// file (an artifact, or a preview whose file did not arrive) there is no
+/// Download action.
 class DocumentPreviewPage extends ConsumerStatefulWidget {
   const DocumentPreviewPage({
     super.key,
-    this.previewHtml,
-    this.previewUrl,
-    required this.fileName,
-    this.fileId,
-  }) : assert(previewHtml != null || previewUrl != null);
+    required this.delivery,
+    required this.title,
+  });
 
-  /// Legacy/artifact mode: HTML source to render. Null in structured mode.
-  final String? previewHtml;
-
-  /// Structured mode: URL of the rendered preview file (typically PDF),
-  /// relative or absolute — resolved and authenticated by the PDF viewer.
-  final String? previewUrl;
-
-  /// Display name of the real file (also used for the downloaded file).
-  final String fileName;
-
-  /// Open WebUI file id of the real file, for download. Null disables download.
-  final String? fileId;
+  final DocumentDelivery delivery;
+  final String title;
 
   @override
   ConsumerState<DocumentPreviewPage> createState() =>
@@ -61,42 +53,44 @@ class DocumentPreviewPage extends ConsumerStatefulWidget {
 class _DocumentPreviewPageState extends ConsumerState<DocumentPreviewPage> {
   bool _downloading = false;
 
-  Future<void> _download() async {
+  Future<void> _download(String fileId) async {
     if (_downloading) return;
-    final fileId = widget.fileId;
-    final messenger = ScaffoldMessenger.maybeOf(context);
+    final l10n = AppLocalizations.of(context)!;
     final api = ref.read(apiServiceProvider);
-    if (fileId == null || fileId.isEmpty || api is! ApiService) {
-      messenger?.showSnackBar(
-        const SnackBar(content: Text('This document can’t be downloaded.')),
-      );
-      return;
-    }
+    final worker = ref.read(workerManagerProvider);
     _downloading = true;
     try {
+      if (api is! ApiService) throw StateError('No API session');
       final content = await api.getFileContent(fileId);
-      // getFileContent returns raw base64 for non-image files (and a data: URL
-      // for images) — strip the data-URL prefix if present, then decode.
-      final b64 = content.startsWith('data:')
+      // Raw base64 for documents; a data URL for images.
+      final encoded = content.startsWith('data:')
           ? content.substring(content.indexOf(',') + 1)
           : content;
-      final bytes = base64Decode(b64);
-      final dir = await getTemporaryDirectory();
-      final safe = widget.fileName
-          .replaceAll(RegExp(r'[\\/:*?"<>|]'), '_')
-          .trim();
-      final file = File('${dir.path}/${safe.isEmpty ? 'document' : safe}');
+      final bytes = await worker.schedule<String, Uint8List>(
+        _decodeDocumentBase64,
+        encoded,
+        debugLabel: 'document_download_decode',
+      );
+      final directory = await getTemporaryDirectory();
+      final fileName = safeTerminalFileName(widget.title);
+      final file = File(p.join(directory.path, fileName));
       await file.writeAsBytes(bytes, flush: true);
       await SharePlus.instance.share(
-        ShareParams(files: <XFile>[XFile(file.path, name: widget.fileName)]),
+        ShareParams(files: <XFile>[XFile(file.path, name: fileName)]),
       );
-    } catch (e) {
-      DebugLogger.log('Failed to download document: $e', scope: 'chat/document');
-      messenger?.showSnackBar(
-        const SnackBar(
-          content: Text('Couldn’t download this document. Please try again.'),
-        ),
+    } catch (error) {
+      DebugLogger.error(
+        'document-download-failed',
+        scope: 'chat/document',
+        error: error,
       );
+      if (mounted) {
+        AdaptiveSnackBar.show(
+          context,
+          message: l10n.terminalDownloadFailed,
+          type: AdaptiveSnackBarType.error,
+        );
+      }
     } finally {
       _downloading = false;
     }
@@ -105,40 +99,52 @@ class _DocumentPreviewPageState extends ConsumerState<DocumentPreviewPage> {
   @override
   Widget build(BuildContext context) {
     final theme = context.conduitTheme;
+    final delivery = widget.delivery;
+    final fileId = delivery.fileId;
+    final previewUrl = delivery.previewUrl;
+    final previewHtml = delivery.previewHtml;
+
+    final Widget body;
+    if (previewUrl != null) {
+      body = SingleChildScrollView(
+        padding: const EdgeInsets.all(Spacing.md),
+        child: Center(
+          child: PdfInlineView(
+            url: previewUrl,
+            label: delivery.previewName ?? widget.title,
+          ),
+        ),
+      );
+    } else if (previewHtml != null) {
+      body = WebContentEmbed(
+        source: previewHtml,
+        deferUntilExpanded: false,
+        initiallyExpanded: true,
+        showChrome: false,
+        fillAvailableHeight: true,
+      );
+    } else {
+      body = const SizedBox.shrink();
+    }
+
     return AdaptiveRouteShell(
       backgroundColor: theme.surfaceBackground,
       bodySafeArea: true,
       appBar: AdaptiveAppBar(
-        title: sanitizeUtf16(widget.fileName),
+        title: sanitizeUtf16(widget.title),
         actions: [
-          AdaptiveAppBarAction(
-            iosSymbol: 'square.and.arrow.down',
-            icon: Platform.isIOS
-                ? CupertinoIcons.cloud_download
-                : Icons.file_download_outlined,
-            onPressed: () => unawaited(_download()),
-          ),
+          if (fileId != null)
+            AdaptiveAppBarAction(
+              iosSymbol: 'square.and.arrow.down',
+              icon: Icons.file_download_outlined,
+              onPressed: () => unawaited(_download(fileId)),
+            ),
         ],
       ),
-      body: SizedBox.expand(
-        child: widget.previewUrl != null
-            ? SingleChildScrollView(
-                padding: const EdgeInsets.all(Spacing.md),
-                child: Center(
-                  child: PdfInlineView(
-                    url: widget.previewUrl!,
-                    label: widget.fileName,
-                  ),
-                ),
-              )
-            : WebContentEmbed(
-                source: widget.previewHtml!,
-                deferUntilExpanded: false,
-                initiallyExpanded: true,
-                showChrome: false,
-                fillAvailableHeight: true,
-              ),
-      ),
+      body: SizedBox.expand(child: body),
     );
   }
 }
+
+Uint8List _decodeDocumentBase64(String raw) =>
+    base64Decode(raw.replaceAll(RegExp(r'\s'), ''));

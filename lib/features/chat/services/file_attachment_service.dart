@@ -1,55 +1,34 @@
-import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 import 'dart:ui' as ui;
-import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import 'package:material_ui/material_ui.dart';
+import 'package:riverpod/riverpod.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as path;
-import '../../../core/providers/app_providers.dart';
-import '../../../core/models/file_info.dart';
-import '../../../core/services/share_staging_cleanup.dart';
+
+import 'package:conduit_core/providers/app_providers.dart';
+import 'package:conduit_core/features/chat/providers/attached_files_provider.dart';
+
 import '../../../shared/utils/file_type_utils.dart';
-import '../../../core/services/worker_manager.dart';
-import '../../../core/utils/debug_logger.dart';
 
-/// Standard web image formats that LLMs can process directly.
-const Set<String> _standardImageFormats = {
-  '.jpg',
-  '.jpeg',
-  '.png',
-  '.gif',
-  '.webp',
-};
+import 'package:conduit_core/services/worker_manager.dart';
+import 'package:conduit_core/utils/debug_logger.dart';
+import 'package:conduit_core/features/direct_connections/direct_connections.dart';
+import 'package:conduit_core/features/hermes/models/hermes_model.dart';
 
-/// Formats that should always be converted to JPEG for compatibility.
-const Set<String> _alwaysConvertFormats = {
-  '.heic',
-  '.heif',
-  '.dng',
-  '.raw',
-  '.cr2',
-  '.nef',
-  '.arw',
-  '.orf',
-  '.rw2',
-  '.bmp',
-};
+// The attachment state moved to the core with the send pipeline that reads
+// it; the app's pickers and widgets keep importing it from here.
+export 'package:conduit_core/features/chat/providers/attached_files_provider.dart';
 
 /// Formats that should never be converted (animation, already optimal).
 const Set<String> _preserveFormats = {'.gif', '.webp'};
 
-/// All supported image formats (both standard and those requiring conversion).
-const Set<String> allSupportedImageFormats = {
-  ..._standardImageFormats,
-  ..._alwaysConvertFormats,
-};
-
 /// Returns true if the extension always requires conversion to JPEG.
 bool _alwaysNeedsConversion(String extension) {
-  return _alwaysConvertFormats.contains(extension);
+  return alwaysConvertImageFormats.contains(extension);
 }
 
 /// Returns true if the format should be preserved as-is.
@@ -78,11 +57,10 @@ Future<List<PlatformFile>> _pickPlatformFiles({
   List<String>? allowedExtensions,
 }) async {
   if (allowMultiple) {
-    final result = await FilePicker.pickFiles(
+    return FilePicker.pickFiles(
       type: type,
       allowedExtensions: allowedExtensions,
     );
-    return result?.files ?? const [];
   }
 
   final file = await FilePicker.pickFile(
@@ -147,7 +125,7 @@ Future<String?> convertImageFileToDataUrl(
 
       final convertedBytes = await _convertToJpeg(imageFile);
       if (convertedBytes != null) {
-        return _encodeToDataUrl(convertedBytes, 'image/jpeg', worker);
+        return await _encodeToDataUrl(convertedBytes, 'image/jpeg', worker);
       }
 
       DebugLogger.warning(
@@ -160,13 +138,13 @@ Future<String?> convertImageFileToDataUrl(
     if (_shouldPreserve(ext)) {
       final bytes = await imageFile.readAsBytes();
       final mimeType = ext == '.gif' ? 'image/gif' : 'image/webp';
-      return _encodeToDataUrl(bytes, mimeType, worker);
+      return await _encodeToDataUrl(bytes, mimeType, worker);
     }
 
     // Pass through standard browser-readable formats as-is.
     final bytes = await imageFile.readAsBytes();
     final mimeType = _mimeTypeForExtension(ext);
-    return _encodeToDataUrl(bytes, mimeType, worker);
+    return await _encodeToDataUrl(bytes, mimeType, worker);
   } catch (e) {
     DebugLogger.error('convert-image-failed', scope: 'attachments', error: e);
     return null;
@@ -231,26 +209,6 @@ String _timestampedName({required String prefix, required String extension}) {
   final String timestamp =
       '${now.year}${two(now.month)}${two(now.day)}_${two(now.hour)}${two(now.minute)}${two(now.second)}';
   return '${prefix}_$timestamp$ext';
-}
-
-/// Represents a locally selected attachment with a user-facing display name.
-class LocalAttachment {
-  LocalAttachment({required this.file, required this.displayName});
-
-  final File file;
-  final String displayName;
-
-  int get sizeInBytes => file.lengthSync();
-
-  String get extension {
-    final fromName = path.extension(displayName);
-    if (fromName.isNotEmpty) {
-      return fromName.toLowerCase();
-    }
-    return path.extension(file.path).toLowerCase();
-  }
-
-  bool get isImage => allSupportedImageFormats.contains(extension);
 }
 
 LocalAttachment _localAttachmentFromPath({
@@ -370,13 +328,10 @@ class FileAttachmentService {
 
   Future<List<LocalAttachment>> _pickImagesWithFilePicker() async {
     try {
-      final result = await FilePicker.pickFiles(type: FileType.image);
+      final files = await FilePicker.pickFiles(type: FileType.image);
+      if (files.isEmpty) return [];
 
-      if (result == null || result.files.isEmpty) {
-        return [];
-      }
-
-      return result.files.where((file) => file.path != null).map((file) {
+      return files.where((file) => file.path != null).map((file) {
         return _localAttachmentFromPath(
           filePath: file.path!,
           preferredName: file.name,
@@ -558,9 +513,6 @@ class FileAttachmentService {
     return dataUrl;
   }
 
-  /// Formats a byte count into a human-readable string.
-  String formatFileSize(int bytes) => FileTypeUtils.formatFileSize(bytes);
-
   /// Returns an emoji icon for the given [fileName] based on its extension.
   String getFileIcon(String fileName) {
     final ext = path.extension(fileName).toLowerCase();
@@ -570,51 +522,6 @@ class FileAttachmentService {
     );
   }
 }
-
-// File upload state
-class FileUploadState {
-  final File file;
-  final String fileName;
-  final int fileSize;
-  final double progress;
-  final FileUploadStatus status;
-  final String? fileId;
-  final String? error;
-  final bool? isImage;
-
-  /// For images: stores the base64 data URL (e.g., "data:image/png;base64,...")
-  /// This matches web client behavior where images are not uploaded to server.
-  final String? base64DataUrl;
-
-  FileUploadState({
-    required this.file,
-    required this.fileName,
-    required this.fileSize,
-    required this.progress,
-    required this.status,
-    this.fileId,
-    this.error,
-    this.isImage,
-    this.base64DataUrl,
-  });
-
-  /// Human-readable file size string.
-  String get formattedSize => FileTypeUtils.formatFileSize(fileSize);
-
-  /// Whether this attachment references a previously uploaded server file.
-  bool get isRemote => file.path.startsWith('remote://');
-
-  /// Emoji icon representing the file type.
-  String get fileIcon {
-    final ext = path.extension(fileName).toLowerCase();
-    return FileTypeUtils.emojiForExtension(
-      ext,
-      imageExtensions: allSupportedImageFormats,
-    );
-  }
-}
-
-enum FileUploadStatus { pending, uploading, completed, failed }
 
 // Mock file attachment service for reviewer mode
 class MockFileAttachmentService {
@@ -692,6 +599,18 @@ class MockFileAttachmentService {
   }
 }
 
+/// Emoji icon for an attachment tile.
+extension FileUploadStateIcon on FileUploadState {
+  /// Emoji icon representing the file type.
+  String get fileIcon {
+    final ext = path.extension(fileName).toLowerCase();
+    return FileTypeUtils.emojiForExtension(
+      ext,
+      imageExtensions: allSupportedImageFormats,
+    );
+  }
+}
+
 // Providers
 final fileAttachmentServiceProvider = Provider<dynamic>((ref) {
   final isReviewerMode = ref.watch(reviewerModeProvider);
@@ -700,77 +619,16 @@ final fileAttachmentServiceProvider = Provider<dynamic>((ref) {
     return MockFileAttachmentService();
   }
 
-  // Guard: only provide service when user is logged in
+  final selectedModel = ref.watch(selectedModelProvider);
+  final directEnabled =
+      selectedModel != null &&
+      ref.watch(directModelRegistryProvider).resolve(selectedModel) != null;
+  final hermesEnabled = selectedModel != null && isHermesModel(selectedModel);
+
+  // OpenWebUI uploads require an API, while direct/Hermes attachments are
+  // prepared locally before their provider-specific dispatch.
   final apiService = ref.watch(apiServiceProvider);
-  if (apiService == null) return null;
+  if (apiService == null && !directEnabled && !hermesEnabled) return null;
 
   return FileAttachmentService();
 });
-
-// State notifier for managing attached files
-class AttachedFilesNotifier extends Notifier<List<FileUploadState>> {
-  @override
-  List<FileUploadState> build() => [];
-
-  void addFiles(List<LocalAttachment> attachments) {
-    final newStates = attachments
-        .map(
-          (attachment) => FileUploadState(
-            file: attachment.file,
-            fileName: attachment.displayName,
-            fileSize: attachment.sizeInBytes,
-            progress: 0.0,
-            status: FileUploadStatus.pending,
-            isImage: attachment.isImage,
-          ),
-        )
-        .toList();
-
-    state = [...state, ...newStates];
-  }
-
-  void addRemoteFile(FileInfo file) {
-    if (state.any((entry) => entry.fileId == file.id)) {
-      return;
-    }
-
-    state = [
-      ...state,
-      FileUploadState(
-        file: File('remote://${file.id}'),
-        fileName: file.displayName,
-        fileSize: file.size,
-        progress: 1.0,
-        status: FileUploadStatus.completed,
-        fileId: file.id,
-        isImage: false,
-      ),
-    ];
-  }
-
-  void updateFileState(String filePath, FileUploadState newState) {
-    state = [
-      for (final fileState in state)
-        if (fileState.file.path == filePath) newState else fileState,
-    ];
-  }
-
-  void removeFile(String filePath) {
-    unawaited(deleteShareStagingFile(filePath));
-    state = state
-        .where((fileState) => fileState.file.path != filePath)
-        .toList();
-  }
-
-  void clearAll() {
-    for (final fileState in state) {
-      unawaited(deleteShareStagingFile(fileState.file.path));
-    }
-    state = [];
-  }
-}
-
-final attachedFilesProvider =
-    NotifierProvider<AttachedFilesNotifier, List<FileUploadState>>(
-      AttachedFilesNotifier.new,
-    );

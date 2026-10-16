@@ -110,10 +110,10 @@ folders, icons, splash) stays a customer-layer edit; platform channel names
   `resolveEmailAppUri(serverUrl)` (default `<server>/email/app`), message-type
   constants, pure builders for the token/theme/open scripts with a fixed target
   origin and escaping, `isAllowedEmailOrigin` — unit-tested.
-- Availability: `emailFeatureEnabledProvider` in
-  `core/providers/app_providers_feature_availability.dart`, probing the email app
-  once per account with the notes/channels probe-and-cache pattern (:333-375), so a
-  server without the email service never shows the tab.
+- Availability: the server's `/api/config` carries `features.enable_email` (this fork
+  family's Open WebUI, where the web client gates its Email nav on the same flag);
+  it is parsed into `BackendConfig` and drives `SidebarTabAvailability.emailEnabled`,
+  so a server without the email service never shows the tab.
 - New `lib/features/email/views/email_tab.dart` + a descriptor in
   `lib/features/navigation/widgets/sidebar_tab_registry.dart:133-198`
   (icons `mail`/`envelope`, `isVisible: hasOpenWebUi && emailEnabled`, search hint
@@ -300,8 +300,17 @@ model** in `ui.params.model_controls` and sends it after chat params
   group changes): `core/services/socket_service.dart:1410-1436` `_handleDisconnect`
   reconnects with backoff when `reason == 'io server disconnect'` and the transport
   should stay up; `access:updated` refreshes permissions and models.
+- `voice:play_animation` (0.12.1 builtin tool for voice avatars) is a socket call the
+  server waits up to 3 s on; the app answers `{status: 'unavailable'}` at once, since
+  it draws no avatar.
 - Already correct upstream, no change: final `done` after a mid-turn error
   (`streaming_helper.dart:3961-4013`).
+- Drift audit result (0.12.0 → 0.12.2, 208 commits): nothing breaks the app. Parity
+  gaps left for later, not in this rebase: realtime voice no longer cancels on
+  background noise (server sends `interrupt_response: false`; client should pause,
+  then cancel only on a real transcript); channel mute (`is_channel_muted`,
+  `channel:mute`); channel apps (`data.app` cards); a regenerate in a multi-model turn
+  should resend the stored `models` list.
 
 ## 10. Already covered by upstream (not re-implemented)
 

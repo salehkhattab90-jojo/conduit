@@ -3,8 +3,7 @@ import java.io.FileInputStream
 
 plugins {
     id("com.android.application")
-    id("kotlin-android")
-    // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
+    // The Flutter Gradle Plugin must be applied after the Android Gradle plugin.
     id("dev.flutter.flutter-gradle-plugin")
 }
 
@@ -16,15 +15,23 @@ if (keystorePropertiesFile.exists()) {
 
 android {
     namespace = "app.cogwheel.conduit"
-    compileSdk = 36
+    compileSdk = 37
     ndkVersion = "29.0.14206865"
 
     defaultConfig {
-    applicationId = "app.furqaan.fadi"
-    minSdk = flutter.minSdkVersion
-    targetSdk = 36
-    versionCode = flutter.versionCode
-    versionName = flutter.versionName
+        applicationId = "app.furqaan.fadi"
+        minSdk = flutter.minSdkVersion
+        targetSdk = flutter.targetSdkVersion
+        versionCode = flutter.versionCode
+        versionName = flutter.versionName
+        // Flutter adds x86_64 by default for non-split builds. Ship only ARM ABIs.
+        // Split builds set their ABIs through --target-platform instead.
+        if (providers.gradleProperty("split-per-abi").orNull != "true") {
+            ndk {
+                abiFilters.clear()
+                abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a"))
+            }
+        }
     }
 
     compileOptions {
@@ -33,11 +40,6 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
         // Enable core library desugaring for flutter_local_notifications
         isCoreLibraryDesugaringEnabled = true
-    }
-
-    kotlinOptions {
-        // Generate JVM bytecode targeting Java 17
-        jvmTarget = JavaVersion.VERSION_17.toString()
     }
 
     signingConfigs {
@@ -70,18 +72,32 @@ android {
     }
 }
 
+kotlin {
+    compilerOptions {
+        // Generate JVM bytecode targeting Java 17.
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
+    }
+}
+
 dependencies {
     // Core library desugaring for flutter_local_notifications
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+    implementation("androidx.activity:activity:1.12.4")
+    implementation("com.google.mlkit:genai-speech-recognition:1.0.0-alpha1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.17")
+    // Real org.json for JVM unit tests; the mockable android.jar only stubs it.
+    testImplementation("org.json:json:20240303")
 }
 
 flutter {
     source = "../.."
 }
 
-// Firebase (FCM push): apply the google-services plugin only when its config is
-// present. google-services.json is gitignored / injected per build, so the app
-// still builds without it — notifications are simply inert in that case.
+// Firebase (Email push): apply the google-services plugin only when this build
+// has a Firebase config. google-services.json is gitignored and supplied per
+// deployment; without it the app builds and runs with push turned off.
 if (file("google-services.json").exists()) {
     apply(plugin = "com.google.gms.google-services")
 }

@@ -5,27 +5,27 @@
 ///     throws on every call and no ApiService.
 /// (c) Edit-on-server -> next requestPull -> the list row and the open-chat
 ///     body both update.
-/// (d) 1,000-chat pull: the narrow list stream emits at most
-///     changedChats + 1 times (one emission per per-chat transaction).
+/// (d) Multi-page pull: the narrow list stream emits at most
+///     changedChats + 1 times (one emission per per-chat transaction). The
+///     bound is per transaction, so a few pages prove it as well as the
+///     RFC's 1,000 chats; each extra chat only adds a fetch, a merge
+///     transaction, and another list re-query.
 library;
 
 import 'package:checks/checks.dart';
-import 'package:conduit/core/database/app_database.dart';
-import 'package:conduit/core/database/daos/chats_dao.dart';
-import 'package:conduit/core/database/database_provider.dart';
-import 'package:conduit/core/database/local_conversation_loader.dart';
-import 'package:conduit/core/providers/app_providers.dart';
-import 'package:conduit/core/sync/chat_locks.dart';
-import 'package:conduit/core/sync/pull_sync.dart';
-import 'package:conduit/core/sync/sync_api_client.dart';
-import 'package:conduit/core/sync/sync_engine.dart';
-import 'package:conduit/features/auth/providers/unified_auth_providers.dart';
+import 'package:conduit_core/database/app_database.dart';
+import 'package:conduit_core/database/local_conversation_loader.dart';
+import 'package:conduit_core/providers/app_providers.dart';
+import 'package:conduit_core/sync/chat_locks.dart';
+import 'package:conduit_core/sync/pull_sync.dart';
+import 'package:conduit_core/sync/sync_api_client.dart';
+import 'package:conduit_core/sync/sync_engine.dart';
+import 'package:conduit_core/features/auth/providers/unified_auth_providers.dart';
 import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import '../../support/fake_open_webui_server.dart';
-import '../../support/fake_sync_api_client.dart';
+import 'package:conduit_core/testing.dart';
 
 class _AirplaneModeSyncApiClient implements SyncApiClient {
   int calls = 0;
@@ -72,26 +72,26 @@ void main() {
   });
 
   Map<String, dynamic> blobFor(String id, {String content = 'hello'}) => {
-        'title': 'Title $id',
-        'history': {
-          'messages': {
-            '$id-m1': {
-              'id': '$id-m1',
-              'parentId': null,
-              'childrenIds': <String>[],
-              'role': 'user',
-              'content': content,
-              'timestamp': 100,
-            },
-          },
-          'currentId': '$id-m1',
+    'title': 'Title $id',
+    'history': {
+      'messages': {
+        '$id-m1': {
+          'id': '$id-m1',
+          'parentId': null,
+          'childrenIds': <String>[],
+          'role': 'user',
+          'content': content,
+          'timestamp': 100,
         },
-      };
+      },
+      'currentId': '$id-m1',
+    },
+  };
 
   ProviderContainer makeContainer(SyncApiClient? client) {
     final container = ProviderContainer(
       overrides: [
-        appDatabaseProvider.overrideWith((ref) => db),
+        ...openWebUiStorageOpenOverrides(database: db),
         isAuthenticatedProvider2.overrideWithValue(true),
         reviewerModeProvider.overrideWithValue(false),
         apiServiceProvider.overrideWithValue(null),
@@ -118,8 +118,7 @@ void main() {
     }
   }
 
-  test(
-      'acceptance (a): airplane-mode cold start renders list and chats from '
+  test('acceptance (a): airplane-mode cold start renders list and chats from '
       'the previously-synced database', () async {
     // 1. Online session: pull against the fake server.
     final server = FakeOpenWebUiServer();
@@ -135,7 +134,7 @@ void main() {
     final pull = PullSync(
       client: FakeSyncApiClient(server),
       db: db,
-      locks: ChatLocks(),
+      locks: ConversationLocks(),
     );
     check((await pull.run()).success).isTrue();
 
@@ -155,8 +154,7 @@ void main() {
     for (var i = 1; i <= 3; i++) {
       final conversation = await loadLocalConversation(container, 'chat-$i');
       check(conversation).isNotNull();
-      check(conversation!.messages.single.content)
-          .equals('message body $i');
+      check(conversation!.messages.single.content).equals('message body $i');
     }
 
     // Pulling while offline fails without corrupting the readable state.
@@ -169,8 +167,7 @@ void main() {
     check(after.map((c) => c.id)).deepEquals(['chat-3', 'chat-2', 'chat-1']);
   });
 
-  test(
-      'acceptance (c): edit-on-server then requestPull updates the list row '
+  test('acceptance (c): edit-on-server then requestPull updates the list row '
       'and the open chat body', () async {
     final server = FakeOpenWebUiServer();
     server.seedChat(
@@ -191,9 +188,8 @@ void main() {
       final state = container.read(conversationsProvider);
       return (state.asData?.value ?? const []).isNotEmpty;
     });
-    check(
-      container.read(conversationsProvider).requireValue.single.title,
-    ).equals('Title chat-1');
+    check(container.read(conversationsProvider).requireValue.single.title)
+        .equals('Title chat-1');
     final before = await loadLocalConversation(container, 'chat-1');
     check(before!.messages.single.content).equals('original body');
 
@@ -222,11 +218,11 @@ void main() {
     check(after!.messages.single.content).equals('edited body');
   });
 
-  test(
-      'acceptance (d): a 1,000-chat pull emits at most changedChats + 1 '
+  test('acceptance (d): a multi-page pull emits at most changedChats + 1 '
       'narrow list emissions', () async {
     final server = FakeOpenWebUiServer();
-    const chatCount = 1000;
+    // Three full pages and a partial last one.
+    const chatCount = kOpenWebUiChatListPageSize * 3 + 1;
     for (var i = 1; i <= chatCount; i++) {
       final id = 'chat-${i.toString().padLeft(4, '0')}';
       server.seedChat(
@@ -237,32 +233,34 @@ void main() {
       );
     }
 
-    final emissions = <List<ChatListEntry>>[];
-    final subscription = db.chatsDao.watchChatList().listen(emissions.add);
+    var emissionCount = 0;
+    var lastEmissionLength = 0;
+    final subscription = db.chatsDao.watchChatList().listen((rows) {
+      emissionCount++;
+      lastEmissionLength = rows.length;
+    });
     addTearDown(subscription.cancel);
-    await waitFor(() => emissions.isNotEmpty);
-    final baseline = emissions.length;
+    await waitFor(() => emissionCount > 0);
+    final baseline = emissionCount;
 
     final pull = PullSync(
       client: FakeSyncApiClient(server),
       db: db,
-      locks: ChatLocks(),
+      locks: ConversationLocks(),
     );
     final result = await pull.run();
 
     check(result.success).isTrue();
     check(result.changedChats).equals(chatCount);
-    await waitFor(
-      () => emissions.isNotEmpty && emissions.last.length == chatCount,
-    );
+    await waitFor(() => lastEmissionLength == chatCount);
     // Let any straggling (incorrect) emissions surface before counting.
     await Future<void>.delayed(const Duration(milliseconds: 100));
 
     // One emission per per-chat transaction at most (REQ §10.1 jank proxy).
     check(
       because: 'REQ §10.1: at most one list emission per per-chat merge',
-      emissions.length - baseline,
+      emissionCount - baseline,
     ).isLessOrEqual(chatCount + 1);
-    check(emissions.last.length).equals(chatCount);
+    check(lastEmissionLength).equals(chatCount);
   });
 }

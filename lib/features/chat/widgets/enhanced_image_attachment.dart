@@ -1,68 +1,77 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:collection';
 import 'dart:io';
+import 'dart:math' as math;
+
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderImage;
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:cached_network_image_ce/cached_network_image.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:dio/dio.dart' as dio;
-import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
+
 import '../../../shared/theme/theme_extensions.dart';
-import '../../../shared/utils/platform_page_route.dart';
 import '../../../shared/widgets/jovial_svg_image.dart';
+import '../../../shared/widgets/conduit_components.dart';
 import '../../../shared/widgets/skeleton_loader.dart';
+import '../../../shared/widgets/platform_ui/platform_ui.dart';
+import '../services/image_viewer_files.dart';
+import '../services/native_image_viewer_bridge.dart';
+import 'image_gallery_scope.dart';
+
 import 'package:conduit/l10n/app_localizations.dart';
-import '../../../core/providers/app_providers.dart';
-import '../../../shared/widgets/adaptive_route_shell.dart';
-import '../../../core/utils/debug_logger.dart';
+
+import 'package:conduit_core/providers/app_providers.dart';
+
+import 'package:conduit_core/utils/debug_logger.dart';
+
+import 'package:conduit_core/network/conduit_user_agent.dart';
+
 import '../../../core/network/self_signed_image_cache_manager.dart';
 import '../../../core/network/image_header_utils.dart';
-import '../../../core/services/api_service.dart';
-import '../../../core/services/performance_profiler.dart';
-import '../../../core/services/worker_manager.dart';
+
+import 'package:conduit_core/services/api_service.dart';
+
+import '../../../core/services/image_attachment_cache_service.dart';
+
+import 'package:conduit_core/services/performance_profiler.dart';
+
+import '../../../shared/services/raster_media_policy.dart';
+
+import 'package:conduit_core/services/worker_manager.dart';
+
+export '../../../core/services/image_attachment_cache_service.dart'
+    show
+        ImageAttachmentCacheScope,
+        debugDecodedImageAttachmentByteBudget,
+        debugDecodedImageAttachmentCount,
+        debugDecodedImageAttachmentWeight,
+        debugHasDecodedImageAttachment,
+        debugHasImageAttachmentError,
+        debugHasResolvedImageAttachment,
+        debugResetImageAttachmentCaches,
+        debugResolvedImageAttachmentCount,
+        debugSeedImageAttachmentError,
+        debugSeedResolvedImageAttachment,
+        imageAttachmentCacheLifecycleProvider,
+        preCacheImageBytes;
+
+part 'full_screen_image_viewer.dart';
 
 final _base64WhitespacePattern = RegExp(r'\s');
-final _imageAttachmentCaches = _ImageAttachmentCaches();
-
-/// Pre-cache image bytes for instant display after upload.
-/// Call this with the server file ID and image bytes after successful upload.
-void preCacheImageBytes(String fileId, Uint8List bytes) {
-  if (fileId.isEmpty || bytes.isEmpty) return;
-  _imageAttachmentCaches.cacheBytes(fileId, bytes);
-}
-
-@visibleForTesting
-void debugResetImageAttachmentCaches() => _imageAttachmentCaches.clear();
-
-@visibleForTesting
-void debugSeedResolvedImageAttachment(
-  String attachmentId,
-  String resolvedData,
-) {
-  _imageAttachmentCaches.debugSeedResolvedData(attachmentId, resolvedData);
-}
-
-@visibleForTesting
-bool debugHasResolvedImageAttachment(String attachmentId) {
-  return _imageAttachmentCaches.hasResolvedData(attachmentId);
-}
-
-@visibleForTesting
-bool debugHasDecodedImageAttachment(String attachmentId) {
-  return _imageAttachmentCaches.hasDecodedBytes(attachmentId);
-}
 
 @visibleForTesting
 Future<void> debugDecodeCachedResolvedImageAttachment({
   required String attachmentId,
   required WorkerManager workerManager,
+  ImageAttachmentCacheScope? scope,
 }) async {
-  await _imageAttachmentCaches.decodeCachedResolvedDataForTesting(
+  await _imageAttachmentLoader.decodeCachedResolvedDataForTesting(
     attachmentId: attachmentId,
     workerManager: workerManager,
+    scope: scope,
   );
 }
 
@@ -71,17 +80,20 @@ Future<String?> debugDecodeCachedResolvedImageAttachmentError({
   required String attachmentId,
   required WorkerManager workerManager,
   required AppLocalizations l10n,
+  ImageAttachmentCacheScope? scope,
 }) async {
   final result = await _guardImageLoadFailure(
     attachmentId: attachmentId,
+    cacheScope: scope,
     l10n: l10n,
     load: () async {
-      await _imageAttachmentCaches.decodeCachedResolvedDataForTesting(
+      await _imageAttachmentLoader.decodeCachedResolvedDataForTesting(
         attachmentId: attachmentId,
         workerManager: workerManager,
+        scope: scope,
       );
-      return _imageAttachmentCaches.readCached(attachmentId) ??
-          const _ImageLoadResult(isSvg: false);
+      return imageAttachmentCacheStore.read(attachmentId, scope: scope) ??
+          const ImageAttachmentCacheEntry(isSvg: false);
     },
   );
   return result.error;
@@ -92,23 +104,22 @@ Future<String?> debugLoadImageAttachmentError({
   required String attachmentId,
   required WorkerManager workerManager,
   required AppLocalizations l10n,
+  ApiService? api,
+  ImageAttachmentCacheScope? scope,
 }) async {
   final result = await _guardImageLoadFailure(
     attachmentId: attachmentId,
+    cacheScope: scope,
     l10n: l10n,
-    load: () => _imageAttachmentCaches.load(
+    load: () => _imageAttachmentLoader.load(
       attachmentId: attachmentId,
       workerManager: workerManager,
-      api: null,
+      api: api,
       l10n: l10n,
+      cacheScope: scope,
     ),
   );
   return result.error;
-}
-
-@visibleForTesting
-int debugResolvedImageAttachmentCount() {
-  return _imageAttachmentCaches.resolvedDataCount;
 }
 
 Uint8List _decodeImageData(String data) {
@@ -125,192 +136,63 @@ Uint8List _decodeImageData(String data) {
 }
 
 /// Checks if data URL or content indicates SVG format.
-bool _isSvgDataUrl(String data) {
-  final lower = data.toLowerCase();
-  return lower.startsWith('data:image/svg+xml');
-}
+bool _isSvgDataUrl(String data) => imageAttachmentDataIsSvg(data);
 
 /// Checks if a URL points to an SVG file.
-bool _isSvgUrl(String url) {
-  final lowerUrl = url.toLowerCase();
-
-  // Check for .svg file extension (with or without query string)
-  final queryIndex = lowerUrl.indexOf('?');
-  final pathPart = queryIndex >= 0
-      ? lowerUrl.substring(0, queryIndex)
-      : lowerUrl;
-  if (pathPart.endsWith('.svg')) return true;
-
-  // Check for SVG MIME type in query parameters only (not in path)
-  // This handles cases like ?format=image/svg+xml or &type=image/svg+xml
-  if (queryIndex >= 0) {
-    final queryPart = lowerUrl.substring(queryIndex);
-    if (queryPart.contains('image/svg+xml')) return true;
-  }
-
-  return false;
-}
+bool _isSvgUrl(String url) => imageAttachmentUrlIsSvg(url);
 
 /// Checks if decoded bytes represent SVG content by looking for the SVG tag.
-bool _isSvgBytes(Uint8List bytes) {
-  // Check first 1KB for SVG tag (not just XML declaration, which is too broad)
-  final checkLength = bytes.length < 1024 ? bytes.length : 1024;
-  final header = utf8.decode(
-    bytes.sublist(0, checkLength),
-    allowMalformed: true,
+bool _isSvgBytes(Uint8List bytes) => imageAttachmentBytesAreSvg(bytes);
+
+bool _isRemoteContentValue(String data) => imageAttachmentContentIsRemote(data);
+
+typedef _ImageLoadResult = ImageAttachmentCacheEntry;
+const _imageAttachmentLoader = _ImageAttachmentLoader();
+
+class _ImageAttachmentLoader {
+  const _ImageAttachmentLoader();
+
+  _ImageLoadResult? readCached(
+    String attachmentId, {
+    ImageAttachmentCacheScope? scope,
+  }) => imageAttachmentCacheStore.read(attachmentId, scope: scope);
+
+  void cacheBytes(
+    String attachmentId,
+    Uint8List bytes, {
+    ImageAttachmentCacheScope? scope,
+    bool? isSvg,
+  }) => imageAttachmentCacheStore.cacheBytes(
+    attachmentId,
+    bytes,
+    scope: scope,
+    isSvg: isSvg,
   );
-  return header.toLowerCase().contains('<svg');
-}
 
-bool _isRemoteContentValue(String data) => data.startsWith('http');
+  void cacheError(
+    String attachmentId,
+    String error, {
+    ImageAttachmentCacheScope? scope,
+  }) => imageAttachmentCacheStore.cacheError(attachmentId, error, scope: scope);
 
-class _LruCache<K, V> {
-  _LruCache({required this.maxEntries});
-
-  final int maxEntries;
-  final LinkedHashMap<K, V> _entries = LinkedHashMap<K, V>();
-
-  V? read(K key) {
-    final value = _entries.remove(key);
-    if (value == null) {
-      return null;
-    }
-    _entries[key] = value;
-    return value;
-  }
-
-  void write(K key, V value) {
-    _entries.remove(key);
-    _entries[key] = value;
-    while (_entries.length > maxEntries) {
-      _entries.remove(_entries.keys.first);
-    }
-  }
-
-  void remove(K key) {
-    _entries.remove(key);
-  }
-
-  void removeIfSame(K key, V value) {
-    final existing = _entries[key];
-    if (identical(existing, value)) {
-      _entries.remove(key);
-    }
-  }
-
-  void clear() {
-    _entries.clear();
-  }
-
-  bool containsKey(K key) => _entries.containsKey(key);
-
-  int get length => _entries.length;
-}
-
-class _ImageLoadResult {
-  const _ImageLoadResult({
-    this.resolvedData,
-    this.bytes,
-    this.error,
-    required this.isSvg,
-  });
-
-  final String? resolvedData;
-  final Uint8List? bytes;
-  final String? error;
-  final bool isSvg;
-
-  bool get hasContent => resolvedData != null || bytes != null || error != null;
-  bool get needsDecode =>
-      error == null &&
-      bytes == null &&
-      resolvedData != null &&
-      !_isRemoteContentValue(resolvedData!);
-}
-
-class _ImageAttachmentCaches {
-  _ImageAttachmentCaches();
-
-  static const int _resolvedDataEntries = 80;
-  static const int _byteEntries = 48;
-  static const int _metadataEntries = 96;
-  static const int _errorEntries = 48;
-  static const int _inFlightEntries = 24;
-
-  final _LruCache<String, String> _resolvedData = _LruCache<String, String>(
-    maxEntries: _resolvedDataEntries,
+  void _cacheResolvedData(
+    String attachmentId,
+    String resolvedData, {
+    required bool isSvg,
+    ImageAttachmentCacheScope? scope,
+  }) => imageAttachmentCacheStore.cacheResolvedData(
+    attachmentId,
+    resolvedData,
+    isSvg: isSvg,
+    scope: scope,
   );
-  final _LruCache<String, Uint8List> _decodedBytes =
-      _LruCache<String, Uint8List>(maxEntries: _byteEntries);
-  final _LruCache<String, bool> _svgFlags = _LruCache<String, bool>(
-    maxEntries: _metadataEntries,
-  );
-  final _LruCache<String, String> _errors = _LruCache<String, String>(
-    maxEntries: _errorEntries,
-  );
-  final _LruCache<String, Future<_ImageLoadResult>> _inFlightLoads =
-      _LruCache<String, Future<_ImageLoadResult>>(maxEntries: _inFlightEntries);
-
-  _ImageLoadResult? readCached(String attachmentId) {
-    final error = _errors.read(attachmentId);
-    if (error != null) {
-      return _ImageLoadResult(
-        error: error,
-        isSvg: _svgFlags.read(attachmentId) ?? false,
-      );
-    }
-
-    final data = _resolvedData.read(attachmentId);
-    final bytes = _decodedBytes.read(attachmentId);
-    final isSvg = _svgFlags.read(attachmentId) ?? false;
-    if (data == null && bytes == null) {
-      return null;
-    }
-    return _ImageLoadResult(resolvedData: data, bytes: bytes, isSvg: isSvg);
-  }
-
-  void cacheBytes(String attachmentId, Uint8List bytes) {
-    _errors.remove(attachmentId);
-    _decodedBytes.write(attachmentId, bytes);
-    _svgFlags.write(attachmentId, _isSvgBytes(bytes));
-  }
-
-  void cacheError(String attachmentId, String error) {
-    _errors.write(attachmentId, error);
-    _resolvedData.remove(attachmentId);
-    _decodedBytes.remove(attachmentId);
-    _svgFlags.remove(attachmentId);
-  }
-
-  void clear() {
-    _resolvedData.clear();
-    _decodedBytes.clear();
-    _svgFlags.clear();
-    _errors.clear();
-    _inFlightLoads.clear();
-  }
-
-  void debugSeedResolvedData(String attachmentId, String resolvedData) {
-    _errors.remove(attachmentId);
-    _resolvedData.write(attachmentId, resolvedData);
-    _svgFlags.write(attachmentId, _isSvgDataUrl(resolvedData));
-  }
-
-  bool hasResolvedData(String attachmentId) {
-    return _resolvedData.containsKey(attachmentId);
-  }
-
-  bool hasDecodedBytes(String attachmentId) {
-    return _decodedBytes.containsKey(attachmentId);
-  }
-
-  int get resolvedDataCount => _resolvedData.length;
 
   Future<_ImageLoadResult> decodeCachedResolvedDataForTesting({
     required String attachmentId,
     required WorkerManager workerManager,
+    ImageAttachmentCacheScope? scope,
   }) {
-    final cached = readCached(attachmentId);
+    final cached = readCached(attachmentId, scope: scope);
     if (cached == null || !cached.needsDecode || cached.resolvedData == null) {
       throw StateError(
         'No decodable cached resolved data exists for $attachmentId',
@@ -318,6 +200,7 @@ class _ImageAttachmentCaches {
     }
     return _decodeResolvedDataWithWorker(
       attachmentId: attachmentId,
+      cacheScope: scope,
       worker: workerManager,
       source: cached.resolvedData!,
       svgHint: cached.isSvg,
@@ -329,38 +212,25 @@ class _ImageAttachmentCaches {
     required WorkerManager workerManager,
     required ApiService? api,
     required AppLocalizations l10n,
+    ImageAttachmentCacheScope? cacheScope,
   }) {
-    final cached = readCached(attachmentId);
-    if (cached != null &&
-        (!cached.needsDecode || cached.bytes != null || cached.error != null)) {
-      return Future<_ImageLoadResult>.value(cached);
-    }
-
-    final inFlight = _inFlightLoads.read(attachmentId);
-    if (inFlight != null) {
-      return inFlight;
-    }
-
-    late final Future<_ImageLoadResult> future;
-    future = () async {
-      try {
-        return await _loadInternal(
-          attachmentId: attachmentId,
-          workerManager: workerManager,
-          api: api,
-          l10n: l10n,
-          cached: cached,
-        );
-      } finally {
-        _inFlightLoads.removeIfSame(attachmentId, future);
-      }
-    }();
-    _inFlightLoads.write(attachmentId, future);
-    return future;
+    return imageAttachmentCacheStore.load(
+      attachmentId,
+      scope: cacheScope,
+      loader: (cached) => _loadInternal(
+        attachmentId: attachmentId,
+        cacheScope: cacheScope,
+        workerManager: workerManager,
+        api: api,
+        l10n: l10n,
+        cached: cached,
+      ),
+    );
   }
 
   Future<_ImageLoadResult> _loadInternal({
     required String attachmentId,
+    required ImageAttachmentCacheScope? cacheScope,
     required WorkerManager workerManager,
     required ApiService? api,
     required AppLocalizations l10n,
@@ -371,8 +241,9 @@ class _ImageAttachmentCaches {
     }
 
     if (cached?.needsDecode == true && cached?.resolvedData != null) {
-      return _decodeResolvedData(
+      return await _decodeResolvedData(
         attachmentId: attachmentId,
+        cacheScope: cacheScope,
         workerManager: workerManager,
         source: cached!.resolvedData!,
         svgHint: cached.isSvg,
@@ -382,17 +253,21 @@ class _ImageAttachmentCaches {
     if (attachmentId.startsWith('data:') || attachmentId.startsWith('http')) {
       final isSvgContent =
           _isSvgDataUrl(attachmentId) || _isSvgUrl(attachmentId);
-      _resolvedData.write(attachmentId, attachmentId);
-      _svgFlags.write(attachmentId, isSvgContent);
+      _cacheResolvedData(
+        attachmentId,
+        attachmentId,
+        isSvg: isSvgContent,
+        scope: cacheScope,
+      );
       if (_isRemoteContentValue(attachmentId)) {
-        _errors.remove(attachmentId);
         return _ImageLoadResult(
           resolvedData: attachmentId,
           isSvg: isSvgContent,
         );
       }
-      return _decodeResolvedData(
+      return await _decodeResolvedData(
         attachmentId: attachmentId,
+        cacheScope: cacheScope,
         workerManager: workerManager,
         source: attachmentId,
         svgHint: isSvgContent,
@@ -402,20 +277,24 @@ class _ImageAttachmentCaches {
     if (attachmentId.startsWith('/')) {
       if (api == null) {
         final error = l10n.unableToLoadImage;
-        cacheError(attachmentId, error);
+        // API availability is lifecycle state, not an immutable property of
+        // this attachment. Do not turn bootstrap/teardown into a process-long
+        // negative cache entry.
         return _ImageLoadResult(error: error, isSvg: false);
       }
       final fullUrl = api.baseUrl + attachmentId;
       final isSvgContent = _isSvgUrl(fullUrl);
-      _resolvedData.write(attachmentId, fullUrl);
-      _svgFlags.write(attachmentId, isSvgContent);
-      _errors.remove(attachmentId);
+      _cacheResolvedData(
+        attachmentId,
+        fullUrl,
+        isSvg: isSvgContent,
+        scope: cacheScope,
+      );
       return _ImageLoadResult(resolvedData: fullUrl, isSvg: isSvgContent);
     }
 
     if (api == null) {
       final error = l10n.apiUnavailable;
-      cacheError(attachmentId, error);
       return _ImageLoadResult(error: error, isSvg: false);
     }
 
@@ -440,41 +319,48 @@ class _ImageAttachmentCaches {
       final isImageByContentType = contentType.startsWith('image/');
       if (!isImageByExt && !isImageByContentType) {
         final error = l10n.notAnImageFile(fileName);
-        cacheError(attachmentId, error);
+        cacheError(attachmentId, error, scope: cacheScope);
         return _ImageLoadResult(error: error, isSvg: false);
       }
 
       final isSvgFile = ext == 'svg' || contentType.contains('svg');
       final fileContent = await api.getFileContent(attachmentId);
-      _resolvedData.write(attachmentId, fileContent);
-      _svgFlags.write(attachmentId, isSvgFile);
-      _errors.remove(attachmentId);
+      _cacheResolvedData(
+        attachmentId,
+        fileContent,
+        isSvg: isSvgFile,
+        scope: cacheScope,
+      );
 
       if (_isRemoteContentValue(fileContent)) {
         return _ImageLoadResult(resolvedData: fileContent, isSvg: isSvgFile);
       }
 
-      return _decodeResolvedData(
+      return await _decodeResolvedData(
         attachmentId: attachmentId,
+        cacheScope: cacheScope,
         workerManager: workerManager,
         source: fileContent,
         svgHint: isSvgFile,
       );
     } catch (error) {
       final message = l10n.failedToLoadImage(error.toString());
-      cacheError(attachmentId, message);
+      // File metadata/content requests can fail transiently. Return the error
+      // to this mounted caller but leave the shared cache retryable on remount.
       return _ImageLoadResult(error: message, isSvg: false);
     }
   }
 
   Future<_ImageLoadResult> _decodeResolvedData({
     required String attachmentId,
+    required ImageAttachmentCacheScope? cacheScope,
     required WorkerManager workerManager,
     required String source,
     required bool svgHint,
   }) async {
     return _decodeResolvedDataWithWorker(
       attachmentId: attachmentId,
+      cacheScope: cacheScope,
       worker: workerManager,
       source: source,
       svgHint: svgHint,
@@ -484,6 +370,7 @@ class _ImageAttachmentCaches {
 
 Future<_ImageLoadResult> _decodeResolvedDataWithWorker({
   required String attachmentId,
+  required ImageAttachmentCacheScope? cacheScope,
   required WorkerManager worker,
   required String source,
   required bool svgHint,
@@ -493,15 +380,19 @@ Future<_ImageLoadResult> _decodeResolvedDataWithWorker({
     source,
     debugLabel: 'decode_image',
   );
-  _imageAttachmentCaches.cacheBytes(attachmentId, bytes);
   final isSvg = _isSvgBytes(bytes) || _isSvgDataUrl(source) || svgHint;
-  _imageAttachmentCaches._svgFlags.write(attachmentId, isSvg);
-  _imageAttachmentCaches._errors.remove(attachmentId);
+  imageAttachmentCacheStore.cacheBytes(
+    attachmentId,
+    bytes,
+    scope: cacheScope,
+    isSvg: isSvg,
+  );
   return _ImageLoadResult(resolvedData: source, bytes: bytes, isSvg: isSvg);
 }
 
 Future<_ImageLoadResult> _guardImageLoadFailure({
   required String attachmentId,
+  ImageAttachmentCacheScope? cacheScope,
   required AppLocalizations l10n,
   required Future<_ImageLoadResult> Function() load,
 }) async {
@@ -509,7 +400,11 @@ Future<_ImageLoadResult> _guardImageLoadFailure({
     return await load();
   } catch (_) {
     final decodeError = l10n.failedToDecodeImage;
-    _imageAttachmentCaches.cacheError(attachmentId, decodeError);
+    imageAttachmentCacheStore.cacheError(
+      attachmentId,
+      decodeError,
+      scope: cacheScope,
+    );
     return _ImageLoadResult(error: decodeError, isSvg: false);
   }
 }
@@ -532,7 +427,51 @@ Map<String, String>? _mergeHeaders(
       (overrides == null || overrides.isEmpty)) {
     return null;
   }
-  return {...?defaults, ...?overrides};
+  final merged = <String, String>{...?defaults, ...?overrides};
+  if (defaults?.keys.any(ConduitUserAgent.isHeaderName) == true) {
+    ConduitUserAgent.applyTo(merged);
+  }
+  return merged;
+}
+
+@visibleForTesting
+Map<String, String>? debugMergeImageHeaders(
+  Map<String, String>? defaults,
+  Map<String, String>? overrides,
+) => _mergeHeaders(defaults, overrides);
+
+const _defaultImagePreviewConstraints = BoxConstraints(
+  minWidth: 200,
+  maxWidth: 300,
+  minHeight: 150,
+  maxHeight: 300,
+);
+
+@visibleForTesting
+Size debugStableImagePreviewSizeForTesting(BoxConstraints? constraints) {
+  final effective = constraints ?? _defaultImagePreviewConstraints;
+  return Size(
+    effective.hasBoundedWidth
+        ? effective.maxWidth
+        : _defaultImagePreviewConstraints.maxWidth,
+    effective.hasBoundedHeight
+        ? effective.maxHeight
+        : _defaultImagePreviewConstraints.maxHeight,
+  );
+}
+
+@visibleForTesting
+RasterDecodeTarget debugImagePreviewDecodeTargetForTesting({
+  required BoxConstraints? constraints,
+  required double devicePixelRatio,
+}) {
+  final previewSize = debugStableImagePreviewSizeForTesting(constraints);
+  return RasterMediaPolicy.target(
+    profile: RasterDecodeProfile.inline,
+    devicePixelRatio: devicePixelRatio,
+    logicalWidth: previewSize.width,
+    logicalHeight: previewSize.height,
+  );
 }
 
 class EnhancedImageAttachment extends ConsumerStatefulWidget {
@@ -574,16 +513,28 @@ class _EnhancedImageAttachmentState
   bool _retryLoadScheduled = false;
   int _loadGeneration = 0;
   Timer? _retryLoadTimer;
+  ImageAttachmentCacheScope? _cacheScope;
+  bool _openingViewer = false;
+  bool _preparingViewer = false;
+  Timer? _preparingViewerTimer;
 
   String get _profileImageKey =>
       widget.attachmentId.hashCode.toUnsigned(32).toRadixString(16);
 
+  // The process-wide byte-bounded cache preserves inexpensive remounts. Do not
+  // pin every image row and its decoded widget state in a virtualized chat list.
   @override
-  bool get wantKeepAlive => true;
+  bool get wantKeepAlive => false;
 
   @override
   void initState() {
     super.initState();
+    _cacheScope = usesAccountScopedImageCache(widget.attachmentId)
+        ? ImageAttachmentCacheScope(
+            api: ref.read(apiServiceProvider),
+            authSessionEpoch: ref.read(openWebUiAuthSessionEpochProvider),
+          )
+        : null;
     _heroTag = 'image_${widget.attachmentId}_${identityHashCode(this)}';
     // Defer loading until after first frame to avoid accessing inherited widgets
     // (e.g., Localizations) during initState
@@ -624,6 +575,7 @@ class _EnhancedImageAttachmentState
   void dispose() {
     _loadGeneration += 1;
     _retryLoadTimer?.cancel();
+    _preparingViewerTimer?.cancel();
     super.dispose();
   }
 
@@ -664,7 +616,11 @@ class _EnhancedImageAttachmentState
       return;
     }
 
-    final cached = _imageAttachmentCaches.readCached(widget.attachmentId);
+    final requestScope = _cacheScope;
+    final cached = _imageAttachmentLoader.readCached(
+      widget.attachmentId,
+      scope: requestScope,
+    );
     if (cached != null) {
       _applyLoadResult(cached);
       if (!cached.needsDecode) {
@@ -699,15 +655,19 @@ class _EnhancedImageAttachmentState
       final l10n = AppLocalizations.of(context)!;
       final result = await _guardImageLoadFailure(
         attachmentId: widget.attachmentId,
+        cacheScope: requestScope,
         l10n: l10n,
-        load: () => _imageAttachmentCaches.load(
+        load: () => _imageAttachmentLoader.load(
           attachmentId: widget.attachmentId,
           workerManager: ref.read(workerManagerProvider),
-          api: ref.read(apiServiceProvider),
+          api: requestScope?.api,
           l10n: l10n,
+          cacheScope: requestScope,
         ),
       );
-      if (!mounted || requestGeneration != _loadGeneration) {
+      if (!mounted ||
+          requestGeneration != _loadGeneration ||
+          requestScope != _cacheScope) {
         return;
       }
 
@@ -753,28 +713,46 @@ class _EnhancedImageAttachmentState
 
   bool _isRemoteContent(String data) => _isRemoteContentValue(data);
 
-  ({int? width, int? height}) _cacheDimensions(BuildContext context) {
-    final constraints =
-        widget.constraints ??
-        const BoxConstraints(maxWidth: 400, maxHeight: 400);
-    final devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
-
-    int? normalize(double value) {
-      if (!value.isFinite || value <= 0) {
-        return null;
-      }
-      return (value * devicePixelRatio).round().clamp(64, 2048);
-    }
-
-    return (
-      width: normalize(constraints.maxWidth),
-      height: normalize(constraints.maxHeight),
+  RasterDecodeTarget _cacheDimensions(BuildContext context) {
+    return debugImagePreviewDecodeTargetForTesting(
+      constraints: _previewConstraints,
+      devicePixelRatio: MediaQuery.devicePixelRatioOf(context),
     );
   }
+
+  BoxConstraints get _previewConstraints =>
+      widget.constraints ?? _defaultImagePreviewConstraints;
+
+  Size get _stablePreviewSize =>
+      debugStableImagePreviewSizeForTesting(widget.constraints);
 
   @override
   Widget build(BuildContext context) {
     super.build(context); // Required for AutomaticKeepAliveClientMixin
+
+    // Literal data/HTTP sources do not consult the Open WebUI API, and their
+    // process-local cache key is already the literal itself. Avoid pulling the
+    // authenticated app graph into public/generated image rows; server file IDs
+    // still watch both ownership identities and reset immediately on a switch.
+    final currentScope = usesAccountScopedImageCache(widget.attachmentId)
+        ? ImageAttachmentCacheScope(
+            api: ref.watch(apiServiceProvider),
+            authSessionEpoch: ref.watch(openWebUiAuthSessionEpochProvider),
+          )
+        : null;
+    if (currentScope != _cacheScope) {
+      _cacheScope = currentScope;
+      _cachedImageData = null;
+      _cachedBytes = null;
+      _hasAttemptedLoad = false;
+      _isLoading = true;
+      _errorMessage = null;
+      _isSvg = false;
+      _loadGeneration += 1;
+      _retryLoadTimer?.cancel();
+      _loadScheduled = false;
+      _retryLoadScheduled = false;
+    }
 
     if (!_hasAttemptedLoad && !_loadScheduled) {
       _scheduleLoadIfNeeded();
@@ -884,69 +862,63 @@ class _EnhancedImageAttachmentState
   }
 
   Widget _buildLoadingState() {
-    final constraints =
-        widget.constraints ??
-        const BoxConstraints(
-          maxWidth: 300,
-          maxHeight: 300,
-          minHeight: 150,
-          minWidth: 200,
-        );
-
     return KeyedSubtree(
       key: const ValueKey('loading'),
-      child: _buildSkeletonPlaceholder(
-        constraints: constraints,
-        showProgressIndicator: true,
-        includeMarkdownMargin: true,
+      child: SizedBox.fromSize(
+        size: _stablePreviewSize,
+        child: _buildSkeletonPlaceholder(
+          constraints: _previewConstraints,
+          showProgressIndicator: true,
+          includeMarkdownMargin: true,
+        ),
       ),
     );
   }
 
   Widget _buildErrorState() {
-    return Container(
+    final error = SizedBox.fromSize(
       key: const ValueKey('error'),
-      constraints:
-          widget.constraints ??
-          const BoxConstraints(
-            maxWidth: 300,
-            maxHeight: 150,
-            minHeight: 100,
-            minWidth: 200,
+      size: _stablePreviewSize,
+      child: Container(
+        constraints: _previewConstraints,
+        margin: const EdgeInsets.only(bottom: Spacing.xs),
+        decoration: BoxDecoration(
+          color: context.conduitTheme.surfaceBackground.withValues(alpha: 0.3),
+          borderRadius: BorderRadius.circular(AppBorderRadius.md),
+          border: Border.all(
+            color: context.conduitTheme.error.withValues(alpha: 0.3),
+            width: BorderWidth.thin,
           ),
-      margin: const EdgeInsets.only(bottom: Spacing.xs),
-      decoration: BoxDecoration(
-        color: context.conduitTheme.surfaceBackground.withValues(alpha: 0.3),
-        borderRadius: BorderRadius.circular(AppBorderRadius.md),
-        border: Border.all(
-          color: context.conduitTheme.error.withValues(alpha: 0.3),
-          width: BorderWidth.thin,
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.broken_image_outlined,
+              color: context.conduitTheme.error,
+              size: 32,
+            ),
+            const SizedBox(height: Spacing.xs),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: Spacing.sm),
+              child: Text(
+                _errorMessage!,
+                style: AppTypography.bodySmallStyle.copyWith(
+                  color: context.conduitTheme.error,
+                ),
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
         ),
       ),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            Icons.broken_image_outlined,
-            color: context.conduitTheme.error,
-            size: 32,
-          ),
-          const SizedBox(height: Spacing.xs),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: Spacing.sm),
-            child: Text(
-              _errorMessage!,
-              style: AppTypography.bodySmallStyle.copyWith(
-                color: context.conduitTheme.error,
-              ),
-              textAlign: TextAlign.center,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-        ],
-      ),
-    ).animate().fadeIn(duration: const Duration(milliseconds: 200));
+    );
+    if (widget.disableAnimation || context.reduceMotion) {
+      return error;
+    }
+    return error.animate().fadeIn(duration: const Duration(milliseconds: 200));
   }
 
   Widget _buildNetworkImage() {
@@ -956,26 +928,39 @@ class _EnhancedImageAttachmentState
       _cachedImageData!,
     );
     final headers = _mergeHeaders(defaultHeaders, widget.httpHeaders);
+    final networkCacheKey = buildImageCacheKeyForUrlFromWidgetRef(
+      ref,
+      _cachedImageData!,
+      effectiveHeaders: headers,
+    );
     final dimensions = _cacheDimensions(context);
+    final previewSize = _stablePreviewSize;
 
     final cacheManager = ref.watch(selfSignedImageCacheManagerProvider);
-    final imageWidget = CachedNetworkImage(
+    final imageWidget = Image(
       key: ValueKey('image_${widget.attachmentId}'),
-      imageUrl: _cachedImageData!,
+      image: RasterMediaPolicy.resizeProviderForCover(
+        CachedNetworkImageProvider(
+          _cachedImageData!,
+          cacheKey: networkCacheKey,
+          cacheManager: cacheManager,
+          headers: headers,
+        ),
+        dimensions,
+        profile: RasterDecodeProfile.inline,
+      ),
+      width: previewSize.width,
+      height: previewSize.height,
       fit: BoxFit.cover,
-      cacheManager: cacheManager,
-      httpHeaders: headers,
-      memCacheWidth: dimensions.width,
-      memCacheHeight: dimensions.height,
-      maxWidthDiskCache: dimensions.width,
-      maxHeightDiskCache: dimensions.height,
-      fadeInDuration: widget.disableAnimation
-          ? Duration.zero
-          : const Duration(milliseconds: 200),
-      fadeOutDuration: widget.disableAnimation
-          ? Duration.zero
-          : const Duration(milliseconds: 200),
-      placeholder: (context, url) => _buildSkeletonPlaceholder(),
+      gaplessPlayback: true,
+      frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+        return wasSynchronouslyLoaded || frame != null
+            ? child
+            : SizedBox.fromSize(
+                size: previewSize,
+                child: _buildSkeletonPlaceholder(),
+              );
+      },
       errorBuilder: (context, error, stackTrace) {
         _errorMessage = error.toString();
         return _buildErrorState();
@@ -991,22 +976,29 @@ class _EnhancedImageAttachmentState
       _cachedImageData!,
     );
     final headers = _mergeHeaders(defaultHeaders, widget.httpHeaders);
+    final networkCacheKey = buildImageCacheKeyForUrlFromWidgetRef(
+      ref,
+      _cachedImageData!,
+      effectiveHeaders: headers,
+    );
 
     final svgWidget = JovialSvgImage.network(
       _cachedImageData!,
       key: ValueKey('svg_${widget.attachmentId}'),
       fit: BoxFit.contain,
       headers: headers,
+      cacheIdentity: networkCacheKey,
       placeholderBuilder: (context) => _buildSkeletonPlaceholder(),
       errorBuilder: (context, error, stackTrace) {
-        _errorMessage = AppLocalizations.of(
-          context,
-        )!.failedToLoadImage(error.toString());
+        _errorMessage = AppLocalizations.of(context)!
+            .failedToLoadImage(error.toString());
         return _buildErrorState();
       },
     );
 
-    return _wrapImage(svgWidget);
+    return _wrapImage(
+      SizedBox.fromSize(size: _stablePreviewSize, child: svgWidget),
+    );
   }
 
   Widget _buildBase64Image() {
@@ -1015,13 +1007,18 @@ class _EnhancedImageAttachmentState
       return _buildLoadingState();
     }
     final dimensions = _cacheDimensions(context);
+    final previewSize = _stablePreviewSize;
 
-    final imageWidget = Image.memory(
+    final imageWidget = Image(
       key: ValueKey('image_${widget.attachmentId}'),
-      bytes,
+      image: RasterMediaPolicy.resizeProviderForCover(
+        MemoryImage(bytes),
+        dimensions,
+        profile: RasterDecodeProfile.inline,
+      ),
+      width: previewSize.width,
+      height: previewSize.height,
       fit: BoxFit.cover,
-      cacheWidth: dimensions.width,
-      cacheHeight: dimensions.height,
       gaplessPlayback: true, // Prevents flashing during rebuilds
       errorBuilder: (context, error, stackTrace) {
         _errorMessage = AppLocalizations.of(context)!.failedToDecodeImage;
@@ -1048,14 +1045,14 @@ class _EnhancedImageAttachmentState
       },
     );
 
-    return _wrapImage(svgWidget);
+    return _wrapImage(
+      SizedBox.fromSize(size: _stablePreviewSize, child: svgWidget),
+    );
   }
 
   Widget _wrapImage(Widget imageWidget) {
     final wrappedImage = Container(
-      constraints:
-          widget.constraints ??
-          const BoxConstraints(maxWidth: 400, maxHeight: 400),
+      constraints: _previewConstraints,
       margin: widget.isMarkdownFormat
           ? const EdgeInsets.symmetric(vertical: Spacing.sm)
           : EdgeInsets.zero,
@@ -1072,25 +1069,63 @@ class _EnhancedImageAttachmentState
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(AppBorderRadius.md),
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: widget.onTap ?? () => _showFullScreenImage(context),
-          child: Hero(
-            tag: _heroTag,
-            flightShuttleBuilder:
-                (
-                  flightContext,
-                  animation,
-                  flightDirection,
-                  fromHeroContext,
-                  toHeroContext,
-                ) {
-                  final hero = flightDirection == HeroFlightDirection.push
-                      ? fromHeroContext.widget as Hero
-                      : toHeroContext.widget as Hero;
-                  return FadeTransition(opacity: animation, child: hero.child);
-                },
-            child: imageWidget,
+        child: Builder(
+          builder: (thumbnailContext) => GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: widget.onTap ?? () => _showFullScreenImage(thumbnailContext),
+            child: HeroMode(
+              enabled: !context.reduceMotion,
+              child: Hero(
+                tag: _heroTag,
+                flightShuttleBuilder:
+                    (
+                      flightContext,
+                      animation,
+                      flightDirection,
+                      fromHeroContext,
+                      toHeroContext,
+                    ) {
+                      // Fly the cropped thumbnail. The viewer's hero has the
+                      // image's aspect ratio, so the crop ends on the fitted
+                      // image. Corners square off as it grows.
+                      final hero = flightDirection == HeroFlightDirection.push
+                          ? fromHeroContext.widget as Hero
+                          : toHeroContext.widget as Hero;
+                      return AnimatedBuilder(
+                        animation: animation,
+                        builder: (context, child) => ClipRRect(
+                          borderRadius: BorderRadius.circular(
+                            AppBorderRadius.md * (1 - animation.value),
+                          ),
+                          child: child,
+                        ),
+                        child: hero.child,
+                      );
+                    },
+                child: _preparingViewer
+                    ? Stack(
+                        fit: StackFit.passthrough,
+                        children: [
+                          imageWidget,
+                          Positioned.fill(
+                            child: ColoredBox(
+                              color: Colors.black.withValues(alpha: 0.25),
+                              child: const Center(
+                                child: SizedBox.square(
+                                  dimension: 20,
+                                  child: CircularProgressIndicator(
+                                    color: Colors.white,
+                                    strokeWidth: 2,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      )
+                    : imageWidget,
+              ),
+            ),
           ),
         ),
       ),
@@ -1099,9 +1134,10 @@ class _EnhancedImageAttachmentState
     return wrappedImage;
   }
 
-  void _showFullScreenImage(BuildContext context) {
+  void _showFullScreenImage(BuildContext thumbnailContext) {
     // Handle both data URL string and raw bytes cases
     if (_cachedImageData == null && _cachedBytes == null) return;
+    if (_openingViewer) return;
 
     PerformanceProfiler.instance.instant(
       'image_viewer_open',
@@ -1113,289 +1149,41 @@ class _EnhancedImageAttachmentState
       },
     );
 
-    Navigator.of(context).push(
-      buildPlatformPageRoute(
-        fullscreenDialog: true,
-        builder: (context) => FullScreenImageViewer(
-          imageData: _cachedImageData,
-          imageBytes: _cachedBytes,
-          tag: _heroTag,
+    final (items, index) = ImageGalleryScope.galleryFor(
+      context,
+      ImageViewerItem(
+        attachmentId: widget.attachmentId,
+        httpHeaders: widget.httpHeaders,
+      ),
+    );
+    _openingViewer = true;
+    unawaited(
+      _openImageViewer(
+        context: thumbnailContext,
+        items: items,
+        initialIndex: index,
+        initialEntry: ImageAttachmentCacheEntry(
+          resolvedData: _cachedImageData,
+          bytes: _cachedBytes,
           isSvg: _isSvg,
-          customHeaders: widget.httpHeaders,
         ),
-      ),
-    );
-  }
-}
-
-class FullScreenImageViewer extends ConsumerWidget {
-  /// Image data as a URL (http://) or data URL (data:image/...) or base64 string.
-  /// Either this or [imageBytes] must be provided.
-  final String? imageData;
-
-  /// Raw image bytes. Used when [imageData] is null.
-  final Uint8List? imageBytes;
-
-  final String tag;
-  final bool isSvg;
-  final Map<String, String>? customHeaders;
-
-  const FullScreenImageViewer({
-    super.key,
-    this.imageData,
-    this.imageBytes,
-    required this.tag,
-    this.isSvg = false,
-    this.customHeaders,
-  }) : assert(
-         imageData != null || imageBytes != null,
-         'Either imageData or imageBytes must be provided',
-       );
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    Widget imageWidget;
-
-    // If we have raw bytes, use them directly
-    if (imageData == null && imageBytes != null) {
-      if (isSvg || _isSvgBytes(imageBytes!)) {
-        imageWidget = JovialSvgImage.bytes(
-          imageBytes!,
-          fit: BoxFit.contain,
-          errorBuilder: (context, error, stackTrace) => Center(
-            child: Icon(
-              Icons.error_outline,
-              color: context.conduitTheme.error,
-              size: 48,
-            ),
-          ),
-        );
-      } else {
-        imageWidget = Image.memory(imageBytes!, fit: BoxFit.contain);
-      }
-    } else if (imageData != null && imageData!.startsWith('http')) {
-      final defaultHeaders = buildImageHeadersForUrlFromWidgetRef(
-        ref,
-        imageData!,
-      );
-      final headers = _mergeHeaders(defaultHeaders, customHeaders);
-
-      if (isSvg || _isSvgUrl(imageData!)) {
-        imageWidget = JovialSvgImage.network(
-          imageData!,
-          fit: BoxFit.contain,
-          headers: headers,
-          placeholderBuilder: (context) => Center(
-            child: CircularProgressIndicator(
-              color: context.conduitTheme.buttonPrimary,
-            ),
-          ),
-          errorBuilder: (context, error, stackTrace) => Center(
-            child: Icon(
-              Icons.error_outline,
-              color: context.conduitTheme.error,
-              size: 48,
-            ),
-          ),
-        );
-      } else {
-        final cacheManager = ref.watch(selfSignedImageCacheManagerProvider);
-        imageWidget = CachedNetworkImage(
-          imageUrl: imageData!,
-          fit: BoxFit.contain,
-          cacheManager: cacheManager,
-          httpHeaders: headers,
-          placeholder: (context, url) => Center(
-            child: CircularProgressIndicator(
-              color: context.conduitTheme.buttonPrimary,
-            ),
-          ),
-          errorBuilder: (context, error, stackTrace) => Center(
-            child: Icon(
-              Icons.error_outline,
-              color: context.conduitTheme.error,
-              size: 48,
-            ),
-          ),
-        );
-      }
-    } else if (imageData != null) {
-      try {
-        String actualBase64;
-        if (imageData!.startsWith('data:')) {
-          final commaIndex = imageData!.indexOf(',');
-          if (commaIndex == -1) {
-            throw const FormatException('Invalid data URI');
-          }
-          actualBase64 = imageData!.substring(commaIndex + 1);
-        } else {
-          actualBase64 = imageData!;
-        }
-        final decodedBytes = base64.decode(actualBase64);
-
-        // Check if SVG content
-        if (isSvg || _isSvgDataUrl(imageData!) || _isSvgBytes(decodedBytes)) {
-          imageWidget = JovialSvgImage.bytes(
-            decodedBytes,
-            fit: BoxFit.contain,
-            errorBuilder: (context, error, stackTrace) => Center(
-              child: Icon(
-                Icons.error_outline,
-                color: context.conduitTheme.error,
-                size: 48,
-              ),
-            ),
-          );
-        } else {
-          imageWidget = Image.memory(decodedBytes, fit: BoxFit.contain);
-        }
-      } catch (e) {
-        imageWidget = Center(
-          child: Icon(
-            Icons.error_outline,
-            color: context.conduitTheme.error,
-            size: 48,
-          ),
-        );
-      }
-    } else {
-      // No image data available - show error
-      imageWidget = Center(
-        child: Icon(
-          Icons.error_outline,
-          color: context.conduitTheme.error,
-          size: 48,
-        ),
-      );
-    }
-
-    final tokens = context.colorTokens;
-    final background = tokens.neutralTone10;
-    final iconColor = tokens.neutralOnSurface;
-
-    return AdaptiveRouteShell(
-      backgroundColor: background,
-      body: Stack(
-        children: [
-          Center(
-            child: Hero(
-              tag: tag,
-              child: InteractiveViewer(
-                minScale: 0.5,
-                maxScale: 5.0,
-                child: imageWidget,
-              ),
-            ),
-          ),
-          Positioned(
-            top: MediaQuery.of(context).padding.top + 16,
-            right: 16,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  icon: Icon(
-                    Platform.isIOS ? Icons.ios_share : Icons.share_outlined,
-                    color: iconColor,
-                    size: 26,
-                  ),
-                  onPressed: () => _shareImage(context, ref),
-                ),
-                const SizedBox(width: 8),
-                IconButton(
-                  icon: Icon(Icons.close, color: iconColor, size: 28),
-                  onPressed: () => Navigator.of(context).pop(),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
+        heroTag: _heroTag,
+        onPreparing: _setPreparingViewer,
+      ).whenComplete(() => _openingViewer = false),
     );
   }
 
-  Future<void> _shareImage(BuildContext context, WidgetRef ref) async {
-    final l10n = AppLocalizations.of(context)!;
-    try {
-      Uint8List bytes;
-      String? fileExtension;
-
-      // If we have raw bytes, use them directly
-      if (imageData == null && imageBytes != null) {
-        bytes = imageBytes!;
-        fileExtension = isSvg ? 'svg' : 'png';
-      } else if (imageData!.startsWith('http')) {
-        final api = ref.read(apiServiceProvider);
-        final defaultHeaders = readImageHeadersForUrlFromWidgetRef(
-          ref,
-          imageData!,
-        );
-        final mergedHeaders = _mergeHeaders(defaultHeaders, customHeaders);
-
-        final client = api?.dio ?? dio.Dio();
-        final response = await client.get<List<int>>(
-          imageData!,
-          options: dio.Options(
-            responseType: dio.ResponseType.bytes,
-            headers: mergedHeaders,
-          ),
-        );
-        final data = response.data;
-        if (data == null || data.isEmpty) {
-          throw Exception(l10n.emptyImageData);
-        }
-        bytes = Uint8List.fromList(data);
-
-        final contentType = response.headers.map['content-type']?.first;
-        if (contentType != null && contentType.startsWith('image/')) {
-          fileExtension = contentType.split('/').last;
-          if (fileExtension == 'jpeg') fileExtension = 'jpg';
-        } else {
-          final uri = Uri.tryParse(imageData!);
-          final lastSegment = uri?.pathSegments.isNotEmpty == true
-              ? uri!.pathSegments.last
-              : '';
-          final dotIndex = lastSegment.lastIndexOf('.');
-          if (dotIndex != -1 && dotIndex < lastSegment.length - 1) {
-            final ext = lastSegment.substring(dotIndex + 1).toLowerCase();
-            if (ext.length <= 5) {
-              fileExtension = ext;
-            }
-          }
-        }
-      } else if (imageData != null) {
-        String actualBase64 = imageData!;
-        if (imageData!.startsWith('data:')) {
-          final commaIndex = imageData!.indexOf(',');
-          final meta = imageData!.substring(5, commaIndex); // image/png;base64
-          final slashIdx = meta.indexOf('/');
-          final semicolonIdx = meta.indexOf(';');
-          if (slashIdx != -1 && semicolonIdx != -1 && slashIdx < semicolonIdx) {
-            final subtype = meta.substring(slashIdx + 1, semicolonIdx);
-            fileExtension = subtype == 'jpeg' ? 'jpg' : subtype;
-          }
-          actualBase64 = imageData!.substring(commaIndex + 1);
-        }
-        bytes = base64.decode(actualBase64);
-      } else {
-        // No image data available
-        return;
-      }
-
-      fileExtension ??= 'png';
-      final tempDir = await getTemporaryDirectory();
-      final filePath =
-          '${tempDir.path}/conduit_shared_${DateTime.now().millisecondsSinceEpoch}.$fileExtension';
-      final file = File(filePath);
-      await file.writeAsBytes(bytes);
-
-      await SharePlus.instance.share(ShareParams(files: [XFile(file.path)]));
-    } catch (e) {
-      // Swallowing UI feedback per requirements; keep a log for debugging
-      DebugLogger.log(
-        'Failed to share image: $e',
-        scope: 'chat/image-attachment',
-      );
+  /// Shows a spinner on the thumbnail only when writing the native viewer's
+  /// files takes long enough to notice.
+  void _setPreparingViewer(bool preparing) {
+    _preparingViewerTimer?.cancel();
+    _preparingViewerTimer = null;
+    if (preparing) {
+      _preparingViewerTimer = Timer(const Duration(milliseconds: 150), () {
+        if (mounted) setState(() => _preparingViewer = true);
+      });
+    } else if (_preparingViewer && mounted) {
+      setState(() => _preparingViewer = false);
     }
   }
 }

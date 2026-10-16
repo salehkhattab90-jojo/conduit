@@ -1,51 +1,87 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io' show Platform;
 
-import 'package:adaptive_platform_ui/adaptive_platform_ui.dart';
-import 'package:flutter/material.dart';
-import 'package:flutter/cupertino.dart';
+import 'package:conduit/shared/widgets/platform_ui/platform_ui.dart';
+import 'package:material_ui/material_ui.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+
 import '../../../shared/theme/theme_extensions.dart';
-import '../../terminal/widgets/terminal_tab.dart';
-import '../../../core/services/terminal_artifact_store.dart';
-import '../../../shared/utils/platform_page_route.dart';
-import 'document_preview_page.dart';
 import '../../../shared/widgets/markdown/streaming_markdown_widget.dart';
 import '../../../shared/widgets/markdown/renderer/markdown_style.dart';
-import '../../../core/models/chat_message.dart';
-import '../../../shared/widgets/markdown/markdown_preprocessor.dart';
+
+import 'package:conduit_core/models/chat_comparison.dart';
+import 'package:conduit_core/models/chat_message.dart';
+import 'package:conduit_core/models/message_voice.dart';
+import 'package:conduit_core/features/web_search/services/direct_web_search_mode.dart';
+import 'package:conduit_markdown/conduit_markdown.dart';
+
 import '../providers/text_to_speech_provider.dart';
-import '../providers/queued_completion_provider.dart';
+
+import 'package:conduit_core/features/chat/providers/queued_completion_provider.dart';
+import 'package:conduit_core/features/chat/providers/streaming_haptic_memory.dart';
+
 import 'enhanced_image_attachment.dart';
+import 'image_gallery_scope.dart';
+
 import 'package:conduit/l10n/app_localizations.dart';
+
 import 'enhanced_attachment.dart';
+
 import 'package:conduit/shared/widgets/chat_action_button.dart';
+
 import '../../../shared/widgets/model_avatar.dart';
 import '../../../shared/widgets/conduit_components.dart';
 import '../../../shared/widgets/middle_ellipsis_text.dart';
 import '../../../shared/widgets/web_content_embed.dart';
-import '../providers/chat_providers.dart'
+
+import 'package:conduit_core/features/chat/providers/chat_providers.dart'
     show
+        ChatForkAvailability,
+        ComparisonAnswerStop,
+        ComparisonMergeException,
+        ComparisonMergeFailure,
+        chatBranchSiblingsProvider,
+        comparisonMergeCommandAvailableProvider,
+        comparisonMergeProvider,
+        stopComparisonAnswerProvider,
         chatComposerTextInsertionTargetId,
+        chatForkAvailabilityProvider,
+        comparisonAnswerStopPermittedProvider,
         isChatStreamingProvider,
         sendMessageWithContainer,
-        streamingContentProvider;
+        streamingContentProvider,
+        chatMessagesProvider;
+import 'package:conduit_core/providers/app_providers.dart'
+    show activeConversationProvider;
+
 import '../../../shared/utils/external_link_launcher.dart';
-import '../../../core/utils/debug_logger.dart';
-import '../../../core/services/platform_service.dart';
-import '../../../core/services/settings_service.dart';
-import '../../../core/utils/citation_parser.dart';
-import '../../../core/utils/embed_utils.dart';
+
+import 'package:conduit_core/utils/debug_logger.dart';
+
+import '../../../core/services/haptic_service.dart';
+
+import 'package:conduit_core/services/settings_service.dart';
+
 import 'sources/openwebui_sources.dart';
 import '../providers/assistant_response_builder_provider.dart';
-import '../../../core/services/worker_manager.dart';
+
+import 'package:conduit_core/features/chat/views/chat_turn_render_state.dart';
+
+import 'package:conduit_core/services/worker_manager.dart';
+
 import 'streaming_status_widget.dart';
-import '../utils/file_utils.dart';
+
+import 'package:conduit_core/features/chat/utils/file_utils.dart';
+import 'package:conduit_core/features/chat/utils/document_deliveries.dart';
+
+import 'delivery_cards.dart';
+
+import 'chat_branch_actions.dart';
+import 'chat_comparison_widgets.dart';
 import 'code_execution_display.dart';
 import 'follow_up_suggestions.dart';
 import 'usage_stats_modal.dart';
-import 'five_rotating_dots.dart';
 
 // Wrap only standalone base64 image lines so <details> attributes stay intact.
 final _standaloneBase64ImagePattern = RegExp(
@@ -56,110 +92,78 @@ final _ttsDetailsPattern = RegExp(
   r'<details[^>]*>[\s\S]*?<\/details>',
   caseSensitive: false,
 );
-const int _cheapStreamingTextThreshold = 900;
-const int _cheapStreamingTextLineThreshold = 12;
-final _markdownBlockSyntaxPattern = RegExp(
-  r'(^|\n)[ \t]{0,3}(?:#{1,6}\s|>\s|[-*+]\s|\d+[.)]\s|```|~~~)',
-  multiLine: true,
-);
-final _markdownLinkOrImagePattern = RegExp(
-  r'!\[[^\]]*]\([^)]+\)|\[[^\]]+]\([^)]+\)',
-);
-final _markdownReferenceLinkPattern = RegExp(
-  r'!\[[^\]]*]\[[^\]]*]|'
-  r'\[[^\]]+]\[[^\]]*]',
-);
-final _markdownInlineSyntaxPattern = RegExp(
-  r'`[^`\n]+`|\*\*[^*\n]+\*\*|__[^_\n]+__|~~[^~\n]+~~',
-);
-final _markdownSingleEmphasisPattern = RegExp(
-  r'(?:^|[\s(])\*[^*\s][^*\n]*?[^*\s]\*(?=$|[\s).,!?:;])|'
-  r'(?:^|[\s(])_[^_\s][^_\n]*?[^_\s]_(?=$|[\s).,!?:;])',
-);
-final _markdownTablePattern = RegExp(
-  r'^\s*\|?.+\|.+\s*$\n^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$',
-  multiLine: true,
-);
-final _markdownHorizontalRulePattern = RegExp(
-  r'(^|\n)[ \t]{0,3}(?:-{3,}|\*{3,}|_{3,})(?:\n|$)',
-  multiLine: true,
-);
-final _markdownHtmlPattern = RegExp(
-  r'<(?:a|img|br|details|summary|table|tr|td|th|blockquote|pre|code)\b',
-  caseSensitive: false,
-);
-final _markdownAutolinkPattern = RegExp(r'<[A-Za-z][A-Za-z0-9+.\-]*:[^<>\s]+>');
-final _markdownBareAutolinkPattern = RegExp(
-  r'(?:(?:https?|ftp):\/\/|www\.)[^\s<]+|'
-  r"(?:^|[\s(])[\w.!#$%&'*+/=?^`{|}~-]+@[\w-]+(?:\.[\w-]+)+(?=$|[\s).,!?:;])",
-  caseSensitive: false,
-);
-final _markdownIndentedCodeBlockPattern = RegExp(
-  r'(^|\n)(?: {4}|\t)\S',
-  multiLine: true,
-);
-final _markdownBlockLatexPattern = RegExp(
-  r'(^|\n)[ \t]{0,3}\$\$[\s\S]+?\$\$[ \t]*(?=\n|$)',
-  multiLine: true,
-);
-final _markdownInlineLatexPattern = RegExp(r'\$[^$\n]+\$');
 // Handle both URL formats: /api/v1/files/{id} and /api/v1/files/{id}/content
 final _fileIdPattern = RegExp(r'/api/v1/files/([^/]+)(?:/content)?$');
-
-/// A generated document fused from its real file (in the OWUI file store) and
-/// its docgen HTML side-preview, rendered as a single card.
-class _DocPreview {
-  const _DocPreview({
-    required this.fileName,
-    this.fileUrl,
-    this.fileId,
-    this.previewHtml,
-    this.previewUrl,
-  }) : assert(previewHtml != null || previewUrl != null);
-
-  /// Real downloadable file (null for artifacts — the HTML IS the artifact).
-  final String? fileUrl;
-  final String fileName;
-  final String? fileId;
-
-  /// Legacy/artifact mode: a self-contained HTML string to render.
-  final String? previewHtml;
-
-  /// Structured mode: URL of a rendered preview file (typically a PDF derived
-  /// from the real file's bytes — the post-0.4.0 docgen contract).
-  final String? previewUrl;
-}
 
 class AssistantMessageWidget extends ConsumerStatefulWidget {
   final dynamic message;
   final bool isStreaming;
   final bool showFollowUps;
+
+  /// Another user's chat (shared folder): only copy/listen/version browsing.
+  final bool readOnly;
   final bool animateOnMount;
   final String? modelName;
   final String? modelIconUrl;
+
+  /// Whether to paint the avatar + model name above this response.
+  ///
+  /// False for a row that continues the response above it (a Hermes turn can
+  /// emit several assistant messages), so one logical answer shows one header.
+  final bool showModelHeader;
+
+  /// Whether to paint the completion action bar below this response.
+  ///
+  /// The counterpart to [showModelHeader]: within one grouped response the
+  /// header sits on the first row and the bar on the last, so a single answer
+  /// shows one of each. Sources and the version chip still render on their own
+  /// row when this is false — only the buttons move.
+  final bool showActionBar;
+
+  /// Supplies the full text of the grouped response for read-aloud.
+  ///
+  /// Called at tap time, not during build, so a row never has to observe its
+  /// siblings. Null means this row speaks its own content.
+  final String Function()? resolveGroupedResponseText;
   final List<String?> versionModelNames;
   final List<String?> versionModelIconUrls;
+  final bool suppressStreamingHaptics;
   final VoidCallback? onCopy;
   final VoidCallback? onRegenerate;
   final VoidCallback onDelete;
   final VoidCallback? onLike;
   final VoidCallback? onDislike;
+  final FutureOr<void> Function(String suggestion)? onFollowUpSelected;
+
+  @visibleForTesting
+  final VoidCallback? debugOnShellBuild;
+
+  @visibleForTesting
+  final VoidCallback? debugOnStreamingContentBuild;
 
   const AssistantMessageWidget({
     super.key,
     required this.message,
     this.isStreaming = false,
     this.showFollowUps = true,
+    this.readOnly = false,
     this.animateOnMount = true,
     this.modelName,
     this.modelIconUrl,
+    this.showModelHeader = true,
+    this.showActionBar = true,
+    this.resolveGroupedResponseText,
     this.versionModelNames = const <String?>[],
     this.versionModelIconUrls = const <String?>[],
+    this.suppressStreamingHaptics = false,
     this.onCopy,
     this.onRegenerate,
     required this.onDelete,
     this.onLike,
     this.onDislike,
+    this.onFollowUpSelected,
+    this.debugOnShellBuild,
+    this.debugOnStreamingContentBuild,
   });
 
   @override
@@ -170,19 +174,20 @@ class AssistantMessageWidget extends ConsumerStatefulWidget {
 class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
     with TickerProviderStateMixin, WidgetsBindingObserver {
   late AnimationController _fadeController;
-  late AnimationController _slideController;
+  late AnimationController _streamingContentFadeController;
+  late CurvedAnimation _streamingContentFade;
   String _displayedContent = '';
+  late final ValueNotifier<String> _displayedContentListenable;
   Widget? _cachedAvatar;
   String? _cachedAvatarModelName;
   String? _cachedAvatarIconUrl;
-  bool _allowTypingIndicator = false;
-  Timer? _typingGateTimer;
+  // The label as shown, in the app's language: a voice reply's names it.
+  String? _cachedAvatarLabel;
   // Hysteresis for the action row: a message that has streamed in this widget's
-  // lifetime must reach a settled completion before the action row replaces the
-  // typing indicator, so a transient in-progress state can never flash the row
-  // mid-stream. Settled on `responseDone` or on the streaming-end transition.
-  // History messages never set `_hasStreamedThisMessage` and show their action
-  // row immediately.
+  // lifetime must reach a settled completion before the action row appears, so
+  // a transient in-progress state can never flash the row mid-stream. Settled
+  // on `responseDone` or on the streaming-end transition. History messages
+  // never set `_hasStreamedThisMessage` and show their action row immediately.
   bool _hasStreamedThisMessage = false;
   bool _actionRowSettled = false;
   String _ttsPlainText = '';
@@ -198,34 +203,67 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
   bool _hasAnimated = false;
   bool _isAppForeground = true;
   bool _isRouteVisible = true;
+  String? _visibleFollowUpScopeId;
+  List<String> _visibleFollowUps = const <String>[];
+  late final void Function(String url, String title) _markdownLinkTapCallback;
+  late final Widget Function(Uri uri, String? title, String? alt)
+  _markdownImageBuilder;
 
-  /// Guards the triple-haptic so it fires only once per streaming session.
-  bool _hasTriggeredContentHaptic = false;
   ProviderSubscription<String?>? _streamingContentSub;
+
+  /// Remount-proof per-message guards for the streaming haptics; a recreated
+  /// State must never replay the content-arrival or completion pulses.
+  StreamingHapticMemory get _hapticMemory =>
+      ref.read(streamingHapticMemoryProvider);
 
   bool get _shouldAnimateOnMount =>
       widget.animateOnMount && !_disableAnimations;
 
+  ChatMessage? get _chatMessage =>
+      widget.message is ChatMessage ? widget.message as ChatMessage : null;
+
+  /// A reply a realtime call's voice gave by itself, stored under the voice
+  /// model. There is no chat model answer to run again.
+  /// Only the current version can say: earlier versions keep no `meta`.
+  bool get _isVoiceReply =>
+      _activeVersionIndex < 0 && _spokenOnly(widget.message);
+
+  static bool _spokenOnly(Object? message) =>
+      message is ChatMessage && voiceReplayFor(message).spokenOnly;
+
+  ChatTurnPhase get _turnPhase =>
+      chatTurnPhaseForMessage(_chatMessage, isStreaming: widget.isStreaming);
+
+  // Phase derivation routes through chatTurnPhaseForMessage, which returns
+  // ChatTurnPhase.none for a null/non-ChatMessage. Every production call site
+  // and test supplies a ChatMessage, so the helper path is the only reachable
+  // one; deriving from the shared phase rule keeps a single source of truth.
   bool get _responseCompleted {
     if (_activeVersionIndex >= 0) {
       return true;
     }
-    if (!widget.isStreaming) {
-      return true;
-    }
-    return widget.message.metadata?['responseDone'] == true;
+    return chatTurnPhaseShowsCompletedFooter(_turnPhase);
   }
 
-  bool get _uiTreatsAsStreaming => widget.isStreaming && !_responseCompleted;
+  bool get _uiTreatsAsStreaming =>
+      _activeVersionIndex < 0 && _turnPhase == ChatTurnPhase.running;
 
   // press state handled by shared ChatActionButton
 
   Future<void> _handleFollowUpTap(String suggestion) async {
     final trimmed = suggestion.trim();
-    if (trimmed.isEmpty || _uiTreatsAsStreaming || !_responseCompleted) {
+    if (trimmed.isEmpty ||
+        widget.readOnly ||
+        _uiTreatsAsStreaming ||
+        !_responseCompleted) {
       return;
     }
     try {
+      final onFollowUpSelected = widget.onFollowUpSelected;
+      if (onFollowUpSelected != null) {
+        await onFollowUpSelected(trimmed);
+        return;
+      }
       final container = ProviderScope.containerOf(context, listen: false);
       await sendMessageWithContainer(container, trimmed, null);
     } catch (err, stack) {
@@ -237,162 +275,11 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
     }
   }
 
-  /// Open Terminal `display_file` artifacts for this message, read reactively
-  /// from the durable [terminalArtifactStore] (NOT the message metadata, which a
-  /// server re-sync wipes — that made the card vanish on scroll). Renders
-  /// tappable cards that open the workspace file.
-  Widget _buildTerminalArtifactSection() {
-    return ListenableBuilder(
-      listenable: terminalArtifactStore,
-      builder: (context, _) {
-        // Union the live store (immediate, in-session) with paths persisted in
-        // this message's display_file tool calls (so the card survives app
-        // restart / chat reload, where the in-memory store is empty).
-        final paths = <String>{
-          ...terminalArtifactStore.pathsFor(widget.message.id),
-          ..._artifactPathsFromOutput(),
-        }.toList(growable: false);
-        if (paths.isEmpty) {
-          return const SizedBox.shrink();
-        }
-        return Padding(
-          padding: const EdgeInsets.only(bottom: Spacing.md),
-          child: _buildTerminalArtifactCards(paths),
-        );
-      },
-    );
-  }
-
-  /// Artifact paths from the persisted responses-output trace: each Open
-  /// Terminal `display_file` tool call records its `path` in a `function_call`
-  /// item, and the matching `function_call_output` reports whether the file
-  /// existed. Unlike the in-memory store, this survives app restart / reload.
-  List<String> _artifactPathsFromOutput() {
-    final output = widget.message.output;
-    if (output == null || output.isEmpty) {
-      return const <String>[];
-    }
-    // call_id -> whether display_file reported the file exists.
-    final existsByCall = <String, bool>{};
-    for (final item in output) {
-      if (item['type'] != 'function_call_output') continue;
-      final callId = item['call_id']?.toString();
-      if (callId == null) continue;
-      final result = item['output'];
-      if (result is! List) continue;
-      for (final part in result) {
-        if (part is Map && part['text'] is String) {
-          try {
-            final decoded = jsonDecode(part['text'] as String);
-            if (decoded is Map && decoded['exists'] is bool) {
-              existsByCall[callId] = decoded['exists'] as bool;
-            }
-          } catch (_) {}
-        }
-      }
-    }
-    final paths = <String>[];
-    for (final item in output) {
-      if (item['type'] != 'function_call' || item['name'] != 'display_file') {
-        continue;
-      }
-      final args = item['arguments'];
-      if (args is! String) continue;
-      try {
-        final decoded = jsonDecode(args);
-        final path = decoded is Map ? decoded['path'] : null;
-        if (path is! String || path.isEmpty) continue;
-        // Show only when the file existed (matches the backend, which emits the
-        // event only then); if there's no result yet (mid-stream) allow it.
-        final callId = item['call_id']?.toString();
-        if (callId != null && existsByCall[callId] == false) continue;
-        paths.add(path);
-      } catch (_) {}
-    }
-    return paths;
-  }
-
-  String _artifactBasename(String path) {
-    final parts = path.split('/').where((s) => s.isNotEmpty).toList();
-    return parts.isEmpty ? path : parts.last;
-  }
-
-  Widget _buildTerminalArtifactCards(List<String> paths) {
-    final theme = context.conduitTheme;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        for (final path in paths)
-          Padding(
-            padding: const EdgeInsets.only(bottom: Spacing.xs),
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                borderRadius: BorderRadius.circular(AppBorderRadius.md),
-                onTap: () => unawaited(
-                  openTerminalArtifactByPath(context, ref, path: path),
-                ),
-                child: Container(
-                  padding: const EdgeInsets.all(Spacing.md),
-                  decoration: BoxDecoration(
-                    color: theme.cardBackground,
-                    borderRadius: BorderRadius.circular(AppBorderRadius.md),
-                    border: Border.all(
-                      color: theme.textPrimary.withValues(alpha: 0.12),
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.auto_awesome_outlined,
-                        size: 20,
-                        color: theme.buttonPrimary,
-                      ),
-                      const SizedBox(width: Spacing.sm),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              _artifactBasename(path),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: AppTypography.labelStyle.copyWith(
-                                color: theme.textPrimary,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            Text(
-                              'Artifact · tap to open',
-                              style: AppTypography.labelMediumStyle.copyWith(
-                                color: theme.textSecondary.withValues(
-                                  alpha: 0.7,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      Icon(
-                        Icons.chevron_right,
-                        size: 18,
-                        color: theme.textSecondary,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-      ],
-    );
-  }
-
   @override
   void initState() {
     super.initState();
+    _markdownLinkTapCallback = _handleMarkdownLinkTap;
+    _markdownImageBuilder = _buildMarkdownImage;
     WidgetsBinding.instance.addObserver(this);
     _isAppForeground = _isLifecycleForeground(
       WidgetsBinding.instance.lifecycleState,
@@ -408,14 +295,19 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
       vsync: this,
       value: shouldAnimateOnMount ? 0.0 : 1.0,
     );
-    _slideController = AnimationController(
-      duration: const Duration(milliseconds: 300),
+    _streamingContentFadeController = AnimationController(
+      duration: const Duration(milliseconds: 260),
       vsync: this,
-      value: shouldAnimateOnMount ? 0.0 : 1.0,
+      value: 1.0,
+    );
+    _streamingContentFade = CurvedAnimation(
+      parent: _streamingContentFadeController,
+      curve: Curves.easeOutCubic,
     );
     _hasAnimated = !shouldAnimateOnMount;
     _displayedContent = _resolvedMessageContent();
-    _updateTypingIndicatorGate();
+    _displayedContentListenable = ValueNotifier<String>(_displayedContent);
+    _primeInitialStreamingContentFade();
     _updateActionRowSettle();
     _syncStreamingContentSubscription();
   }
@@ -423,13 +315,14 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    _disableAnimations =
-        MediaQuery.maybeDisableAnimationsOf(context) ?? _disableAnimations;
+    _disableAnimations = context.reduceMotion;
     _updateRouteVisibility();
     if (!_shouldAnimateOnMount && !_hasAnimated) {
       _fadeController.value = 1.0;
-      _slideController.value = 1.0;
       _hasAnimated = true;
+    }
+    if (_disableAnimations && !_streamingContentFadeController.isCompleted) {
+      _streamingContentFadeController.value = 1.0;
     }
     // Build cached avatar when theme context is available
     _buildCachedAvatar();
@@ -444,15 +337,21 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
     if (messageChanged) {
       _lastStreamingContent = null;
       _displayedContent = '';
+      _displayedContentListenable.value = '';
       _pendingDisplayedContent = null;
       _cachedAvatar = null;
       _cachedAvatarModelName = null;
       _cachedAvatarIconUrl = null;
+      _cachedAvatarLabel = null;
+      _clearVisibleFollowUps();
       _resetTtsPlainTextState();
       _hasAnimated = !_shouldAnimateOnMount;
-      _hasTriggeredContentHaptic = false;
       _fadeController.value = _shouldAnimateOnMount ? 0.0 : 1.0;
-      _slideController.value = _shouldAnimateOnMount ? 0.0 : 1.0;
+      _streamingContentFadeController.value = 1.0;
+    }
+
+    if (!oldWidget.isStreaming && widget.isStreaming) {
+      _clearVisibleFollowUps();
     }
 
     // Re-sync subscription when streaming state changes
@@ -460,14 +359,25 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
       _syncStreamingContentSubscription();
     }
 
-    // Reset fade controller when streaming ends for the same message
+    // A transport flag can flap while ownership moves between optimistic,
+    // durable, and server-echo rows. Completion haptics therefore follow the
+    // durable responseDone transition, not raw isStreaming changes.
+    final responseCompleted =
+        oldWidget.message.metadata?['responseDone'] != true &&
+        widget.message.metadata?['responseDone'] == true;
+    if (responseCompleted &&
+        oldWidget.message.id == widget.message.id &&
+        _hapticMemory.markFired(
+          widget.message.id,
+          StreamingHapticEvent.turnCompleted,
+        )) {
+      _streamingHaptic(HapticType.medium);
+    }
+
+    // Genuine streaming end: allow the action row to replace the indicator.
     if (oldWidget.isStreaming &&
         !widget.isStreaming &&
         oldWidget.message.id == widget.message.id) {
-      _hasTriggeredContentHaptic = false;
-      // Haptic: streaming finished
-      _streamingHaptic(HapticType.medium);
-      // Genuine streaming end: allow the action row to replace the indicator.
       _hasStreamedThisMessage = true;
       _actionRowSettled = true;
     }
@@ -477,21 +387,26 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
       _queueDisplayedContentRefresh();
     }
 
-    // Update typing indicator gate when message properties that affect emptiness change
-    if (_didTypingIndicatorInputsChange(oldWidget) ||
+    if (oldWidget.isStreaming != widget.isStreaming ||
         oldWidget.message.metadata?['responseDone'] !=
-            widget.message.metadata?['responseDone']) {
-      _updateTypingIndicatorGate();
+            widget.message.metadata?['responseDone'] ||
+        // An error can appear in place (failing the turn) while isStreaming
+        // stays true, flipping the phase to failed without an isStreaming or
+        // responseDone change; re-settle so the action row surfaces.
+        oldWidget.message.error != widget.message.error) {
       _updateActionRowSettle();
     }
 
     // Rebuild cached avatar if model name or icon changes
     if (messageChanged ||
+        oldWidget.showModelHeader != widget.showModelHeader ||
         oldWidget.modelName != widget.modelName ||
         oldWidget.modelIconUrl != widget.modelIconUrl ||
         oldWidget.versionModelNames != widget.versionModelNames ||
         oldWidget.versionModelIconUrls != widget.versionModelIconUrls ||
         oldWidget.message.model != widget.message.model ||
+        // A call's transcript can arrive after the message did.
+        _spokenOnly(oldWidget.message) != _spokenOnly(widget.message) ||
         _didVersionMetadataChange(oldWidget)) {
       _buildCachedAvatar();
     }
@@ -499,10 +414,23 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
 
   String _resolvedMessageContent([String? overrideContent, int? versionIndex]) {
     final selectedVersionIndex = versionIndex ?? _activeVersionIndex;
+    // The canonical message and the visible-stream provider publish on
+    // different schedules. A row rebuild can otherwise overwrite a newer
+    // tool projection with the older canonical text in the same frame.
+    // Read their shared owner so either publication order uses the current
+    // buffer, including when a virtualized row remounts between flushes.
+    final streamingContent =
+        selectedVersionIndex < 0 &&
+            widget.isStreaming &&
+            ref.exists(chatMessagesProvider)
+        ? ref
+              .read(chatMessagesProvider.notifier)
+              .contentForStreamingMessage(widget.message.id)
+        : null;
     final raw0 = selectedVersionIndex >= 0
         ? (widget.message.versions[selectedVersionIndex].content as String?) ??
               ''
-        : (overrideContent ?? widget.message.content ?? '');
+        : (streamingContent ?? overrideContent ?? widget.message.content ?? '');
 
     // Strip any leftover placeholders from content before parsing
     const ti = '[TYPING_INDICATOR]';
@@ -533,8 +461,11 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
     }
 
     _displayedContentFrameScheduled = true;
-    WidgetsBinding.instance.scheduleFrame();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    // Apply the latest streamed text before build so this requested frame can
+    // render it immediately. Deferring until after the frame creates a second
+    // frame and makes iOS composite the persistent native glass twice for one
+    // visible content update.
+    WidgetsBinding.instance.scheduleFrameCallback((_) {
       _displayedContentFrameScheduled = false;
       if (!mounted) {
         return;
@@ -549,16 +480,29 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
   }
 
   void _applyDisplayedContent(String raw) {
+    final shouldFadeStreamingContent = _shouldFadeInStreamingContent(raw);
     final previousLength = _displayedContent.length;
     final contentChanged = raw != _displayedContent;
 
     if (contentChanged) {
-      if (mounted) {
+      final shellPresentationChanged =
+          _displayedContent.trim().isEmpty != raw.trim().isEmpty;
+      if (shouldFadeStreamingContent) {
+        _streamingContentFadeController.value = 0.0;
+      }
+      if (mounted && shellPresentationChanged) {
+        // The shell only needs the empty/non-empty boundary so queued and empty
+        // states can hand off to the live body. Later token batches remain
+        // isolated to the ValueListenableBuilder below.
         setState(() {
           _displayedContent = raw;
         });
       } else {
         _displayedContent = raw;
+      }
+      _displayedContentListenable.value = raw;
+      if (shouldFadeStreamingContent) {
+        _streamingContentFadeController.forward();
       }
       if (widget.isStreaming) {
         _onStreamingChunk(previousLength, raw.length);
@@ -570,8 +514,92 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
         _isPreparingTtsPlainText) {
       _resetTtsPlainTextState();
     }
-    _updateTypingIndicatorGate();
   }
+
+  void _primeInitialStreamingContentFade() {
+    if (!_canFadeStreamingContent(_displayedContent)) {
+      return;
+    }
+    _streamingContentFadeController.value = 0.0;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _disableAnimations || !_uiTreatsAsStreaming) {
+        return;
+      }
+      _streamingContentFadeController.forward();
+    });
+  }
+
+  bool _shouldFadeInStreamingContent(String nextRaw) {
+    return _canFadeStreamingContent(nextRaw) &&
+        _displayedContent.trim().isEmpty;
+  }
+
+  bool _canFadeStreamingContent(String nextRaw) {
+    if (_disableAnimations || !_uiTreatsAsStreaming) {
+      return false;
+    }
+    return nextRaw.trim().isNotEmpty;
+  }
+
+  Object? _comparisonGroupMessage;
+  ChatComparisonGroup? _comparisonGroupCache;
+
+  /// The model slots this message's stored alternatives form, or null when the
+  /// message has no alternatives. A group of one slot is a plain regeneration
+  /// history and keeps the ordinary version pager.
+  ChatComparisonGroup? get _comparisonGroup {
+    if (widget.message.versions.isEmpty) return null;
+    if (!identical(_comparisonGroupMessage, widget.message)) {
+      _comparisonGroupMessage = widget.message;
+      _comparisonGroupCache = ChatComparisonGroup.fromMessage(
+        widget.message as ChatMessage,
+      );
+    }
+    return _comparisonGroupCache;
+  }
+
+  /// Whether this is an answer of a comparison that is still being written and
+  /// whose server task is known: the only state a per-answer stop can act on.
+  /// Before the task is bound only the whole-turn stop applies.
+  bool get _isStoppableComparisonAnswer {
+    if (widget.readOnly || _activeVersionIndex >= 0) return false;
+    if (!ref.watch(comparisonAnswerStopPermittedProvider)) return false;
+    final message = widget.message as ChatMessage;
+    if (!message.isStreaming) return false;
+    final metadata = message.metadata;
+    return metadata?[kMessageModelIdxMetadataKey] is int &&
+        (metadata?['taskId']?.toString().isNotEmpty ?? false);
+  }
+
+  String get _activeAnswerId =>
+      _activeVersionIndex >= 0 &&
+          _activeVersionIndex < widget.message.versions.length
+      ? widget.message.versions[_activeVersionIndex].id
+      : widget.message.id;
+
+  /// The answers the pager steps through, as indexes into `versions` with -1
+  /// for the displayed message, oldest first. In a comparison that is the
+  /// shown slot's own runs only: the other slots are reached by their tabs.
+  List<int> _pagerIndices() {
+    final group = _comparisonGroup;
+    if (group == null) return const <int>[];
+    if (group.isComparison) {
+      final activeId = _activeAnswerId;
+      final slot = group.slots.firstWhere(
+        (candidate) => candidate.answers.any((a) => a.messageId == activeId),
+      );
+      return [for (final answer in slot.answers) answer.versionIndex ?? -1];
+    }
+    return [for (var i = 0; i < widget.message.versions.length; i += 1) i, -1];
+  }
+
+  ChatMergedResponse? get _activeMergedResponse =>
+      _activeVersionIndex >= 0 &&
+          _activeVersionIndex < widget.message.versions.length
+      ? ChatMergedResponse.tryFrom(
+          widget.message.versions[_activeVersionIndex].merged,
+        )
+      : (widget.message as ChatMessage).mergedResponse;
 
   void _setActiveVersionIndex(int nextIndex) {
     final raw = _resolvedMessageContent(null, nextIndex);
@@ -579,35 +607,84 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
       _activeVersionIndex = nextIndex;
       _displayedContent = raw;
     });
+    _displayedContentListenable.value = raw;
     _resetTtsPlainTextState();
     _buildCachedAvatar();
-    _updateTypingIndicatorGate();
   }
 
-  void _updateTypingIndicatorGate() {
-    _typingGateTimer?.cancel();
-    if (_shouldShowStreamingIndicator) {
-      if (_allowTypingIndicator) {
-        return;
-      }
-      _typingGateTimer = Timer(const Duration(milliseconds: 150), () {
-        if (!mounted || !_shouldShowStreamingIndicator) {
-          return;
-        }
-        setState(() {
-          _allowTypingIndicator = true;
-        });
-        // Haptic: typing indicator appeared
-        _streamingHaptic(HapticType.light);
-      });
-    } else if (_allowTypingIndicator) {
-      if (mounted) {
-        setState(() {
-          _allowTypingIndicator = false;
-        });
-      } else {
-        _allowTypingIndicator = false;
-      }
+  /// The answer being shown, when it is one of this comparison's.
+  ChatComparisonAnswer? _shownAnswer(ChatComparisonGroup group) {
+    final activeId = _activeAnswerId;
+    return [for (final slot in group.slots) ...slot.answers]
+        .where((a) => a.messageId == activeId)
+        .firstOrNull;
+  }
+
+  /// The finished answers of this turn a merge may read, one per slot in slot
+  /// order: the shown answer for its own slot, otherwise the slot's current
+  /// one. An answer still being written, failed, or without text is left out,
+  /// so one unfinished slot never blocks merging the others.
+  List<ChatComparisonAnswer> _mergeableAnswers(ChatComparisonGroup group) {
+    final shown = _shownAnswer(group);
+    return [
+      for (final slot in group.slots)
+        if (_isMergeable(
+          shown != null && slot.index == shown.slot ? shown : slot.current,
+        ))
+          shown != null && slot.index == shown.slot ? shown : slot.current,
+    ];
+  }
+
+  static bool _isMergeable(ChatComparisonAnswer answer) =>
+      !answer.isStreaming &&
+      answer.error == null &&
+      answer.sourceText.trim().isNotEmpty;
+
+  /// Merges answers of this comparison into one response, saved on the answer
+  /// being shown. With two finished answers that is all there is to choose;
+  /// with more, the user picks at least two. Only the chosen answers' own
+  /// texts are sent, and every original stays as it is.
+  Future<void> _mergeResponses(ChatComparisonGroup group) async {
+    final parentId = group.parentId;
+    final target = _shownAnswer(group);
+    if (parentId == null || target == null) return;
+    var chosen = _mergeableAnswers(group);
+    if (chosen.length > 2) {
+      final picked = await showMergeSourcesSheet(
+        context,
+        group: group,
+        candidates: chosen,
+      );
+      if (picked == null || !mounted) return;
+      chosen = picked;
+    }
+    if (chosen.length < 2) return;
+    final l10n = AppLocalizations.of(context)!;
+    try {
+      await ref
+          .read(comparisonMergeProvider.notifier)
+          .merge(
+            targetMessageId: target.messageId,
+            displayedMessageId: widget.message.id as String,
+            parentMessageId: parentId,
+            model: target.model ?? (widget.message.model as String?) ?? '',
+            responses: [for (final answer in chosen) answer.sourceText],
+          );
+    } on ComparisonMergeException catch (error) {
+      if (!mounted) return;
+      AdaptiveSnackBar.show(
+        context,
+        message: switch (error.reason) {
+          ComparisonMergeFailure.unavailable => l10n.chatMergeErrorUnavailable,
+          ComparisonMergeFailure.notMergeable =>
+            l10n.chatMergeErrorNotMergeable,
+          ComparisonMergeFailure.ownerChanged =>
+            l10n.chatMergeErrorOwnerChanged,
+          ComparisonMergeFailure.busy => l10n.chatMergeErrorNotMergeable,
+          ComparisonMergeFailure.failed => l10n.chatMergeErrorFailed,
+        },
+        type: AdaptiveSnackBarType.error,
+      );
     }
   }
 
@@ -621,7 +698,8 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
       _actionRowSettled = false;
       return;
     }
-    if (widget.message.metadata?['responseDone'] == true) {
+    if (widget.message.metadata?['responseDone'] == true ||
+        _turnPhase == ChatTurnPhase.failed) {
       _hasStreamedThisMessage = true;
       _actionRowSettled = true;
       return;
@@ -631,11 +709,6 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
       return;
     }
   }
-
-  /// Whether the streaming/typing indicator should currently occupy the footer
-  /// slot. Gated by the 150ms anti-flash window.
-  bool get _showStreamingIndicatorNow =>
-      _allowTypingIndicator && _shouldShowStreamingIndicator;
 
   /// Whether the action row may replace the streaming indicator in the footer.
   bool get _showActionRowNow {
@@ -755,37 +828,90 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
       return;
     }
 
-    final speechText = await _buildTtsPlainTextOnDemand(_displayedContent);
+    // A grouped response is one answer, so read it whole rather than stopping
+    // at this row's share of it.
+    final rawText =
+        widget.resolveGroupedResponseText?.call() ?? _displayedContent;
+    final speechText = await _buildTtsPlainTextOnDemand(rawText);
     if (!mounted || speechText.trim().isEmpty) {
       return;
     }
     await controller.toggleForMessage(messageId: messageId, text: speechText);
   }
 
-  Widget _buildMessageContent() {
+  Widget _buildMessageContent(
+    String displayedContent, {
+    required AssistantResponseBuilder? responseBuilder,
+    required List<ChatSourceReference> activeSources,
+  }) {
     final children = <Widget>[];
-    final trimmedContent = _displayedContent.trim();
+    final trimmedContent = displayedContent.trim();
     if (trimmedContent.isNotEmpty) {
-      final markdownWidget = _buildEnhancedMarkdownContent(_displayedContent);
+      final markdownWidget = _buildEnhancedMarkdownContent(
+        displayedContent,
+        responseBuilder: responseBuilder,
+        activeSources: activeSources,
+      );
       children.add(RepaintBoundary(child: markdownWidget));
     }
 
     if (children.isEmpty) return const SizedBox.shrink();
-    // Append TTS karaoke bar if this is the active message
-    final ttsState = ref.watch(textToSpeechControllerProvider);
-    final isActive =
-        ttsState.activeMessageId == _messageId &&
-        (ttsState.status == TtsPlaybackStatus.speaking ||
-            ttsState.status == TtsPlaybackStatus.paused ||
-            ttsState.status == TtsPlaybackStatus.loading);
-    if (isActive && ttsState.activeSentenceIndex >= 0) {
-      children.add(const SizedBox(height: Spacing.sm));
-      children.add(_buildKaraokeBar(ttsState));
-    }
+    // Keep playback progress local to the content subtree too. Watching this
+    // provider from the assistant shell would make every word-progress event
+    // rebuild attachments, status rows, tools, sources, and footer actions.
+    children.add(
+      Consumer(
+        builder: (context, childRef, _) {
+          final ttsState = childRef.watch(textToSpeechControllerProvider);
+          final isActive =
+              ttsState.activeMessageId == _messageId &&
+              (ttsState.status == TtsPlaybackStatus.speaking ||
+                  ttsState.status == TtsPlaybackStatus.paused ||
+                  ttsState.status == TtsPlaybackStatus.loading);
+          if (!isActive || ttsState.activeSentenceIndex < 0) {
+            return const SizedBox.shrink();
+          }
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const SizedBox(height: Spacing.sm),
+              _buildKaraokeBar(ttsState),
+            ],
+          );
+        },
+      ),
+    );
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: children,
+    );
+  }
+
+  Widget _buildStreamingContentBody({
+    required AssistantResponseBuilder? responseBuilder,
+    required List<ChatSourceReference> activeSources,
+  }) {
+    return ValueListenableBuilder<String>(
+      valueListenable: _displayedContentListenable,
+      builder: (context, displayedContent, _) {
+        widget.debugOnStreamingContentBuild?.call();
+        final body = _buildMessageContent(
+          displayedContent,
+          responseBuilder: responseBuilder,
+          activeSources: activeSources,
+        );
+        // Always wrap in a FadeTransition with a stable key/type so the widget
+        // at this slot survives the streaming/completed boundary.
+        final fade = _canFadeStreamingContent(displayedContent)
+            ? _streamingContentFade
+            : const AlwaysStoppedAnimation<double>(1.0);
+        return FadeTransition(
+          key: const ValueKey('assistant-streaming-content-fade'),
+          opacity: fade,
+          child: body,
+        );
+      },
     );
   }
 
@@ -800,9 +926,8 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
     final we = ttsState.wordEndInSentence;
 
     final baseStyle =
-        Theme.of(
-          context,
-        ).textTheme.bodyMedium?.copyWith(color: theme.textPrimary) ??
+        Theme.of(context).textTheme.bodyMedium
+            ?.copyWith(color: theme.textPrimary) ??
         AppTypography.bodyMediumStyle.copyWith(color: theme.textPrimary);
     final highlightStyle = baseStyle.copyWith(
       backgroundColor: theme.buttonPrimary.withValues(alpha: 0.25),
@@ -840,18 +965,6 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
     );
   }
 
-  bool get _hasPendingVisibleStatus => widget.message.statusHistory
-      .where((status) => status.hidden != true)
-      .any((status) => status.done != true);
-
-  /// The streaming indicator lives in the footer slot and persists for the
-  /// whole generation (text/tool-calls/status stream in above it), then is
-  /// swapped for the action row once streaming completes. A pending visible
-  /// status already renders its own shimmer, so suppress the indicator then
-  /// (matches the behaviour the widget test asserts).
-  bool get _shouldShowStreamingIndicator =>
-      _uiTreatsAsStreaming && !_hasPendingVisibleStatus;
-
   bool get _isAssistantResponseEmpty {
     final content = _displayedContent.trim();
     if (content.isNotEmpty) {
@@ -873,10 +986,6 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
       return false;
     }
 
-    // Check if there's a pending (not done) visible status - those have shimmer
-    // so we don't need the typing indicator. But if all visible statuses are
-    // done (e.g., "Retrieved 1 source"), show typing indicator to indicate
-    // the model is still working on generating a response.
     final visibleStatuses = widget.message.statusHistory
         .where((status) => status.hidden != true)
         .toList();
@@ -884,10 +993,8 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
       (status) => status.done != true,
     );
     if (hasPendingStatus) {
-      // Pending status has shimmer effect, no need for typing indicator
       return false;
     }
-    // If all statuses are done but no content yet, show typing indicator
 
     final hasFollowUps = widget.message.followUps.isNotEmpty;
     if (hasFollowUps) {
@@ -905,41 +1012,56 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
     final theme = context.conduitTheme;
     final modelName = _resolveActiveModelName();
     final iconUrl = _resolveActiveModelIconUrl();
+    // Grouped continuation: the response above already named this model. A
+    // selected historical version can carry a DIFFERENT model, though, and
+    // that identity was never shown above — so only stay silent while the
+    // active identity still matches the one the group header announced.
+    final isVoiceReply = _isVoiceReply;
+    final label = isVoiceReply
+        ? AppLocalizations.of(context)!.voiceReplySpokenLabel(modelName)
+        : modelName;
+    if (!widget.showModelHeader &&
+        !isVoiceReply &&
+        modelName == widget.modelName?.trim() &&
+        iconUrl == widget.modelIconUrl) {
+      _cachedAvatar = null;
+      _cachedAvatarModelName = modelName;
+      _cachedAvatarIconUrl = iconUrl;
+      _cachedAvatarLabel = label;
+      return;
+    }
     if (_cachedAvatar != null &&
         _cachedAvatarModelName == modelName &&
-        _cachedAvatarIconUrl == iconUrl) {
+        _cachedAvatarIconUrl == iconUrl &&
+        _cachedAvatarLabel == label) {
       return;
     }
     final hasIcon = iconUrl != null && iconUrl.isNotEmpty;
 
-    final Widget leading = hasIcon
-        ? ModelAvatar(size: 20, imageUrl: iconUrl, label: modelName)
-        : Container(
-            width: 20,
-            height: 20,
-            decoration: BoxDecoration(
-              color: theme.buttonPrimary,
-              borderRadius: BorderRadius.circular(AppBorderRadius.small),
-            ),
-            child: Icon(
-              Icons.auto_awesome,
-              color: theme.buttonPrimaryText,
-              size: 12,
-            ),
+    // A quiet speaker label, like a group-chat sender name: it names a model
+    // change without competing with the answer below it.
+    final Widget leading = hasIcon && !isVoiceReply
+        ? ModelAvatar(size: 16, imageUrl: iconUrl, label: modelName)
+        : Icon(
+            isVoiceReply
+                ? (Platform.isIOS ? CupertinoIcons.waveform : Icons.graphic_eq)
+                : Icons.auto_awesome,
+            color: theme.textTertiary,
+            size: IconSize.sm - 2,
           );
 
     _cachedAvatar = Padding(
-      padding: const EdgeInsets.only(bottom: Spacing.md),
+      padding: const EdgeInsets.only(bottom: Spacing.sm),
       child: Row(
         children: [
           leading,
-          const SizedBox(width: Spacing.xs),
+          const SizedBox(width: Spacing.xs + Spacing.xxs),
           Flexible(
             child: MiddleEllipsisText(
-              modelName,
+              label,
               style: AppTypography.bodySmallStyle.copyWith(
-                color: theme.textSecondary,
-                fontWeight: FontWeight.w500,
+                color: theme.textTertiary,
+                fontWeight: FontWeight.w400,
                 letterSpacing: AppTypography.letterSpacingNormal,
               ),
             ),
@@ -949,6 +1071,7 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
     );
     _cachedAvatarModelName = modelName;
     _cachedAvatarIconUrl = iconUrl;
+    _cachedAvatarLabel = label;
   }
 
   String _resolveActiveModelName() {
@@ -963,6 +1086,14 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
 
     if (_activeVersionIndex >= 0 &&
         _activeVersionIndex < widget.message.versions.length) {
+      final rawVersionModelName = widget
+          .message
+          .versions[_activeVersionIndex]
+          .modelName
+          ?.trim();
+      if (rawVersionModelName != null && rawVersionModelName.isNotEmpty) {
+        return rawVersionModelName;
+      }
       final rawVersionModel = widget.message.versions[_activeVersionIndex].model
           ?.trim();
       if (rawVersionModel != null && rawVersionModel.isNotEmpty) {
@@ -1006,39 +1137,28 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
   void _onStreamingChunk(int previousLength, int newLength) {
     if (newLength <= previousLength) return;
 
-    // Haptic: triple-tap when main content first arrives
-    if (previousLength == 0 && !_hasTriggeredContentHaptic) {
-      _hasTriggeredContentHaptic = true;
-      _tripleHaptic();
+    // The streamed value is replayed immediately when a virtualized row
+    // remounts. Keep this guard outside widget State so that replay cannot
+    // synthesize another 0→N "first chunk" and replay the pulse.
+    if (previousLength == 0 &&
+        _hapticMemory.markFired(
+          widget.message.id,
+          StreamingHapticEvent.contentArrival,
+        )) {
+      // One acknowledgement is enough; the previous three pulses at
+      // 0/150/300ms felt like an unintended rapid vibration after every send.
+      _streamingHaptic(HapticType.medium);
     }
   }
 
   /// Fires a single haptic impulse if streaming haptics are enabled.
   void _streamingHaptic(HapticType type) {
-    final enabled = ref.read(streamingHapticsEnabledProvider);
-    PlatformService.hapticFeedbackWithSettings(
-      type: type,
-      hapticEnabled: enabled,
-    );
+    if (_streamingHapticsAllowed) ConduitHaptics.trigger(type);
   }
 
-  /// Fires three distinct haptic taps to signal content arrival.
-  ///
-  /// Each tap is spaced 150ms apart so the user perceives three
-  /// separate impulses rather than a single buzz.
-  void _tripleHaptic() {
-    final enabled = ref.read(streamingHapticsEnabledProvider);
-    if (!enabled) return;
-    PlatformService.hapticFeedback(type: HapticType.medium);
-    Future.delayed(const Duration(milliseconds: 150), () {
-      if (!mounted) return;
-      PlatformService.hapticFeedback(type: HapticType.medium);
-    });
-    Future.delayed(const Duration(milliseconds: 300), () {
-      if (!mounted) return;
-      PlatformService.hapticFeedback(type: HapticType.medium);
-    });
-  }
+  bool get _streamingHapticsAllowed =>
+      ref.read(streamingHapticsEnabledProvider) &&
+      !widget.suppressStreamingHaptics;
 
   /// Subscribes to [streamingContentProvider] only while this message is
   /// actively streaming. Uses [ref.listenManual] for explicit lifecycle
@@ -1064,10 +1184,11 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _streamingContentSub?.close();
-    _typingGateTimer?.cancel();
     _resetTtsPlainTextState();
     _fadeController.dispose();
-    _slideController.dispose();
+    _streamingContentFade.dispose();
+    _streamingContentFadeController.dispose();
+    _displayedContentListenable.dispose();
     super.dispose();
   }
 
@@ -1109,36 +1230,10 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
     return oldWidget.isStreaming != widget.isStreaming;
   }
 
-  bool _didTypingIndicatorInputsChange(AssistantMessageWidget oldWidget) {
-    return _statusSignature(oldWidget.message.statusHistory) !=
-            _statusSignature(widget.message.statusHistory) ||
-        _collectionLength(oldWidget.message.files) !=
-            _collectionLength(widget.message.files) ||
-        _collectionLength(oldWidget.message.embeds) !=
-            _collectionLength(widget.message.embeds) ||
-        _collectionLength(oldWidget.message.attachmentIds) !=
-            _collectionLength(widget.message.attachmentIds) ||
-        _collectionLength(oldWidget.message.followUps) !=
-            _collectionLength(widget.message.followUps) ||
-        _collectionLength(oldWidget.message.codeExecutions) !=
-            _collectionLength(widget.message.codeExecutions) ||
-        oldWidget.isStreaming != widget.isStreaming;
+  void _clearVisibleFollowUps() {
+    _visibleFollowUpScopeId = null;
+    _visibleFollowUps = const <String>[];
   }
-
-  int _statusSignature(List<ChatStatusUpdate> statuses) {
-    return Object.hashAll(
-      statuses.map(
-        (status) => Object.hash(
-          status.action,
-          status.description,
-          status.done,
-          status.hidden,
-        ),
-      ),
-    );
-  }
-
-  int _collectionLength(Iterable<dynamic>? values) => values?.length ?? 0;
 
   bool _didVersionMetadataChange(AssistantMessageWidget oldWidget) {
     final oldVersions = oldWidget.message.versions;
@@ -1148,7 +1243,8 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
     }
     for (var index = 0; index < oldVersions.length; index += 1) {
       if (oldVersions[index].id != newVersions[index].id ||
-          oldVersions[index].model != newVersions[index].model) {
+          oldVersions[index].model != newVersions[index].model ||
+          oldVersions[index].modelName != newVersions[index].modelName) {
         return true;
       }
     }
@@ -1161,6 +1257,7 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
   }
 
   Widget _buildDocumentationMessage() {
+    widget.debugOnShellBuild?.call();
     final displayStatusHistory = filterVisibleStatusUpdates(
       widget.message.statusHistory,
       isStreaming: _uiTreatsAsStreaming,
@@ -1168,53 +1265,21 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
     final hasStatusTimeline = displayStatusHistory.isNotEmpty;
     final activeCodeExecutions = _resolveActiveCodeExecutions();
     final hasCodeExecutions = activeCodeExecutions.isNotEmpty;
-    final activeFollowUps = _resolveActiveFollowUps();
-    final hasFollowUps =
-        widget.showFollowUps &&
-        activeFollowUps.isNotEmpty &&
-        _responseCompleted;
     final bool showingVersion = _activeVersionIndex >= 0;
     final activeFiles = showingVersion
         ? widget.message.versions[_activeVersionIndex].files
         : widget.message.files;
     final activeEmbeds = _resolveActiveEmbeds();
-    // Generated docs (docgen) arrive nested in the responses-output trace: a
-    // `function_call_output` item carries the file + its HTML preview in its own
-    // files/embeds, NOT in top-level message.files/embeds — so gather those too.
-    final outputDocFiles = <dynamic>[];
-    final outputDocEmbeds = <dynamic>[];
-    for (final item
-        in (widget.message.output ?? const <Map<String, dynamic>>[])) {
-      final f = item['files'];
-      if (f is List) outputDocFiles.addAll(f);
-      final e = item['embeds'];
-      if (e is List) outputDocEmbeds.addAll(e);
-    }
-    final docPreview = _pairDocPreview(
-      [...?activeFiles, ...outputDocFiles],
-      [...?activeEmbeds, ...outputDocEmbeds],
+    final List<Map<String, dynamic>>? activeOutput = showingVersion
+        ? widget.message.versions[_activeVersionIndex].output
+        : widget.message.output;
+    // One card per generated document, from the message and its tool
+    // results; files and embeds no card shows render as before.
+    final deliveries = collectDocumentDeliveries(
+      files: activeFiles,
+      embeds: activeEmbeds,
+      output: activeOutput,
     );
-    final filesToRender = docPreview == null
-        ? activeFiles
-        : activeFiles
-              ?.where((f) => !_sameFileRef(getFileUrl(f), docPreview.fileUrl))
-              .toList();
-    final embedsToRender = docPreview == null
-        ? activeEmbeds
-        : activeEmbeds?.where((e) {
-            final src = extractEmbedSource(e);
-            if (docPreview.previewHtml != null &&
-                src == docPreview.previewHtml) {
-              return false;
-            }
-            if (docPreview.previewUrl != null &&
-                _sameFileRef(src, docPreview.previewUrl)) {
-              return false;
-            }
-            return true;
-          }).toList();
-    final activeSources = _resolveActiveSources();
-    final footer = _buildFooterBar(activeSources: activeSources);
     final queuedCompletionAsync = ref.watch(
       queuedCompletionInfoForMessageProvider(_messageId),
     );
@@ -1222,9 +1287,6 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
         ? queuedCompletionAsync.value
         : null;
     final hasQueuedCompletion = queuedCompletion != null;
-    final footerSwitchDuration = widget.isStreaming
-        ? Duration.zero
-        : const Duration(milliseconds: 220);
     final showQueuedAsEmptyState =
         queuedCompletion != null &&
         _isAssistantResponseEmpty &&
@@ -1233,6 +1295,26 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
         queuedCompletion != null && _isAssistantResponseEmpty;
     final showQueuedRecoveryBanner =
         queuedCompletion != null && !showQueuedAsEmptyState;
+    final shouldBuildActionFooter = _showActionRowNow && !hasQueuedCompletion;
+    final contentSources = _resolveActiveSources();
+    final responseBuilder = ref.watch(assistantResponseBuilderProvider);
+    final activeFollowUps = shouldBuildActionFooter
+        ? _resolveVisibleFollowUps()
+        : const <String>[];
+    final hasFollowUps =
+        shouldBuildActionFooter &&
+        widget.showFollowUps &&
+        activeFollowUps.isNotEmpty &&
+        _responseCompleted;
+    final activeSources = shouldBuildActionFooter
+        ? contentSources
+        : const <ChatSourceReference>[];
+    final footer = shouldBuildActionFooter
+        ? _buildFooterBar(
+            activeSources: activeSources,
+            includeActions: widget.showActionBar,
+          )
+        : null;
 
     final content = Container(
       width: double.infinity,
@@ -1243,6 +1325,30 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
           // Cached AI Name and Avatar to prevent flashing
           _cachedAvatar ?? const SizedBox.shrink(),
 
+          // Every saved answer of a multi-model turn stays reachable, whether
+          // or not Advanced is on: only comparison setup depends on it.
+          if (_comparisonGroup case final group? when group.isComparison) ...[
+            ChatComparisonTabs(
+              group: group,
+              activeMessageId: _activeAnswerId,
+              onSelected: (answer) =>
+                  _setActiveVersionIndex(answer.versionIndex ?? -1),
+            ),
+            const SizedBox(height: Spacing.sm),
+          ],
+
+          // One answer of a running comparison can be stopped on its own, with
+          // Advanced on or off: the siblings keep going.
+          if (_isStoppableComparisonAnswer) ...[
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: ChatComparisonAnswerStopButton(
+                onStop: _stopComparisonAnswer,
+              ),
+            ),
+            const SizedBox(height: Spacing.sm),
+          ],
+
           // Reasoning blocks are now rendered inline where they appear
 
           // Documentation-style content without heavy bubble; premium markdown
@@ -1251,30 +1357,31 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // A generated document (docgen file + its HTML side-preview):
-                // fuse into one card that opens the preview full-screen.
-                if (docPreview != null) ...[
-                  _buildDocPreviewCard(docPreview),
+                if (deliveries.deliveries.isNotEmpty) ...[
+                  DocumentDeliveryCards(deliveries: deliveries.deliveries),
                   const SizedBox(height: Spacing.md),
                 ],
 
                 // Display attachments - prioritize files array over attachmentIds to avoid duplication
-                if (filesToRender != null && filesToRender.isNotEmpty) ...[
-                  _buildFilesFromArray(filesToRender),
+                if (deliveries.files.isNotEmpty) ...[
+                  _buildFilesFromArray(deliveries.files),
                   const SizedBox(height: Spacing.md),
-                ] else if (docPreview == null &&
+                ] else if ((activeFiles == null || activeFiles.isEmpty) &&
                     widget.message.attachmentIds != null &&
                     widget.message.attachmentIds!.isNotEmpty) ...[
                   _buildAttachmentItems(),
                   const SizedBox(height: Spacing.md),
                 ],
 
-                if (embedsToRender != null && embedsToRender.isNotEmpty) ...[
-                  _buildEmbedsFromArray(embedsToRender),
+                if (deliveries.embeds.isNotEmpty) ...[
+                  _buildEmbedsFromArray(deliveries.embeds),
                   const SizedBox(height: Spacing.md),
                 ],
 
-                _buildTerminalArtifactSection(),
+                TerminalArtifactCards(
+                  messageId: _activeAnswerId,
+                  output: activeOutput,
+                ),
 
                 if (hasStatusTimeline) ...[
                   StreamingStatusWidget(
@@ -1289,32 +1396,31 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
                 else if (suppressEmptyQueuedContent)
                   const SizedBox.shrink()
                 else
-                  // Content streams in here; the typing indicator now lives in
-                  // the footer slot below (and persists while text streams in
-                  // above it). Empty content renders as SizedBox.shrink.
-                  AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 220),
-                    switchInCurve: Curves.easeOutCubic,
-                    switchOutCurve: Curves.easeInCubic,
-                    transitionBuilder: (child, anim) {
-                      return FadeTransition(
-                        opacity: CurvedAnimation(
-                          parent: anim,
-                          curve: Curves.easeOutCubic,
-                          reverseCurve: Curves.easeInCubic,
-                        ),
-                        child: child,
-                      );
-                    },
-                    child: KeyedSubtree(
-                      key: const ValueKey('content'),
-                      child: _buildMessageContent(),
-                    ),
+                  // Content streams in here. Empty content renders as
+                  // SizedBox.shrink, and the footer indicator covers that
+                  // waiting state until visible content arrives. Keep this
+                  // subtree direct: a stable-key AnimatedSwitcher never
+                  // switched and only obscured the one-shot content fade.
+                  _buildStreamingContentBody(
+                    responseBuilder: responseBuilder,
+                    activeSources: contentSources,
                   ),
 
                 if (showQueuedRecoveryBanner) ...[
                   const SizedBox(height: Spacing.sm),
                   _buildQueuedCompletionBanner(queuedCompletion),
+                ],
+
+                if (_activeMergedResponse case final merged?
+                    when merged.content.trim().isNotEmpty) ...[
+                  const SizedBox(height: Spacing.md),
+                  ChatMergedResponsePanel(
+                    child: _buildEnhancedMarkdownContent(
+                      merged.content,
+                      responseBuilder: null,
+                      activeSources: const <ChatSourceReference>[],
+                    ),
+                  ),
                 ],
 
                 // Display error banner if message or active version has an error
@@ -1333,18 +1439,22 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
             ),
           ),
 
-          // Footer slot: the typing indicator occupies the action-row position
-          // while streaming (content streams above it) and crossfades to the
-          // action row exactly once, when generation completes.
+          // Footer slot: keep completion actions inside the message while the
+          // running turn indicator is owned by the timeline. The plain action
+          // row is extent-matched to the timeline's typing indicator (16+32
+          // vs 16+28+4) so the settle swap does not shift the
+          // bottom-anchored viewport; see settle_height_test.dart.
           if (!hasQueuedCompletion)
             AnimatedSwitcher(
-              duration: footerSwitchDuration,
-              reverseDuration: footerSwitchDuration,
+              // The running indicator is owned by the timeline footer now, so
+              // this switch only swaps in the completed action row instantly.
+              duration: Duration.zero,
+              reverseDuration: Duration.zero,
               switchInCurve: Curves.easeOutCubic,
               switchOutCurve: Curves.easeInCubic,
               layoutBuilder: (currentChild, previousChildren) {
                 final children = <Widget>[
-                  if (!widget.isStreaming) ...previousChildren,
+                  if (!_uiTreatsAsStreaming) ...previousChildren,
                   ?currentChild,
                 ];
                 if (children.isEmpty) {
@@ -1379,44 +1489,18 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
     if (!_hasAnimated) {
       _hasAnimated = true;
       _fadeController.forward();
-      _slideController.forward();
     }
 
-    return FadeTransition(
-      opacity: _fadeController,
-      child: SlideTransition(
-        position: Tween<Offset>(begin: const Offset(0, 0.1), end: Offset.zero)
-            .animate(
-              CurvedAnimation(
-                parent: _slideController,
-                curve: Curves.easeOutCubic,
-              ),
-            ),
-        child: content,
-      ),
-    );
+    return FadeTransition(opacity: _fadeController, child: content);
   }
 
-  /// Builds the keyed child for the footer [AnimatedSwitcher]: the typing
-  /// indicator while streaming, the action row + follow-ups once completed,
-  /// or an empty slot during the gate / transient window.
+  /// Builds the keyed child for the footer [AnimatedSwitcher]: the action row
+  /// + follow-ups once completed, or an empty slot while streaming.
   Widget _buildFooterSlot({
     required Widget? footer,
     required bool hasFollowUps,
     required List<String> activeFollowUps,
   }) {
-    if (_showStreamingIndicatorNow) {
-      return KeyedSubtree(
-        key: const ValueKey('typing'),
-        child: Padding(
-          padding: EdgeInsets.only(
-            top: ConduitMarkdownStyle.fromTheme(context).paragraphSpacing,
-          ),
-          child: _buildTypingIndicator(),
-        ),
-      );
-    }
-
     if (_showActionRowNow) {
       final children = <Widget>[];
       if (footer != null) {
@@ -1502,9 +1586,8 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
                     const SizedBox(height: 2),
                     Text(
                       message,
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: conduitTheme.textSecondary,
-                      ),
+                      style: Theme.of(context).textTheme.bodySmall
+                          ?.copyWith(color: conduitTheme.textSecondary),
                     ),
                   ],
                 ),
@@ -1516,39 +1599,18 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
             spacing: Spacing.xs,
             runSpacing: Spacing.xs,
             children: [
-              TextButton.icon(
+              ConduitButton(
                 onPressed: () => _retryQueuedCompletion(info),
-                icon: Icon(
-                  Platform.isIOS ? CupertinoIcons.refresh : Icons.refresh,
-                  size: 16,
-                ),
-                label: Text(l10n.retry),
-                style: TextButton.styleFrom(
-                  foregroundColor: accentColor,
-                  minimumSize: const Size(0, 34),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: Spacing.sm,
-                    vertical: 6,
-                  ),
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
+                text: l10n.retry,
+                icon: Platform.isIOS ? CupertinoIcons.refresh : Icons.refresh,
+                isCompact: true,
               ),
-              TextButton.icon(
+              ConduitButton(
                 onPressed: () => _cancelQueuedCompletion(info),
-                icon: Icon(
-                  Platform.isIOS ? CupertinoIcons.xmark : Icons.close,
-                  size: 16,
-                ),
-                label: Text(l10n.cancel),
-                style: TextButton.styleFrom(
-                  foregroundColor: conduitTheme.textSecondary,
-                  minimumSize: const Size(0, 34),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: Spacing.sm,
-                    vertical: 6,
-                  ),
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
+                text: l10n.cancel,
+                icon: Platform.isIOS ? CupertinoIcons.xmark : Icons.close,
+                isCompact: true,
+                isSecondary: true,
               ),
             ],
           ),
@@ -1577,6 +1639,18 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
     }());
   }
 
+  /// Stops this answer's task. The answer keeps running when the server refuses,
+  /// and the refusal is said once, on the screen that asked.
+  Future<void> _stopComparisonAnswer() async {
+    final outcome = await ref.read(stopComparisonAnswerProvider)(_messageId);
+    if (outcome != ComparisonAnswerStop.refused || !mounted) return;
+    AdaptiveSnackBar.show(
+      context,
+      message: AppLocalizations.of(context)!.chatStopResponseFailed,
+      type: AdaptiveSnackBarType.error,
+    );
+  }
+
   void _handleQueuedCompletionActionError(Object error, StackTrace stackTrace) {
     DebugLogger.error(
       'queued-completion-action-failed',
@@ -1585,8 +1659,10 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
       stackTrace: stackTrace,
     );
     if (!mounted) return;
-    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-      SnackBar(content: Text(AppLocalizations.of(context)!.errorMessage)),
+    AdaptiveSnackBar.show(
+      context,
+      message: AppLocalizations.of(context)!.errorMessage,
+      type: AdaptiveSnackBarType.error,
     );
   }
 
@@ -1611,9 +1687,13 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
     final errorColor = theme.colorScheme.error;
     final errorContent = error.content;
 
-    // If no content, show a generic error message
-    final displayText = (errorContent != null && errorContent.isNotEmpty)
+    // A model that can't call tools rejects web search's tool definitions;
+    // say what to do instead of echoing the provider's wording.
+    final displayText = isDirectToolsUnsupportedError(errorContent)
+        ? AppLocalizations.of(context)!.directModelToolsUnsupported
+        : (errorContent != null && errorContent.isNotEmpty)
         ? errorContent
+        // If no content, show a generic error message
         : 'An error occurred while generating this response.';
 
     return Container(
@@ -1639,7 +1719,26 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
     );
   }
 
-  Widget _buildEnhancedMarkdownContent(String content) {
+  void _handleMarkdownLinkTap(String url, String _) {
+    launchExternalLink(url, scope: 'chat/assistant');
+  }
+
+  Widget _buildMarkdownImage(Uri uri, String? title, String? alt) {
+    return RepaintBoundary(
+      child: EnhancedImageAttachment(
+        attachmentId: uri.toString(),
+        isMarkdownFormat: true,
+        constraints: const BoxConstraints(maxWidth: 500, maxHeight: 400),
+        disableAnimation: _uiTreatsAsStreaming,
+      ),
+    );
+  }
+
+  Widget _buildEnhancedMarkdownContent(
+    String content, {
+    required AssistantResponseBuilder? responseBuilder,
+    required List<ChatSourceReference> activeSources,
+  }) {
     if (content.trim().isEmpty) {
       return const SizedBox.shrink();
     }
@@ -1647,40 +1746,24 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
     // Keep the raw markdown intact so the shared renderer can parse
     // Open WebUI-style <details> blocks directly.
     final processedContent = _processContentForImages(content);
-    final activeSources = _resolveActiveSources();
     final bodyTreatsAsStreaming = _uiTreatsAsStreaming;
 
     Widget buildDefault(BuildContext context) {
-      final cheapStreamingTextContent = _cheapStreamingTextContent(
-        processedContent,
-      );
-      if (_shouldUseCheapStreamingText(cheapStreamingTextContent)) {
-        return _buildCheapStreamingText(cheapStreamingTextContent);
-      }
-
       return StreamingMarkdownWidget(
         content: processedContent,
         isStreaming: bodyTreatsAsStreaming,
+        // Tokens should appear on the frame they arrive. The surrounding body
+        // already owns the single first-content reveal; re-fading every suffix
+        // makes streaming trail the model.
+        enableStreamingTextFade: false,
         askConduitComposerTargetId: chatComposerTextInsertionTargetId,
         stateScopeId: _markdownStateScopeId(),
-        onTapLink: (url, _) => launchExternalLink(url, scope: 'chat/assistant'),
+        onTapLink: _markdownLinkTapCallback,
         sources: activeSources,
-        imageBuilderOverride: (uri, title, alt) {
-          // Route markdown images through the enhanced image widget so they
-          // get caching, auth headers, fullscreen viewer, and sharing.
-          return RepaintBoundary(
-            child: EnhancedImageAttachment(
-              attachmentId: uri.toString(),
-              isMarkdownFormat: true,
-              constraints: const BoxConstraints(maxWidth: 500, maxHeight: 400),
-              disableAnimation: bodyTreatsAsStreaming,
-            ),
-          );
-        },
+        imageBuilderOverride: _markdownImageBuilder,
       );
     }
 
-    final responseBuilder = ref.watch(assistantResponseBuilderProvider);
     if (responseBuilder != null) {
       final contextData = AssistantResponseContext(
         message: widget.message,
@@ -1692,73 +1775,6 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
     }
 
     return buildDefault(context);
-  }
-
-  String _cheapStreamingTextContent(String content) {
-    if (!_uiTreatsAsStreaming || !content.contains(']:')) {
-      return content;
-    }
-    return ConduitMarkdownPreprocessor.stripLinkReferenceDefinitions(content);
-  }
-
-  bool _shouldUseCheapStreamingText(String content) {
-    if (!_uiTreatsAsStreaming) {
-      return false;
-    }
-
-    final trimmedContent = content.trim();
-    if (trimmedContent.isEmpty) {
-      return false;
-    }
-
-    final newlineCount = '\n'.allMatches(trimmedContent).length;
-    final isLongPlainCandidate =
-        trimmedContent.length >= _cheapStreamingTextThreshold ||
-        newlineCount >= _cheapStreamingTextLineThreshold;
-    if (!isLongPlainCandidate) {
-      return false;
-    }
-
-    return !_contentHasClearMarkdown(trimmedContent);
-  }
-
-  bool _contentHasClearMarkdown(String content) {
-    if (content.isEmpty) {
-      return false;
-    }
-
-    if (content.contains('```') ||
-        content.contains('~~~') ||
-        content.contains('data:image/') ||
-        content.contains(r'\(') ||
-        content.contains(r'\[')) {
-      return true;
-    }
-
-    return _markdownBlockSyntaxPattern.hasMatch(content) ||
-        _markdownLinkOrImagePattern.hasMatch(content) ||
-        _markdownReferenceLinkPattern.hasMatch(content) ||
-        _markdownAutolinkPattern.hasMatch(content) ||
-        _markdownBareAutolinkPattern.hasMatch(content) ||
-        _markdownIndentedCodeBlockPattern.hasMatch(content) ||
-        _markdownInlineSyntaxPattern.hasMatch(content) ||
-        _markdownSingleEmphasisPattern.hasMatch(content) ||
-        _markdownTablePattern.hasMatch(content) ||
-        _markdownHorizontalRulePattern.hasMatch(content) ||
-        _markdownHtmlPattern.hasMatch(content) ||
-        _markdownBlockLatexPattern.hasMatch(content) ||
-        _markdownInlineLatexPattern.hasMatch(content) ||
-        CitationParser.hasCitations(content);
-  }
-
-  Widget _buildCheapStreamingText(String content) {
-    final style = ConduitMarkdownStyle.fromTheme(context);
-    return Text(
-      content,
-      key: const ValueKey('assistant-streaming-plain-text'),
-      style: style.body,
-      softWrap: true,
-    );
   }
 
   String _markdownStateScopeId() {
@@ -1810,6 +1826,29 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
     return widget.message.followUps;
   }
 
+  List<String> _resolveVisibleFollowUps() {
+    final rawFollowUps = _resolveActiveFollowUps();
+    if (!widget.showFollowUps ||
+        widget.readOnly ||
+        _uiTreatsAsStreaming ||
+        !_responseCompleted) {
+      return rawFollowUps;
+    }
+
+    final scopeId = _followUpStateScopeId();
+    if (rawFollowUps.isNotEmpty) {
+      _visibleFollowUpScopeId = scopeId;
+      _visibleFollowUps = List<String>.unmodifiable(rawFollowUps);
+      return rawFollowUps;
+    }
+
+    if (_visibleFollowUpScopeId == scopeId && _visibleFollowUps.isNotEmpty) {
+      return _visibleFollowUps;
+    }
+
+    return rawFollowUps;
+  }
+
   List<ChatCodeExecution> _resolveActiveCodeExecutions() {
     if (_activeVersionIndex >= 0 &&
         _activeVersionIndex < widget.message.versions.length) {
@@ -1847,45 +1886,36 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
 
     final imageCount = widget.message.attachmentIds!.length;
 
-    // Display images in a clean, modern layout for assistant messages
-    // Use AnimatedSwitcher for smooth transitions when loading
-    return AnimatedSwitcher(
-      duration: const Duration(milliseconds: 300),
-      switchInCurve: Curves.easeInOut,
-      child: imageCount == 1
-          ? Container(
-              key: ValueKey('single_item_${widget.message.attachmentIds![0]}'),
-              child: EnhancedAttachment(
-                attachmentId: widget.message.attachmentIds![0],
-                isMarkdownFormat: true,
-                constraints: const BoxConstraints(
-                  maxWidth: 500,
-                  maxHeight: 400,
-                ),
-                disableAnimation: _uiTreatsAsStreaming,
-              ),
-            )
-          : Wrap(
-              key: ValueKey(
-                'multi_items_${widget.message.attachmentIds!.join('_')}',
-              ),
-              spacing: Spacing.sm,
-              runSpacing: Spacing.sm,
-              children: widget.message.attachmentIds!.map<Widget>((
-                attachmentId,
-              ) {
-                return EnhancedAttachment(
-                  key: ValueKey('attachment_$attachmentId'),
-                  attachmentId: attachmentId,
-                  isMarkdownFormat: true,
-                  constraints: BoxConstraints(
-                    maxWidth: imageCount == 2 ? 245 : 160,
-                    maxHeight: imageCount == 2 ? 245 : 160,
-                  ),
-                  disableAnimation: _uiTreatsAsStreaming,
-                );
-              }).toList(),
-            ),
+    // Preserve stable attachments when another item arrives. Crossfading the
+    // whole grid made already-loaded images disappear and re-enter.
+    if (imageCount == 1) {
+      return Container(
+        key: ValueKey('single_item_${widget.message.attachmentIds![0]}'),
+        child: EnhancedAttachment(
+          attachmentId: widget.message.attachmentIds![0],
+          isMarkdownFormat: true,
+          constraints: const BoxConstraints(maxWidth: 500, maxHeight: 400),
+          disableAnimation: _uiTreatsAsStreaming,
+        ),
+      );
+    }
+
+    return Wrap(
+      key: const ValueKey('assistant-attachment-grid'),
+      spacing: Spacing.sm,
+      runSpacing: Spacing.sm,
+      children: widget.message.attachmentIds!.map<Widget>((attachmentId) {
+        return EnhancedAttachment(
+          key: ValueKey('attachment_$attachmentId'),
+          attachmentId: attachmentId,
+          isMarkdownFormat: true,
+          constraints: BoxConstraints(
+            maxWidth: imageCount == 2 ? 245 : 160,
+            maxHeight: imageCount == 2 ? 245 : 160,
+          ),
+          disableAnimation: _uiTreatsAsStreaming,
+        );
+      }).toList(),
     );
   }
 
@@ -1894,8 +1924,8 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
         .map((entry) {
           final index = entry.$1;
           final embed = entry.$2;
-          // Structured preview embeds only ever render through the delivery
-          // card; their bare URL is meaningless (and unauthenticated) here.
+          // A preview object renders only through its document card: its
+          // URL is not markup and must never reach WebContentEmbed.
           if (isPreviewEmbed(embed)) {
             return null;
           }
@@ -1926,9 +1956,9 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
     );
   }
 
-  Widget _buildFilesFromArray([List<dynamic>? overrideFiles]) {
+  Widget _buildFilesFromArray([List<Map<String, dynamic>>? files]) {
     final filesArray =
-        overrideFiles ??
+        files ??
         (_activeVersionIndex >= 0
             ? widget.message.versions[_activeVersionIndex].files
             : widget.message.files);
@@ -1947,7 +1977,12 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
 
     // Add images first
     if (imageFiles.isNotEmpty) {
-      widgets.add(_buildImagesFromFiles(imageFiles));
+      widgets.add(
+        ImageGalleryScope(
+          items: _imageViewerItems(imageFiles),
+          child: _buildImagesFromFiles(imageFiles),
+        ),
+      );
     }
 
     // Add non-image files
@@ -1968,65 +2003,60 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
     );
   }
 
+  /// Lets the full-screen viewer page through this message's images.
+  List<ImageViewerItem> _imageViewerItems(List<dynamic> imageFiles) => [
+    for (final file in imageFiles)
+      if (getFileUrl(file) case final url?)
+        ImageViewerItem(attachmentId: url, httpHeaders: _headersForFile(file)),
+  ];
+
   Widget _buildImagesFromFiles(List<dynamic> imageFiles) {
     final imageCount = imageFiles.length;
 
-    // Display images using EnhancedImageAttachment for consistency
-    // Use AnimatedSwitcher for smooth transitions
-    return AnimatedSwitcher(
-      duration: const Duration(milliseconds: 300),
-      switchInCurve: Curves.easeInOut,
-      child: imageCount == 1
-          ? Container(
-              key: ValueKey('file_single_${imageFiles[0]['url']}'),
-              child: Builder(
-                builder: (context) {
-                  final imageUrl = getFileUrl(imageFiles[0]);
-                  if (imageUrl == null) return const SizedBox.shrink();
+    // Preserve stable image children instead of crossfading the full grid.
+    if (imageCount == 1) {
+      final imageUrl = getFileUrl(imageFiles.first);
+      if (imageUrl == null) return const SizedBox.shrink();
 
-                  return RepaintBoundary(
-                    child: EnhancedImageAttachment(
-                      attachmentId:
-                          imageUrl, // Pass URL directly as it handles URLs
-                      isMarkdownFormat: true,
-                      constraints: const BoxConstraints(
-                        maxWidth: 500,
-                        maxHeight: 400,
-                      ),
-                      disableAnimation:
-                          false, // Keep animations enabled to prevent black display
-                      httpHeaders: _headersForFile(imageFiles[0]),
-                    ),
-                  );
-                },
-              ),
-            )
-          : Wrap(
-              key: ValueKey(
-                'file_multi_${imageFiles.map((f) => f['url']).join('_')}',
-              ),
-              spacing: Spacing.sm,
-              runSpacing: Spacing.sm,
-              children: imageFiles.map<Widget>((file) {
-                final imageUrl = getFileUrl(file);
-                if (imageUrl == null) return const SizedBox.shrink();
+      return Container(
+        key: ValueKey('file_single_$imageUrl'),
+        child: RepaintBoundary(
+          child: EnhancedImageAttachment(
+            attachmentId: imageUrl,
+            isMarkdownFormat: true,
+            constraints: const BoxConstraints(maxWidth: 500, maxHeight: 400),
+            // Keep the opacity-only image reveal under Reduce Motion. It is
+            // functional feedback and avoids a placeholder-to-image black
+            // frame without introducing spatial movement.
+            disableAnimation: false,
+            httpHeaders: _headersForFile(imageFiles.first),
+          ),
+        ),
+      );
+    }
 
-                return RepaintBoundary(
-                  child: EnhancedImageAttachment(
-                    key: ValueKey('gen_attachment_$imageUrl'),
-                    attachmentId: imageUrl, // Pass URL directly
-                    isMarkdownFormat: true,
-                    constraints: BoxConstraints(
-                      maxWidth: imageCount == 2 ? 245 : 160,
-                      maxHeight: imageCount == 2 ? 245 : 160,
-                    ),
-                    disableAnimation:
-                        false, // Keep animations enabled to prevent black display
-                    httpHeaders: _headersForFile(file),
-                  ),
-                );
-              }).toList(),
+    return Wrap(
+      key: const ValueKey('assistant-file-image-grid'),
+      spacing: Spacing.sm,
+      runSpacing: Spacing.sm,
+      children: imageFiles.map<Widget>((file) {
+        final imageUrl = getFileUrl(file);
+        if (imageUrl == null) return const SizedBox.shrink();
+
+        return RepaintBoundary(
+          child: EnhancedImageAttachment(
+            key: ValueKey('gen_attachment_$imageUrl'),
+            attachmentId: imageUrl,
+            isMarkdownFormat: true,
+            constraints: BoxConstraints(
+              maxWidth: imageCount == 2 ? 245 : 160,
+              maxHeight: imageCount == 2 ? 245 : 160,
             ),
+            disableAnimation: false,
+            httpHeaders: _headersForFile(file),
+          ),
+        );
+      }).toList(),
     );
   }
 
@@ -2079,278 +2109,23 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
     );
   }
 
-  /// True when two file references point at the same OWUI file — compares by
-  /// file id when both carry one (/api/v1/files/{id}, …/{id}/content and
-  /// absolute variants all occur), else by exact string.
-  bool _sameFileRef(String? a, String? b) {
-    if (a == null || b == null) return false;
-    if (a == b) return true;
-    final ia = _fileIdPattern.firstMatch(a)?.group(1);
-    final ib = _fileIdPattern.firstMatch(b)?.group(1);
-    return ia != null && ib != null && ia == ib;
-  }
-
-  /// Artifact name fallback: string embeds carry no metadata, but the `show`
-  /// call that delivered the artifact carries its workspace path in its own
-  /// arguments on this same message.
-  String? _showCallArtifactName() {
-    for (final item
-        in (widget.message.output ?? const <Map<String, dynamic>>[])) {
-      if (item['type'] != 'function_call') continue;
-      if (item['status'] != null && item['status'] != 'completed') continue;
-      final name = item['name']?.toString() ?? '';
-      if (!name.endsWith('show')) continue;
-      try {
-        final rawArgs = item['arguments'];
-        final args = rawArgs is Map
-            ? rawArgs
-            : jsonDecode(rawArgs?.toString() ?? '{}');
-        final path = args is Map ? args['path']?.toString().trim() : null;
-        if (path != null && path.isNotEmpty) {
-          return path.split('/').last;
-        }
-      } catch (_) {}
-    }
-    return null;
-  }
-
-  /// Detects a generated delivery and fuses it into ONE card. Three shapes:
-  ///
-  /// 1. Structured preview (post-0.4.0 docgen): one `{type:'preview', url,…}`
-  ///    embed + exactly one non-image sibling file — the card previews the
-  ///    rendered file at `url` and downloads the real file.
-  /// 2. Legacy HTML preview: exactly one non-image file + exactly one HTML
-  ///    string embed (pre-0.4.0 messages) — unchanged behavior.
-  /// 3. Artifact: exactly one HTML string embed and NO non-image file (a
-  ///    `show`-delivered artifact — the HTML IS the deliverable).
-  ///
-  /// Only the unambiguous single-delivery case is fused; otherwise files +
-  /// embeds render as usual.
-  _DocPreview? _pairDocPreview(List<dynamic>? files, List<dynamic>? embeds) {
-    if (embeds == null) return null;
-    final nonImage =
-        (files ?? const <dynamic>[]).where((f) => !isImageFile(f)).toList();
-
-    // Mode 1: structured preview object.
-    final previewObjs = embeds.where(isPreviewEmbed).toList();
-    if (previewObjs.length == 1 && nonImage.length == 1) {
-      final preview = previewObjs.first as Map;
-      final file = nonImage.first;
-      final fileUrl = getFileUrl(file);
-      if (fileUrl != null) {
-        final rawName = file is Map ? (file['name'] ?? file['filename']) : null;
-        final name = rawName?.toString();
-        return _DocPreview(
-          fileUrl: fileUrl,
-          fileName: (name != null && name.trim().isNotEmpty)
-              ? name
-              : (preview['name']?.toString() ?? 'Document'),
-          fileId: _fileIdPattern.firstMatch(fileUrl)?.group(1),
-          previewUrl: preview['url'].toString(),
-        );
-      }
-    }
-    if (previewObjs.isNotEmpty) return null; // ambiguous — render as usual
-
-    final htmlSources = <String>[];
-    for (final e in embeds) {
-      final src = extractEmbedSource(e);
-      if (src != null && src.trimLeft().startsWith('<')) {
-        htmlSources.add(src);
-      }
-    }
-    if (htmlSources.length != 1) return null;
-
-    // Mode 3: artifact — HTML embed with no real file.
-    if (nonImage.isEmpty) {
-      return _DocPreview(
-        fileName: _showCallArtifactName() ?? 'Artifact',
-        previewHtml: htmlSources.first,
-      );
-    }
-
-    // Mode 2: legacy HTML doc preview.
-    if (nonImage.length != 1) return null;
-    final file = nonImage.first;
-    final fileUrl = getFileUrl(file);
-    if (fileUrl == null) return null;
-    final rawName = file is Map ? (file['name'] ?? file['filename']) : null;
-    final name = rawName?.toString();
-    final fileName = (name != null && name.trim().isNotEmpty) ? name : 'Document';
-    return _DocPreview(
-      fileUrl: fileUrl,
-      fileName: fileName,
-      fileId: _fileIdPattern.firstMatch(fileUrl)?.group(1),
-      previewHtml: htmlSources.first,
-    );
-  }
-
-  /// Identity color for a delivery card by file extension. The format list is
-  /// OPEN-ENDED by design: unknown extensions get the neutral tone and still
-  /// show their real extension badge — never assume a closed set of formats.
-  static const Map<String, Color> _extIdentity = {
-    'doc': Color(0xFF3B82F6),
-    'docx': Color(0xFF3B82F6),
-    'xls': Color(0xFF10B981),
-    'xlsx': Color(0xFF10B981),
-    'csv': Color(0xFF10B981),
-    'ppt': Color(0xFFF97316),
-    'pptx': Color(0xFFF97316),
-    'pdf': Color(0xFFEF4444),
-    'html': Color(0xFF8B5CF6),
-    'svg': Color(0xFF8B5CF6),
-  };
-
-  String? _extForName(String name) {
-    final i = name.lastIndexOf('.');
-    if (i <= 0 || i >= name.length - 1) return null;
-    final ext = name.substring(i + 1).toLowerCase();
-    return ext.length > 5 ? ext.substring(0, 5) : ext;
-  }
-
-  Widget _buildDocPreviewCard(_DocPreview doc) {
-    final theme = context.conduitTheme;
-    final ext = _extForName(doc.fileName);
-    final identity = _extIdentity[ext ?? ''] ?? theme.textSecondary;
-    final isArtifact = doc.fileUrl == null;
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(AppBorderRadius.md),
-        onTap: () => unawaited(
-          Navigator.of(context, rootNavigator: true).push(
-            buildPlatformPageRoute<void>(
-              fullscreenDialog: true,
-              builder: (_) => DocumentPreviewPage(
-                previewHtml: doc.previewHtml,
-                previewUrl: doc.previewUrl,
-                fileName: doc.fileName,
-                fileId: doc.fileId,
-              ),
-            ),
-          ),
-        ),
-        child: Container(
-          constraints: const BoxConstraints(maxWidth: 320),
-          padding: const EdgeInsets.all(Spacing.md),
-          decoration: BoxDecoration(
-            color: theme.cardBackground,
-            borderRadius: BorderRadius.circular(AppBorderRadius.md),
-            border: Border.all(
-              color: theme.textPrimary.withValues(alpha: 0.12),
-            ),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  Container(
-                    width: 38,
-                    height: 38,
-                    decoration: BoxDecoration(
-                      color: identity.withValues(alpha: 0.14),
-                      borderRadius: BorderRadius.circular(AppBorderRadius.sm),
-                    ),
-                    child: Icon(
-                      isArtifact ? Icons.widgets_outlined : Icons.description_outlined,
-                      size: 20,
-                      color: identity,
-                    ),
-                  ),
-                  if (ext != null)
-                    Positioned(
-                      bottom: -5,
-                      left: 0,
-                      right: 0,
-                      child: Center(
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 4,
-                            vertical: 1,
-                          ),
-                          decoration: BoxDecoration(
-                            color: theme.textPrimary,
-                            borderRadius: BorderRadius.circular(3),
-                          ),
-                          child: Text(
-                            ext.toUpperCase(),
-                            style: TextStyle(
-                              fontSize: 7,
-                              height: 1.0,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: 0.4,
-                              color: theme.cardBackground,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-              const SizedBox(width: Spacing.sm),
-              Flexible(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      doc.fileName,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: AppTypography.labelStyle.copyWith(
-                        color: theme.textPrimary,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    Text(
-                      isArtifact
-                          ? 'Artifact · tap to view'
-                          : 'Document · tap to preview',
-                      style: AppTypography.labelMediumStyle.copyWith(
-                        color: theme.textSecondary.withValues(alpha: 0.7),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: Spacing.sm),
-              Icon(Icons.chevron_right, size: 18, color: theme.textSecondary),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildTypingIndicator() {
-    final theme = context.conduitTheme;
-    final dotColor = theme.textSecondary.withValues(alpha: 0.75);
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: Spacing.xs),
-      child: RepaintBoundary(
-        child: FiveRotatingDots(
-          size: 28,
-          color: dotColor,
-          animate: !_disableAnimations,
-        ),
-      ),
-    );
-  }
-
-  Widget? _buildFooterBar({required List<ChatSourceReference> activeSources}) {
+  Widget? _buildFooterBar({
+    required List<ChatSourceReference> activeSources,
+    required bool includeActions,
+  }) {
     const maxInlineActions = 3;
-    final actions = _buildFooterActions();
+    // A row that does not own its grouped response's bar still shows its own
+    // sources and version chip; only the buttons collapse onto the last row.
+    final actions = includeActions
+        ? _buildFooterActions()
+        : const <_AssistantFooterAction>[];
     final forcedOverflowActions = actions
         .where((action) => action.id == 'delete')
         .toList(growable: false);
     final inlineCandidateActions = actions
         .where((action) => action.id != 'delete')
         .toList(growable: false);
-    final visibleActions = actions
-        .where((action) => action.id != 'delete')
+    final visibleActions = inlineCandidateActions
         .take(maxInlineActions)
         .toList(growable: false);
     final overflowActions = [
@@ -2363,68 +2138,220 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
           sources: activeSources,
           messageId: widget.message.id,
         ),
-      if (widget.message.versions.isNotEmpty) _buildVersionChip(),
     ];
+    final pagerIndices = _pagerIndices();
+    final versionPager = pagerIndices.length > 1
+        ? _buildVersionPager(pagerIndices)
+        : null;
+    // While an alternative is previewed (a regeneration through the pager, or
+    // another model's response of a comparison through its tabs), continuing
+    // from it is the point, so it leads the row as a labelled pill right after
+    // the pager, and the usual buttons keep their places.
+    final continueFromId = _continueFromVersionId();
+    final pagerGroup = continueFromId == null
+        ? versionPager
+        : Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (versionPager != null) ...[
+                versionPager,
+                const SizedBox(width: Spacing.xs),
+              ],
+              _buildContinueFromHerePill(continueFromId),
+            ],
+          );
 
-    if (infoWidgets.isEmpty &&
+    if (pagerGroup == null &&
+        infoWidgets.isEmpty &&
         visibleActions.isEmpty &&
         overflowActions.isEmpty) {
       return null;
     }
 
-    final leftAlignedWidgets = <Widget>[
+    final overflowButton = overflowActions.isNotEmpty
+        ? _buildOverflowActionButton(overflowActions)
+        : null;
+    // Like Open WebUI, the version pager leads the row; the icon buttons sit
+    // edge to edge with the overflow trailing them inline, and informational
+    // chips follow the buttons. With the continue pill the pager is a group of
+    // its own, so a narrow row wraps between it and the buttons.
+    final actionButtons = <Widget>[
+      if (continueFromId == null) ?versionPager,
       for (final action in visibleActions)
         _buildActionButton(
           icon: action.icon,
           label: action.label,
           onTap: action.onTap,
         ),
-      ...infoWidgets,
+      ?overflowButton,
     ];
-    final overflowButton = overflowActions.isNotEmpty
-        ? _buildOverflowActionButton(overflowActions)
-        : null;
 
-    if (overflowButton == null) {
-      return Wrap(
-        spacing: Spacing.sm,
-        runSpacing: Spacing.sm,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        children: leftAlignedWidgets,
-      );
-    }
-
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.center,
+    return Wrap(
+      spacing: Spacing.sm,
+      runSpacing: Spacing.sm,
+      crossAxisAlignment: WrapCrossAlignment.center,
       children: [
-        Expanded(
-          child: Wrap(
-            spacing: Spacing.sm,
-            runSpacing: Spacing.sm,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: leftAlignedWidgets,
-          ),
-        ),
-        const SizedBox(width: Spacing.sm),
-        overflowButton,
+        if (continueFromId != null) pagerGroup!,
+        if (actionButtons.isNotEmpty)
+          Row(mainAxisSize: MainAxisSize.min, children: actionButtons),
+        ...infoWidgets,
       ],
     );
   }
 
+  /// The id of the alternative response being previewed, when the chat can
+  /// continue from it: it must be a stored same-role sibling of this response,
+  /// so a version without a reliable id stays preview-only.
+  ///
+  /// The providers read here are what make branch actions exclusive to the
+  /// user's own durable chat, so no other gate is added. Siblings are read as
+  /// soon as there is a version to preview, so the action is ready the moment
+  /// one is shown.
+  String? _continueFromVersionId() {
+    final messageId = _messageId;
+    final branchChatId = ref.watch(
+      activeConversationProvider.select((c) => c?.id),
+    );
+    if (messageId.isEmpty ||
+        branchChatId == null ||
+        widget.message.versions.isEmpty) {
+      return null;
+    }
+    final siblings = ref
+        .watch(
+          chatBranchSiblingsProvider((
+            chatId: branchChatId,
+            messageId: messageId,
+          )),
+        )
+        .asData
+        ?.value;
+    if (_activeVersionIndex < 0 ||
+        _activeVersionIndex >= widget.message.versions.length) {
+      return null;
+    }
+    final previewedId =
+        widget.message.versions[_activeVersionIndex].id as String?;
+    return previewedId != null && (siblings?.contains(previewedId) ?? false)
+        ? previewedId
+        : null;
+  }
+
+  /// "Continue from here": the quiet active pill of the composer, compact to
+  /// sit in the footer row, with the row's full height to tap.
+  Widget _buildContinueFromHerePill(String alternativeId) {
+    final l10n = AppLocalizations.of(context)!;
+    final theme = context.conduitTheme;
+    final label = l10n.chatBranchContinueFromResponse;
+    void onTap() {
+      ConduitHaptics.selectionClick();
+      unawaited(
+        continueFromChatBranch(
+          context,
+          displayedMessageId: _messageId,
+          alternativeId: alternativeId,
+        ),
+      );
+    }
+
+    // The node stands in for the gesture detector below, whose own tap
+    // action excludeSemantics drops, so it carries the tap itself.
+    return Semantics(
+      button: true,
+      label: label,
+      excludeSemantics: true,
+      onTap: onTap,
+      child: GestureDetector(
+        key: const ValueKey<String>('assistant-continue-from-here'),
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: TouchTarget.chip),
+          child: Center(
+            widthFactor: 1,
+            child: Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: Spacing.sm,
+                vertical: Spacing.xs + 1,
+              ),
+              decoration: BoxDecoration(
+                color: theme.buttonPrimary.withValues(alpha: 0.10),
+                borderRadius: BorderRadius.circular(AppBorderRadius.round),
+                border: Border.all(
+                  color: theme.buttonPrimary.withValues(alpha: 0.4),
+                  width: BorderWidth.thin,
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Platform.isIOS
+                        ? CupertinoIcons.arrow_turn_down_right
+                        : Icons.subdirectory_arrow_right,
+                    size: IconSize.chip,
+                    color: theme.buttonPrimary,
+                  ),
+                  const SizedBox(width: Spacing.xs),
+                  Flexible(
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTypography.labelMediumStyle.copyWith(
+                        color: theme.textPrimary,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: AppTypography.letterSpacingNormal,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // The error heuristics are four full-content scans; the footer rebuilds far
+  // more often than the content changes, so memoize by string identity.
+  String? _errorScanContent;
+  bool _errorScanResult = false;
+
+  bool get _displayedContentLooksLikeError {
+    final content = _displayedContent;
+    if (!identical(_errorScanContent, content)) {
+      _errorScanContent = content;
+      _errorScanResult =
+          content.contains('⚠️') ||
+          content.contains('Error') ||
+          content.contains('timeout') ||
+          content.contains('retry options');
+    }
+    return _errorScanResult;
+  }
+
   List<_AssistantFooterAction> _buildFooterActions() {
     final l10n = AppLocalizations.of(context)!;
-    final ttsState = ref.watch(textToSpeechControllerProvider);
-    final isChatStreaming = ref.watch(isChatStreamingProvider);
+    // Watch only the playback fields the footer renders so Listen/Stop stays
+    // current without rebuilding on every spoken word (#709).
+    final ttsState = ref.watch(
+      textToSpeechControllerProvider.select(
+        (state) => (
+          activeMessageId: state.activeMessageId,
+          status: state.status,
+          initialized: state.initialized,
+          available: state.available,
+        ),
+      ),
+    );
+    final isChatStreaming = ref.read(isChatStreamingProvider);
     final activeUsage = _resolveActiveUsage();
     final messageId = _messageId;
     final activeError = _getActiveError();
     final hasErrorField = activeError != null;
-    final isErrorMessage =
-        hasErrorField ||
-        _displayedContent.contains('⚠️') ||
-        _displayedContent.contains('Error') ||
-        _displayedContent.contains('timeout') ||
-        _displayedContent.contains('retry options');
+    final isErrorMessage = hasErrorField || _displayedContentLooksLikeError;
 
     final isActiveMessage = ttsState.activeMessageId == messageId;
     final isSpeaking =
@@ -2456,10 +2383,23 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
     final bool canRegenerate =
         widget.onRegenerate != null &&
         (!isChatStreaming || currentStreamingMessageCompleted);
-    final bool hasVersions = widget.message.versions.isNotEmpty;
-    final bool canGoToPreviousVersion =
-        hasVersions && (_activeVersionIndex < 0 || _activeVersionIndex > 0);
-    final bool canGoToNextVersion = hasVersions && _activeVersionIndex >= 0;
+
+    // Branch actions need a real message id. The providers below are what make
+    // them exclusive to the user's own durable chat, so the widget adds no
+    // gate of its own. A version being previewed is continued from by the pill
+    // beside the pager, and can be branched into a new chat only when its id
+    // is a stored same-role alternative of this response: a version without a
+    // reliable id is not a message to branch at.
+    final branchChatId = ref.watch(
+      activeConversationProvider.select((c) => c?.id),
+    );
+    final branchControls = messageId.isNotEmpty && branchChatId != null;
+    final previewingVersion = _activeVersionIndex >= 0;
+    final continueFromId = _continueFromVersionId();
+    final bool canFork =
+        branchControls &&
+        (!previewingVersion || continueFromId != null) &&
+        ref.watch(chatForkAvailabilityProvider) != ChatForkAvailability.hidden;
 
     VoidCallback? ttsOnTap;
     if (showStopState || canStartTts) {
@@ -2471,9 +2411,30 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
       };
     }
 
+    // "Merge responses" is an Advanced addition: it needs two or more finished
+    // answers with text, and no other merge running. A merge already saved on an
+    // answer is shown whatever Advanced is; only starting one depends on it.
+    final comparisonGroup = _comparisonGroup;
+    final mergeIsRunningHere =
+        comparisonGroup != null &&
+        ref.watch(comparisonMergeProvider) == _activeAnswerId;
+    // The merge lands on the shown answer, so that one must be finished; a
+    // sibling that failed or is still responding is simply not a source.
+    final shownAnswer = comparisonGroup == null
+        ? null
+        : _shownAnswer(comparisonGroup);
+    final canMerge =
+        !widget.readOnly &&
+        comparisonGroup != null &&
+        comparisonGroup.isComparison &&
+        ref.watch(comparisonMergeCommandAvailableProvider) &&
+        shownAnswer != null &&
+        _isMergeable(shownAnswer) &&
+        _mergeableAnswers(comparisonGroup).length >= 2;
+
     final IconData listenIcon = Platform.isIOS
-        ? CupertinoIcons.speaker_2_fill
-        : Icons.volume_up;
+        ? CupertinoIcons.speaker_2
+        : Icons.volume_up_outlined;
     final IconData stopIcon = Platform.isIOS
         ? CupertinoIcons.stop_fill
         : Icons.stop;
@@ -2482,11 +2443,11 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
       _AssistantFooterAction(
         id: 'copy',
         icon: Platform.isIOS
-            ? CupertinoIcons.doc_on_clipboard
-            : Icons.content_copy,
+            ? CupertinoIcons.doc_on_doc
+            : Icons.content_copy_outlined,
         label: l10n.copy,
         onTap: _responseCompleted ? widget.onCopy : null,
-        sfSymbol: 'doc.on.clipboard',
+        sfSymbol: 'doc.on.doc',
       ),
       if (shouldShowTtsButton)
         _AssistantFooterAction(
@@ -2500,15 +2461,33 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
           onTap: ttsOnTap,
           sfSymbol: (showStopState || showPreparingTtsState)
               ? 'stop.fill'
-              : 'speaker.wave.2.fill',
+              : 'speaker.wave.2',
         ),
-      _AssistantFooterAction(
-        id: isErrorMessage ? 'retry' : 'regenerate',
-        icon: Platform.isIOS ? CupertinoIcons.refresh : Icons.refresh,
-        label: isErrorMessage ? l10n.retry : l10n.regenerate,
-        onTap: canRegenerate ? widget.onRegenerate : null,
-        sfSymbol: 'arrow.clockwise',
-      ),
+      if (!widget.readOnly && !_isVoiceReply)
+        _AssistantFooterAction(
+          id: isErrorMessage ? 'retry' : 'regenerate',
+          icon: Platform.isIOS ? CupertinoIcons.refresh : Icons.refresh,
+          label: isErrorMessage ? l10n.retry : l10n.regenerate,
+          onTap: canRegenerate ? widget.onRegenerate : null,
+          sfSymbol: 'arrow.clockwise',
+        ),
+      if (mergeIsRunningHere)
+        _AssistantFooterAction(
+          id: 'stop-merge',
+          icon: Platform.isIOS ? CupertinoIcons.stop_fill : Icons.stop,
+          label: l10n.chatMergeStopAction,
+          onTap: () =>
+              unawaited(ref.read(comparisonMergeProvider.notifier).cancel()),
+          sfSymbol: 'stop.fill',
+        )
+      else if (canMerge)
+        _AssistantFooterAction(
+          id: 'merge',
+          icon: Platform.isIOS ? CupertinoIcons.arrow_merge : Icons.merge_type,
+          label: l10n.chatMergeResponsesAction,
+          onTap: () => unawaited(_mergeResponses(comparisonGroup)),
+          sfSymbol: 'arrow.triangle.merge',
+        ),
       if (activeUsage != null && activeUsage.isNotEmpty)
         _AssistantFooterAction(
           id: 'usage',
@@ -2517,48 +2496,27 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
           onTap: () => UsageStatsModal.show(context, activeUsage),
           sfSymbol: 'info.circle',
         ),
-      if (hasVersions)
+      if (canFork)
         _AssistantFooterAction(
-          id: 'previous_version',
-          icon: Platform.isIOS
-              ? CupertinoIcons.chevron_left
-              : Icons.chevron_left,
-          label: l10n.previousLabel,
-          onTap: canGoToPreviousVersion
-              ? () {
-                  final nextIndex = _activeVersionIndex < 0
-                      ? widget.message.versions.length - 1
-                      : _activeVersionIndex - 1;
-                  _setActiveVersionIndex(nextIndex);
-                }
-              : null,
-          sfSymbol: 'chevron.left',
+          id: 'fork',
+          icon: Platform.isIOS ? CupertinoIcons.arrow_branch : Icons.call_split,
+          label: l10n.chatBranchForkChat,
+          onTap: () => unawaited(
+            forkChatFromMessage(
+              context,
+              messageId: continueFromId ?? messageId,
+            ),
+          ),
+          sfSymbol: 'arrow.triangle.branch',
         ),
-      if (hasVersions)
+      if (!widget.readOnly)
         _AssistantFooterAction(
-          id: 'next_version',
-          icon: Platform.isIOS
-              ? CupertinoIcons.chevron_right
-              : Icons.chevron_right,
-          label: l10n.nextLabel,
-          onTap: canGoToNextVersion
-              ? () {
-                  final nextIndex =
-                      _activeVersionIndex < widget.message.versions.length - 1
-                      ? _activeVersionIndex + 1
-                      : -1;
-                  _setActiveVersionIndex(nextIndex);
-                }
-              : null,
-          sfSymbol: 'chevron.right',
+          id: 'delete',
+          icon: Platform.isIOS ? CupertinoIcons.delete : Icons.delete_outline,
+          label: l10n.delete,
+          onTap: widget.onDelete,
+          sfSymbol: 'trash',
         ),
-      _AssistantFooterAction(
-        id: 'delete',
-        icon: Platform.isIOS ? CupertinoIcons.delete : Icons.delete_outline,
-        label: l10n.delete,
-        onTap: widget.onDelete,
-        sfSymbol: 'trash',
-      ),
     ];
 
     return actions;
@@ -2572,16 +2530,45 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
     return ChatActionButton(icon: icon, label: label, onTap: onTap);
   }
 
-  Widget _buildVersionChip() {
-    final totalVersions = widget.message.versions.length + 1;
-    final currentVersion = _activeVersionIndex < 0
-        ? totalVersions
-        : _activeVersionIndex + 1;
+  /// `‹ 2/3 ›`: steps through this response's regenerations in place.
+  /// [indices] are the answers it covers, oldest first, as indexes into
+  /// `versions` with -1 for the live response, which is last.
+  Widget _buildVersionPager(List<int> indices) {
+    final l10n = AppLocalizations.of(context)!;
+    final theme = context.conduitTheme;
+    final position = indices.indexOf(_activeVersionIndex);
+    final current = position < 0 ? indices.length - 1 : position;
 
-    return ConduitChip(
-      label: '$currentVersion/$totalVersions',
-      isCompact: true,
-      isSelected: _activeVersionIndex >= 0,
+    return Row(
+      key: const ValueKey<String>('assistant-version-pager'),
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _buildActionButton(
+          icon: Platform.isIOS
+              ? CupertinoIcons.chevron_left
+              : Icons.chevron_left,
+          label: l10n.previousLabel,
+          onTap: current > 0
+              ? () => _setActiveVersionIndex(indices[current - 1])
+              : null,
+        ),
+        Text(
+          '${current + 1}/${indices.length}',
+          style: AppTypography.small.copyWith(
+            color: theme.textPrimary.withValues(alpha: 0.8),
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
+        ),
+        _buildActionButton(
+          icon: Platform.isIOS
+              ? CupertinoIcons.chevron_right
+              : Icons.chevron_right,
+          label: l10n.nextLabel,
+          onTap: current < indices.length - 1
+              ? () => _setActiveVersionIndex(indices[current + 1])
+              : null,
+        ),
+      ],
     );
   }
 
@@ -2591,81 +2578,67 @@ class _AssistantMessageWidgetState extends ConsumerState<AssistantMessageWidget>
     final l10n = AppLocalizations.of(context)!;
     final theme = context.conduitTheme;
 
-    return AdaptivePopupMenuButton.widget<String>(
-      items: overflowActions
-          .map(
-            (action) => AdaptivePopupMenuItem<String>(
-              value: action.id,
-              label: action.label,
-              icon: Platform.isIOS ? action.sfSymbol : action.icon,
-              enabled: action.onTap != null,
-            ),
-          )
-          .toList(growable: false),
-      onSelected: (_, entry) {
-        final selectedId = entry.value;
-        if (selectedId == null) {
-          return;
-        }
-        for (final action in overflowActions) {
-          if (action.id == selectedId) {
-            action.onTap?.call();
-            return;
-          }
-        }
-      },
-      buttonStyle: PopupButtonStyle.plain,
-      child: AdaptiveTooltip(
-        message: l10n.more,
-        waitDuration: const Duration(milliseconds: 600),
-        child: Semantics(
-          button: true,
-          label: l10n.more,
-          child: SizedBox(
-            width: 32,
-            height: 32,
-            child: Center(
-              child: Icon(
-                Platform.isIOS
-                    ? CupertinoIcons.ellipsis
-                    : Icons.more_horiz_rounded,
-                size: IconSize.sm,
-                color: theme.textPrimary.withValues(alpha: 0.8),
-              ),
-            ),
-          ),
+    return AdaptiveTooltip(
+      message: l10n.more,
+      waitDuration: const Duration(milliseconds: 600),
+      child: Semantics(
+        button: true,
+        label: l10n.more,
+        child: AdaptivePopupMenuButton.icon<String>(
+          key: const ValueKey<String>('assistant-response-overflow-button'),
+          icon: PlatformUiCapabilities.isIOS
+              ? 'ellipsis'
+              : Icons.more_horiz_rounded,
+          items: overflowActions
+              .map(
+                (action) => AdaptivePopupMenuItem<String>(
+                  value: action.id,
+                  label: action.label,
+                  icon: PlatformUiCapabilities.isIOS
+                      ? action.sfSymbol
+                      : action.icon,
+                  enabled: action.onTap != null,
+                  isDestructive: action.id == 'delete',
+                ),
+              )
+              .toList(growable: false),
+          onSelected: (_, entry) {
+            final selectedId = entry.value;
+            if (selectedId == null) {
+              return;
+            }
+            for (final action in overflowActions) {
+              if (action.id == selectedId) {
+                action.onTap?.call();
+                return;
+              }
+            }
+          },
+          tint: theme.textPrimary.withValues(alpha: 0.8),
+          size: 32,
+          iconSize: IconSize.sm,
+          buttonStyle: PopupButtonStyle.plain,
         ),
       ),
     );
   }
 
   Widget _buildFollowUpSuggestions(List<String> suggestions) {
-    final shouldShow = widget.showFollowUps && suggestions.isNotEmpty;
+    // A follow-up is a send; another user's chat offers none.
+    final shouldShow =
+        widget.showFollowUps && !widget.readOnly && suggestions.isNotEmpty;
 
-    return AnimatedSwitcher(
-      duration: const Duration(milliseconds: 220),
-      switchInCurve: Curves.easeOutCubic,
-      switchOutCurve: Curves.easeInCubic,
-      transitionBuilder: (child, animation) {
-        return FadeTransition(
-          opacity: CurvedAnimation(
-            parent: animation,
-            curve: Curves.easeOutCubic,
-            reverseCurve: Curves.easeInCubic,
-          ),
-          child: child,
-        );
-      },
-      child: shouldShow
-          ? KeyedSubtree(
-              key: ValueKey<String>(_followUpStateScopeId()),
-              child: FollowUpSuggestionBar(
-                suggestions: suggestions,
-                onSelected: _handleFollowUpTap,
-                isBusy: _uiTreatsAsStreaming,
-              ),
-            )
-          : const SizedBox.shrink(key: ValueKey('follow-ups-empty')),
+    if (!shouldShow) {
+      return const SizedBox.shrink(key: ValueKey('follow-ups-empty'));
+    }
+
+    return KeyedSubtree(
+      key: ValueKey<String>(_followUpStateScopeId()),
+      child: FollowUpSuggestionBar(
+        suggestions: suggestions,
+        onSelected: _handleFollowUpTap,
+        isBusy: _uiTreatsAsStreaming,
+      ),
     );
   }
 }

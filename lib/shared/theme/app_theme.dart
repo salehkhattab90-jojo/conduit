@@ -1,9 +1,9 @@
 import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
-import 'package:flutter/cupertino.dart';
+import 'package:material_ui/material_ui.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+
 import '../../core/utils/system_ui_style.dart';
 import 'theme_extensions.dart';
 import 'tweakcn_themes.dart';
@@ -77,6 +77,32 @@ class AppTheme {
       tertiary: variant.accent,
       onTertiary: _pickOnColor(variant.accent, tokens),
       surfaceTint: variant.primary,
+      // Roles left to `ColorScheme.fromSeed` come out hue-shifted from the
+      // seed (pink/teal containers on the monochrome Conduit palette), and
+      // Material components such as segmented buttons, chips, menus, and
+      // switches read them directly. Derive every one from the palette.
+      // shadcn draws selected tabs/toggles with `secondary`; `accent` is a
+      // hover color (Catppuccin's is saturated sky blue).
+      secondaryContainer: variant.secondary,
+      onSecondaryContainer: variant.secondaryForeground,
+      tertiaryContainer: variant.muted,
+      onTertiaryContainer: variant.foreground,
+      errorContainer: Color.alphaBlend(
+        tokens.statusError60.withValues(alpha: isDark ? 0.24 : 0.12),
+        surfaces.background,
+      ),
+      // Error details render as body text inside the container.
+      onErrorContainer: tokens.neutralOnSurface,
+      surfaceContainerLowest: isDark ? surfaces.background : surfaces.popover,
+      surfaceContainer: surfaces.container,
+      surfaceContainerHigh: Color.lerp(surfaces.container, surfaces.card, 0.5),
+      surfaceDim: isDark ? surfaces.background : surfaces.card,
+      surfaceBright: isDark ? surfaces.card : surfaces.background,
+      inverseSurface: variant.foreground,
+      onInverseSurface: variant.background,
+      // Accent text on the inverse surface: the palette primary, with its
+      // lightness adjusted where it would blend into that surface.
+      inversePrimary: withMinContrast(variant.primary, variant.foreground, 4.5),
     );
 
     final OutlineInputBorder baseInputBorder = OutlineInputBorder(
@@ -90,17 +116,22 @@ class AppTheme {
     );
 
     final TextTheme textTheme = _buildTextTheme(tokens: tokens, isDark: isDark);
+    final TextTheme materialChromeTextTheme =
+        AppTypography.materialChromeTextTheme(
+          primary: tokens.neutralOnSurface,
+          secondary: isDark ? tokens.neutralTone80 : tokens.neutralTone60,
+          tertiary: tokens.neutralTone60,
+        );
     final cupertinoOverrideTheme = _buildCupertinoThemeData(
       brightness: brightness,
       variant: variant,
       tokens: tokens,
     );
-    final textInputAccentColor = _platformTextInputAccentColor(variant);
+    final textInputAccentColor = variant.primary;
 
     return ThemeData(
       useMaterial3: true,
       brightness: brightness,
-      fontFamily: AppTypography.fontFamily,
       colorScheme: colorScheme,
       scaffoldBackgroundColor: surfaces.background,
       canvasColor: surfaces.background,
@@ -112,13 +143,20 @@ class AppTheme {
         elevation: Elevation.none,
         backgroundColor: surfaces.background,
         foregroundColor: tokens.neutralOnSurface,
+        titleTextStyle: materialChromeTextTheme.titleLarge,
+        toolbarTextStyle: materialChromeTextTheme.bodyMedium,
         systemOverlayStyle: systemUiOverlayStyleForBrightness(brightness),
       ),
       bottomSheetTheme: BottomSheetThemeData(
         backgroundColor: surfaces.card,
         modalBackgroundColor: surfaces.card,
         surfaceTintColor: surfaces.card,
-        shape: RoundedRectangleBorder(borderRadius: shapes.extraLarge),
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(
+            top: Radius.circular(AppBorderRadius.bottomSheet),
+          ),
+        ),
+        clipBehavior: Clip.antiAlias,
         showDragHandle: false,
       ),
       cardTheme: CardThemeData(
@@ -150,7 +188,7 @@ class AppTheme {
           shadows.shadowXs.first.color,
           conduitExtension.inputBackground,
         ),
-        hintStyle: textTheme.bodyMedium?.copyWith(
+        hintStyle: AppTypography.inputHintStyle.copyWith(
           color: conduitExtension.inputPlaceholder,
         ),
         border: baseInputBorder,
@@ -247,14 +285,10 @@ class AppTheme {
       ),
       textTheme: textTheme,
       textSelectionTheme: TextSelectionThemeData(
-        // Keep cursor, handles, and selection highlight on the same
-        // platform-native accent while using highlight-appropriate opacity.
+        // Keep cursor, handles, and selection highlight on the active theme
+        // accent across both Material and Cupertino text fields.
         cursorColor: textInputAccentColor,
-        selectionColor: switch (defaultTargetPlatform) {
-          TargetPlatform.iOS ||
-          TargetPlatform.macOS => textInputAccentColor.withValues(alpha: 0.15),
-          _ => textInputAccentColor.withValues(alpha: 0.2),
-        },
+        selectionColor: textInputAccentColor.withValues(alpha: 0.2),
         selectionHandleColor: textInputAccentColor,
       ),
       extensions: <ThemeExtension<dynamic>>[
@@ -300,6 +334,11 @@ class AppTheme {
     final primaryText = tokens.neutralOnSurface;
     final secondaryText = isDark ? tokens.neutralTone80 : tokens.neutralTone60;
     final actionColor = variant.primary;
+    final chromeTextTheme = AppTypography.cupertinoChromeTextTheme(
+      primary: primaryText,
+      secondary: secondaryText,
+      tertiary: secondaryText,
+    );
 
     return CupertinoThemeData(
       brightness: brightness,
@@ -307,36 +346,25 @@ class AppTheme {
       scaffoldBackgroundColor: tokens.neutralTone10,
       barBackgroundColor: tokens.neutralTone10,
       textTheme: CupertinoTextThemeData(
-        textStyle: AppTypography.bodyLargeStyle.copyWith(color: primaryText),
-        actionTextStyle: AppTypography.bodyLargeStyle.copyWith(
+        textStyle: chromeTextTheme.bodyLarge,
+        actionTextStyle: chromeTextTheme.bodyLarge?.copyWith(
           color: actionColor,
         ),
-        actionSmallTextStyle: AppTypography.bodyMediumStyle.copyWith(
+        actionSmallTextStyle: chromeTextTheme.bodyMedium?.copyWith(
           color: actionColor,
         ),
-        tabLabelTextStyle: AppTypography.micro.copyWith(color: secondaryText),
-        navTitleTextStyle: AppTypography.titleLargeStyle.copyWith(
-          color: primaryText,
+        tabLabelTextStyle: AppTypography.cupertinoChromeMicroStyle.copyWith(
+          color: secondaryText,
         ),
-        navLargeTitleTextStyle: AppTypography.displayLargeStyle.copyWith(
-          color: primaryText,
-        ),
-        navActionTextStyle: AppTypography.bodyLargeStyle.copyWith(
+        navTitleTextStyle: chromeTextTheme.titleLarge,
+        navLargeTitleTextStyle: chromeTextTheme.displayLarge,
+        navActionTextStyle: chromeTextTheme.bodyLarge?.copyWith(
           color: actionColor,
         ),
-        pickerTextStyle: AppTypography.extraLarge.copyWith(color: primaryText),
-        dateTimePickerTextStyle: AppTypography.extraLarge.copyWith(
-          color: primaryText,
-        ),
+        pickerTextStyle: chromeTextTheme.titleLarge,
+        dateTimePickerTextStyle: chromeTextTheme.titleLarge,
       ),
     );
-  }
-
-  static Color _platformTextInputAccentColor(TweakcnThemeVariant variant) {
-    return switch (defaultTargetPlatform) {
-      TargetPlatform.iOS || TargetPlatform.macOS => const Color(0xFF007AFF),
-      _ => variant.primary,
-    };
   }
 
   static double _contrastRatio(Color a, Color b) {

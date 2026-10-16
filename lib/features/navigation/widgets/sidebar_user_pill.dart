@@ -1,29 +1,275 @@
+import 'dart:async' show unawaited;
 import 'dart:convert';
+import 'dart:collection';
 import 'dart:io' show Platform;
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 
-import 'package:adaptive_platform_ui/adaptive_platform_ui.dart';
+import 'package:conduit/shared/widgets/platform_ui/platform_ui.dart';
 import 'package:conduit/l10n/app_localizations.dart';
-import 'package:flutter/material.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:riverpod_annotation/riverpod_annotation.dart';
 
-import '../../../core/models/user.dart';
+import 'package:conduit_core/models/account_metadata.dart';
+import 'package:conduit_core/models/user.dart';
+
 import '../../../core/network/image_header_utils.dart';
-import '../../../core/providers/app_providers.dart';
+
+import 'package:conduit_core/providers/app_providers.dart';
+
+import 'package:conduit_core/providers/backend_mode_providers.dart';
+
+import 'package:conduit_core/services/api_service.dart';
+
 import '../../../core/services/native_sheet_bridge.dart';
-import '../../../core/services/navigation_service.dart';
-import '../../../core/services/settings_service.dart';
+import '../../../core/services/native_sheet_hydration_service.dart';
+import 'package:conduit_core/features/direct_connections/providers/direct_connection_providers.dart'
+    show directConnectionProfilesProvider;
+import '../../../shared/services/navigation_service.dart';
+
+import 'package:conduit_core/features/chat/server_speech/direct_voice_provider_settings.dart';
+import 'package:conduit_core/features/chat/server_speech/server_speech_providers.dart';
+import 'package:conduit_core/services/settings_service.dart';
+import 'package:conduit_core/features/automations/providers/automation_providers.dart'
+    show scheduledTasksEntryVisibleProvider;
+import 'package:conduit_core/features/calendar/providers/calendar_providers.dart'
+    show calendarAvailableProvider;
+import 'package:conduit_core/features/chat/providers/chat_providers.dart'
+    show chatDataControlsEntryVisibleProvider;
+import 'package:conduit_core/features/integrations/providers/personal_connections_providers.dart';
+import 'package:conduit_core/utils/debug_logger.dart';
+
 import '../../../core/utils/native_sheet_utils.dart';
-import '../../../core/utils/user_avatar_utils.dart';
-import '../../../core/utils/user_display_name.dart';
+import '../../../core/utils/account_display.dart' show AccountCardKind;
+
+import 'package:conduit_core/utils/user_avatar_utils.dart';
+
+import 'package:conduit_core/utils/user_display_name.dart';
+
+import 'package:conduit_core/features/hermes/models/hermes_connection_profile.dart';
+import 'package:conduit_core/features/hermes/providers/hermes_providers.dart';
+
+import '../../hermes/widgets/hermes_connection_switcher.dart';
+
 import '../../../shared/theme/theme_extensions.dart';
 import '../../../shared/utils/adaptive_glass.dart';
 import '../../../shared/widgets/conduit_components.dart';
 import '../../../shared/widgets/user_avatar.dart';
-import '../../auth/providers/unified_auth_providers.dart';
-import '../../terminal/providers/terminal_providers.dart';
+
+import 'package:conduit_core/features/auth/providers/unified_auth_providers.dart';
+
+import '../../workspace/providers/workspace_capabilities_provider.dart';
 import '../providers/sidebar_providers.dart';
+import 'sidebar_tab_registry.dart';
+
+part 'sidebar_user_pill.g.dart';
+
+typedef SidebarNativeProfilePresenter = Future<bool> Function(
+  NativeProfileSheetConfig config,
+);
+
+const double _sidebarProfileAvatarSize = 36;
+const double _sidebarNativeProfileAvatarSize = 28;
+const int _sidebarAvatarMaximumSourceDimension = 8192;
+const int _sidebarAvatarMaximumSourcePixels = 32 * 1024 * 1024;
+const double _sidebarAvatarMaximumAspectRatio = 64;
+const int _sidebarAvatarMaximumDecodeDimension = 512;
+const int _sidebarAvatarMaximumEncodedBytes = 2 * 1024 * 1024;
+
+@visibleForTesting
+Future<Uint8List?> rasterizeSidebarNativeAvatar(
+  Uint8List bytes, {
+  required double devicePixelRatio,
+}) async {
+  if (bytes.isEmpty) return null;
+  final scale = devicePixelRatio.isFinite
+      ? devicePixelRatio.clamp(1.0, 4.0)
+      : 1.0;
+  final canvasPixels = (TouchTarget.minimum * scale).round();
+  final avatarPixels = (_sidebarNativeProfileAvatarSize * scale).round();
+  ui.ImmutableBuffer? buffer;
+  ui.ImageDescriptor? descriptor;
+  ui.Codec? codec;
+  ui.Image? source;
+  ui.Image? output;
+  try {
+    buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
+    descriptor = await ui.ImageDescriptor.encoded(buffer);
+    final sourceWidth = descriptor.width;
+    final sourceHeight = descriptor.height;
+    final shortestSide = sourceWidth < sourceHeight
+        ? sourceWidth
+        : sourceHeight;
+    final longestSide = sourceWidth > sourceHeight ? sourceWidth : sourceHeight;
+    final sourcePixels = sourceWidth * sourceHeight;
+    if (shortestSide <= 0 ||
+        longestSide > _sidebarAvatarMaximumSourceDimension ||
+        sourcePixels > _sidebarAvatarMaximumSourcePixels ||
+        longestSide / shortestSide > _sidebarAvatarMaximumAspectRatio) {
+      return null;
+    }
+
+    final decodeScale = longestSide > _sidebarAvatarMaximumDecodeDimension
+        ? _sidebarAvatarMaximumDecodeDimension / longestSide
+        : 1.0;
+    final targetWidth = (sourceWidth * decodeScale).round().clamp(
+      1,
+      sourceWidth,
+    );
+    final targetHeight = (sourceHeight * decodeScale).round().clamp(
+      1,
+      sourceHeight,
+    );
+    codec = await descriptor.instantiateCodec(
+      targetWidth: targetWidth,
+      targetHeight: targetHeight,
+    );
+    source = (await codec.getNextFrame()).image;
+
+    final recorder = ui.PictureRecorder();
+    final canvas = ui.Canvas(recorder);
+    final sourceSide = source.width < source.height
+        ? source.width.toDouble()
+        : source.height.toDouble();
+    final sourceRect = ui.Rect.fromLTWH(
+      (source.width - sourceSide) / 2,
+      (source.height - sourceSide) / 2,
+      sourceSide,
+      sourceSide,
+    );
+    final inset = (canvasPixels - avatarPixels) / 2;
+    final destinationRect = ui.Rect.fromLTWH(
+      inset,
+      inset,
+      avatarPixels.toDouble(),
+      avatarPixels.toDouble(),
+    );
+    canvas.save();
+    canvas.clipPath(ui.Path()..addOval(destinationRect));
+    canvas.drawImageRect(
+      source,
+      sourceRect,
+      destinationRect,
+      ui.Paint()..filterQuality = ui.FilterQuality.high,
+    );
+    canvas.restore();
+    final picture = recorder.endRecording();
+    try {
+      output = await picture.toImage(canvasPixels, canvasPixels);
+    } finally {
+      picture.dispose();
+    }
+    final data = await output.toByteData(format: ui.ImageByteFormat.png);
+    if (data == null) return null;
+    return data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
+  } catch (error, stackTrace) {
+    DebugLogger.error(
+      'Failed to rasterize native sidebar avatar',
+      error: error,
+      stackTrace: stackTrace,
+      scope: 'navigation/sidebar/native-avatar',
+    );
+    return null;
+  } finally {
+    output?.dispose();
+    source?.dispose();
+    codec?.dispose();
+    descriptor?.dispose();
+    buffer?.dispose();
+  }
+}
+
+/// Nullable platform seam so the iOS native-sheet failure fallback is
+/// deterministic in widget tests.
+final sidebarNativeProfilePresenterProvider =
+    Provider<SidebarNativeProfilePresenter?>((ref) {
+      if (!Platform.isIOS) return null;
+      return NativeSheetBridge.instance.presentProfileMenu;
+    });
+
+/// Counts native Settings sheet openings, so a profile refresh started for
+/// one opening never reaches the next.
+int _nativeProfileSheetGeneration = 0;
+
+/// Whether [next] changes anything the native Settings sheet shows or its
+/// profile editors save back.
+@visibleForTesting
+bool nativeProfileSheetFieldsDiffer(
+  AccountMetadata shown,
+  AccountMetadata next,
+) =>
+    shown.bio != next.bio ||
+    shown.gender != next.gender ||
+    shown.dateOfBirth != next.dateOfBirth ||
+    shown.profileImageUrl != next.profileImageUrl;
+
+typedef SidebarNativeAvatarRequest = ({ApiService api, String avatarUrl});
+
+@immutable
+class SidebarNativeAvatarRasterRequest {
+  const SidebarNativeAvatarRasterRequest({
+    required this.cacheKey,
+    required this.bytes,
+    required this.devicePixelRatio,
+  });
+
+  final String cacheKey;
+  final Uint8List bytes;
+  final double devicePixelRatio;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SidebarNativeAvatarRasterRequest &&
+          cacheKey == other.cacheKey &&
+          devicePixelRatio == other.devicePixelRatio;
+
+  @override
+  int get hashCode => Object.hash(cacheKey, devicePixelRatio);
+}
+
+@riverpod
+Future<Uint8List?> sidebarNativeAvatarBytes(
+  Ref ref,
+  SidebarNativeAvatarRequest request,
+) => ref
+    .watch(nativeSheetAvatarBytesHydratorProvider)
+    .loadAvatarBytes(api: request.api, avatarUrl: request.avatarUrl);
+
+@riverpod
+Future<Uint8List?> sidebarNativeAvatarRaster(
+  Ref ref,
+  SidebarNativeAvatarRasterRequest request,
+) => rasterizeSidebarNativeAvatar(
+  request.bytes,
+  devicePixelRatio: request.devicePixelRatio,
+);
+
+final _sidebarHermesAvatarBytesProvider = FutureProvider<Uint8List?>((ref) {
+  return _loadHermesAvatarBytes();
+});
+
+/// Cached bytes of the Hermes agent icon, used as the native profile-sheet
+/// avatar in Hermes-only mode (loaded once, then reused).
+Uint8List? _hermesAvatarBytesCache;
+Future<Uint8List?> _loadHermesAvatarBytes() async {
+  if (_hermesAvatarBytesCache != null) return _hermesAvatarBytesCache;
+  try {
+    final data = await rootBundle.load('assets/icons/hermes_agent.png');
+    return _hermesAvatarBytesCache = data.buffer.asUint8List();
+  } catch (error, stackTrace) {
+    DebugLogger.error(
+      'Failed to load Hermes profile avatar asset',
+      error: error,
+      stackTrace: stackTrace,
+      scope: 'navigation/sidebar/hermes-avatar',
+    );
+    return null;
+  }
+}
 
 /// Resolves the best available current user for sidebar UI.
 dynamic resolveSidebarUser(WidgetRef ref) {
@@ -35,99 +281,281 @@ dynamic resolveSidebarUser(WidgetRef ref) {
   );
 }
 
+/// Route used when the native profile sheet is unavailable or not presented.
+/// Accountless direct-primary installs have no Open WebUI profile surface.
+String sidebarProfileFallbackRouteName({
+  required bool directPrimary,
+  required bool hasOpenWebUiUser,
+}) => RouteNames.profile;
+
 /// Localized search hint for the active sidebar tab.
 String sidebarSearchHintForActiveTab(WidgetRef ref, AppLocalizations l10n) {
-  final tabIndex = ref.watch(sidebarActiveTabProvider);
-  final notesOn = ref.watch(notesFeatureEnabledProvider);
-  final terminalOn = ref
-      .watch(terminalAvailableServersProvider)
-      .maybeWhen(
-        data: (servers) => servers.isNotEmpty,
-        error: (_, _) => true,
-        orElse: () => true,
-      );
-  final channelsOn = ref.watch(channelsFeatureEnabledProvider);
+  final selectedTab = ref.watch(sidebarNavigationSnapshotProvider).selectedTab;
+  return sidebarTabDescriptor(selectedTab).searchHint(l10n);
+}
 
-  var i = 0;
-  if (tabIndex == i) return l10n.searchConversations;
-  i++;
-  if (notesOn) {
-    if (tabIndex == i) return l10n.searchNotes;
-    i++;
+/// Builds one stable native glass avatar button on iOS 26 and Flutter
+/// platform-family fallbacks everywhere else.
+@visibleForTesting
+Widget buildSidebarProfileButton({
+  required bool supportsNativeGlass,
+  required VoidCallback onPressed,
+  required AdaptiveButtonStyle fallbackStyle,
+  Color? fallbackColor,
+  Color? nativeSymbolColor,
+  Uint8List? nativeAvatarBytes,
+  required Widget child,
+}) {
+  const buttonKey = ValueKey<String>('sidebar-profile-button');
+
+  if (supportsNativeGlass) {
+    final avatarBytes = nativeAvatarBytes;
+    final nativeButton = CNButton.icon(
+      key: avatarBytes == null
+          ? const ValueKey<String>('sidebar-profile-native-placeholder')
+          : ObjectKey(avatarBytes),
+      icon: avatarBytes == null
+          ? CNSymbol(
+              'person.crop.circle.fill',
+              size: IconSize.large,
+              color: nativeSymbolColor ?? fallbackColor,
+            )
+          : null,
+      imageAsset: avatarBytes == null
+          ? null
+          : CNImageAsset(
+              '',
+              imageData: avatarBytes,
+              size: _sidebarNativeProfileAvatarSize,
+            ),
+      onPressed: onPressed,
+      config: const CNButtonConfig(
+        padding: EdgeInsets.zero,
+        minHeight: TouchTarget.minimum,
+        width: TouchTarget.minimum,
+        style: CNButtonStyle.glass,
+      ),
+    );
+    return SizedBox.square(
+      key: buttonKey,
+      dimension: TouchTarget.minimum,
+      child: nativeButton,
+    );
   }
-  if (terminalOn) {
-    if (tabIndex == i) return l10n.searchFiles;
-    i++;
-  }
-  if (channelsOn) {
-    if (tabIndex == i) return l10n.searchChannels;
-  }
-  return l10n.searchConversations;
+
+  return AdaptiveButton.child(
+    key: buttonKey,
+    onPressed: onPressed,
+    style: fallbackStyle,
+    color: fallbackColor,
+    size: AdaptiveButtonSize.large,
+    padding: EdgeInsets.zero,
+    minSize: const Size(TouchTarget.minimum, TouchTarget.minimum),
+    useSmoothRectangleBorder: false,
+    child: child,
+  );
 }
 
 /// Profile button used as the sidebar adaptive app bar leading widget.
 class SidebarProfileAppBarLeading extends ConsumerWidget {
   const SidebarProfileAppBarLeading({super.key});
 
-  static const double _avatarSize = 36;
-
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final user = resolveSidebarUser(ref);
-    if (user == null) return const SizedBox.shrink();
+    final nativeProfilePresenter = ref.watch(
+      sidebarNativeProfilePresenterProvider,
+    );
+    final hermesOnly = ref.watch(hermesOnlyModeProvider);
+    final directPrimary =
+        ref.watch(preferredBackendProvider) == PreferredBackend.direct;
+    if (user == null && !hermesOnly && !directPrimary) {
+      return const SizedBox.shrink();
+    }
 
     final api = ref.watch(apiServiceProvider);
     final l10n = AppLocalizations.of(context)!;
-    final displayName = deriveUserDisplayName(
-      user,
-      fallback: l10n.userFallbackName,
-    );
-    final initial = displayName.isEmpty
+    final canManageWorkspace = canManageAnyWorkspaceSection(ref);
+    final directTitle = l10n.directConnectionsTitle;
+    final hermesName = ref.watch(hermesActiveConnectionNameProvider);
+    final displayName = hermesOnly
+        ? hermesName ?? kHermesDefaultConnectionName
+        : directPrimary && user == null
+        ? directTitle
+        : deriveUserDisplayName(user, fallback: l10n.userFallbackName);
+    final initial = hermesOnly
+        ? hermesConnectionInitials(hermesName)
+        : directPrimary && user == null
+        ? directTitle.characters.first.toUpperCase()
+        : displayName.isEmpty
         ? 'U'
         : displayName.characters.first.toUpperCase();
-    final avatarUrl = resolveUserAvatarUrlForUser(api, user);
+    final avatarUrl = hermesOnly || user == null
+        ? null
+        : resolveUserAvatarUrlForUser(api, user);
     final iconColor = context.conduitTheme.textPrimary;
     final useOpaqueFallback = conduitUsesOpaqueGlassFallback();
     final style = useOpaqueFallback
         ? AdaptiveButtonStyle.plain
         : AdaptiveButtonStyle.glass;
+    final inlineAvatarBytes = _decodeDataImage(avatarUrl);
+    final supportsNativeGlass = conduitSupportsNativeGlass();
+    final rawNativeAvatarBytes = !supportsNativeGlass
+        ? null
+        : hermesOnly
+        ? ref.watch(_sidebarHermesAvatarBytesProvider).asData?.value
+        : inlineAvatarBytes ??
+              (api == null || avatarUrl == null || avatarUrl.isEmpty
+                  ? null
+                  : ref
+                        .watch(
+                          sidebarNativeAvatarBytesProvider((
+                            api: api,
+                            avatarUrl: avatarUrl,
+                          )),
+                        )
+                        .asData
+                        ?.value);
+    final nativeAvatarBytes = rawNativeAvatarBytes == null
+        ? null
+        : ref
+              .watch(
+                sidebarNativeAvatarRasterProvider(
+                  SidebarNativeAvatarRasterRequest(
+                    cacheKey:
+                        '${avatarUrl ?? 'hermes'}:'
+                        '${rawNativeAvatarBytes.length}:'
+                        '${identityHashCode(rawNativeAvatarBytes)}',
+                    bytes: rawNativeAvatarBytes,
+                    devicePixelRatio: MediaQuery.devicePixelRatioOf(context),
+                  ),
+                ),
+              )
+              .asData
+              ?.value;
 
+    Future<void> openProfile() async {
+      await Navigator.of(context).maybePop();
+      if (!context.mounted) return;
+
+      if (nativeProfilePresenter != null) {
+        // Pre-load the Hermes avatar bytes (the config builder is sync, and
+        // avatarBytes must be supplied up front): without an Open WebUI
+        // user, the account card may name a Hermes connection.
+        final hermesAvatarBytes = hermesOnly || user == null
+            ? await _loadHermesAvatarBytes()
+            : null;
+        if (!context.mounted) return;
+        // The sheet lists the other saved accounts as they are when it opens,
+        // so the first open after launch must not beat their load.
+        await _loadSavedAccounts(ref);
+        if (!context.mounted) return;
+        final hasAccountProfile = !hermesOnly && user != null;
+        // The profile details editor preselects the stored gender and birth
+        // date and saves every field, so it must not open on a profile that
+        // was never loaded. A cached one opens the sheet at once; it is
+        // refreshed behind the sheet, which then takes the newer copy, and
+        // its Profile page editors wait for that refresh.
+        final cachedProfile = hasAccountProfile
+            ? ref.read(accountProfileProvider).asData?.value
+            : null;
+        final accountProfile = !hasAccountProfile
+            ? null
+            : cachedProfile ?? await _currentAccountProfile(ref);
+        if (!context.mounted) return;
+        // With no profile at all, the sheet would offer empty fields that a
+        // save writes over the stored ones. The settings page loads the
+        // profile itself and reports a failure, so go there instead.
+        final profileUnavailable = hasAccountProfile && accountProfile == null;
+        if (!profileUnavailable) {
+          final rootAccount = user == null
+              ? null
+              : NativeProfileRootAccount(
+                  displayName: displayName,
+                  email: _extractEmail(user) ?? l10n.noEmailLabel,
+                );
+          final generation = ++_nativeProfileSheetGeneration;
+          final config = _buildNativeProfileSheetConfig(
+            context: context,
+            ref: ref,
+            accountProfile: accountProfile,
+            user: user,
+            api: api,
+            displayName: displayName,
+            initials: initial,
+            rootAccount: rootAccount,
+            // On a cached copy the Profile page waits for the refresh: its
+            // editors save every field, so one opened on the cached copy
+            // would write it over newer server values.
+            profilePending: cachedProfile != null,
+            // Read when the sheet opens, so a toggle made while it was closed
+            // is already reflected; the action re-checks on delivery, and an
+            // Advanced change made inside the sheet rebuilds these rows.
+            visibility: NativeProfileRootVisibility(
+              showCalendar: ref.read(calendarAvailableProvider),
+              canManageWorkspace: canManageWorkspace,
+              showScheduledTasks: ref.read(scheduledTasksEntryVisibleProvider),
+              showPersonalConnections: ref.read(
+                personalConnectionsEntryVisibleProvider,
+              ),
+              showChatDataControls: ref.read(
+                chatDataControlsEntryVisibleProvider,
+              ),
+            ),
+            hermesAvatarBytes: hermesAvatarBytes,
+          );
+          ref
+              .read(nativeSheetHydrationServiceProvider)
+              .rememberProfileRoot(rootAccount);
+          final presented = await nativeProfilePresenter(config);
+          if (presented) {
+            if (cachedProfile != null) {
+              unawaited(
+                _refreshPresentedProfile(
+                  ref,
+                  generation: generation,
+                  shown: cachedProfile,
+                  displayName: displayName,
+                  initials: initial,
+                  user: user,
+                  api: api,
+                  l10n: l10n,
+                ),
+              );
+            }
+            return;
+          }
+        }
+      }
+
+      if (context.mounted) {
+        context.pushNamed(
+          sidebarProfileFallbackRouteName(
+            directPrimary: directPrimary,
+            hasOpenWebUiUser: user != null,
+          ),
+        );
+      }
+    }
+
+    // Exclude the native glass button's own node so VoiceOver announces one
+    // labelled control instead of an unlabelled avatar image.
     return Semantics(
       label: l10n.manage,
       button: true,
-      child: AdaptiveButton.child(
-        onPressed: () async {
-          await Navigator.of(context).maybePop();
-          if (!context.mounted) return;
-
-          if (Platform.isIOS) {
-            final config = _buildNativeProfileSheetConfig(
-              context: context,
-              ref: ref,
-              user: user,
-              api: api,
-              displayName: displayName,
-              initials: initial,
-            );
-            final presented = await NativeSheetBridge.instance
-                .presentProfileMenu(config);
-            if (presented) return;
-          }
-
-          if (context.mounted) {
-            context.pushNamed(RouteNames.profile);
-          }
-        },
-        style: style,
-        color: useOpaqueFallback ? iconColor : null,
-        size: AdaptiveButtonSize.large,
-        padding: EdgeInsets.zero,
-        minSize: const Size(TouchTarget.minimum, TouchTarget.minimum),
-        useSmoothRectangleBorder: false,
+      excludeSemantics: true,
+      onTap: openProfile,
+      child: buildSidebarProfileButton(
+        supportsNativeGlass: supportsNativeGlass,
+        onPressed: openProfile,
+        fallbackStyle: style,
+        fallbackColor: useOpaqueFallback ? iconColor : null,
+        nativeSymbolColor: iconColor,
+        nativeAvatarBytes: nativeAvatarBytes,
         child: ClipRRect(
           borderRadius: BorderRadius.circular(AppBorderRadius.avatar),
           child: UserAvatar(
-            size: _avatarSize,
+            size: _sidebarProfileAvatarSize,
             imageUrl: avatarUrl,
             fallbackText: initial,
           ),
@@ -136,47 +564,231 @@ class SidebarProfileAppBarLeading extends ConsumerWidget {
     );
   }
 
-  NativeProfileSheetConfig _buildNativeProfileSheetConfig({
-    required BuildContext context,
-    required WidgetRef ref,
+  /// The account profile to open the editor on: the one just loaded from the
+  /// server, else the cached one when the refresh fails or takes too long.
+  ///
+  /// A refresh replaces the provider's state with a loading or error value
+  /// that carries no profile, so the cached copy is read before it starts.
+  Future<AccountMetadata?> _currentAccountProfile(WidgetRef ref) async {
+    final cached = ref.read(accountProfileProvider).asData?.value;
+    try {
+      await ref
+          .read(accountProfileProvider.notifier)
+          .refresh()
+          .timeout(const Duration(seconds: 5));
+    } catch (error) {
+      DebugLogger.warning(
+        'account-profile-refresh-failed',
+        scope: 'navigation/profile',
+        data: {'error': error.toString()},
+      );
+    }
+    // The widget can be gone by now, and its ref must not be read then.
+    if (!ref.context.mounted) return cached;
+    return ref.read(accountProfileProvider).asData?.value ?? cached;
+  }
+
+  /// Waits briefly for the saved Open WebUI accounts. The sheet still opens
+  /// without them if they fail or take too long; it then lists only this one.
+  Future<void> _loadSavedAccounts(WidgetRef ref) async {
+    try {
+      await Future.wait([
+        ref.read(openWebUiAccountsProvider.future),
+        // The Accounts page lists them too.
+        ref.read(directConnectionProfilesProvider.future),
+      ]).timeout(const Duration(seconds: 2));
+    } catch (error) {
+      DebugLogger.warning(
+        'saved-accounts-load-failed',
+        scope: 'navigation/profile',
+        data: {'error': error.toString()},
+      );
+    }
+  }
+
+  /// Refreshes the account profile after the Settings sheet opened on the
+  /// cached [shown] copy, hands the sheet the newer one when it differs, and
+  /// then fills in its Profile page, which waited on a loading row.
+  ///
+  /// The page's editors save every field, so they only become reachable once
+  /// the sheet holds the copy the server has now; one opened on the cached
+  /// copy would write its older bio, gender, birth date or photo back. When
+  /// the refresh fails the cached copy is all there is, and the page shows it.
+  ///
+  /// Nothing reaches the sheet once it was closed and opened again, or once
+  /// another account signed in: the sheet belongs to the account it was
+  /// opened for.
+  Future<void> _refreshPresentedProfile(
+    WidgetRef ref, {
+    required int generation,
+    required AccountMetadata shown,
+    required String displayName,
+    required String initials,
+    required dynamic user,
+    required dynamic api,
+    required AppLocalizations l10n,
+  }) async {
+    if (!ref.context.mounted) return;
+    final userId = ref.read(currentUserProvider2)?.id;
+    var refreshed = true;
+    try {
+      await ref
+          .read(accountProfileProvider.notifier)
+          .refresh()
+          .timeout(const Duration(seconds: 5));
+    } catch (error) {
+      refreshed = false;
+      DebugLogger.warning(
+        'account-profile-refresh-failed',
+        scope: 'navigation/profile',
+        data: {'error': error.toString()},
+      );
+    }
+    if (!ref.context.mounted ||
+        generation != _nativeProfileSheetGeneration ||
+        !identical(ref.read(apiServiceProvider), api) ||
+        ref.read(currentUserProvider2)?.id != userId) {
+      return;
+    }
+    // `refresh` keeps a request failure in the provider's state rather than
+    // throwing, so an error or a missing value counts as a failed refresh too:
+    // the page then fills in from the cached copy instead of loading forever.
+    final state = ref.read(accountProfileProvider);
+    final fresh = refreshed && !state.hasError ? state.asData?.value : null;
+    if (fresh != null && fresh.id != shown.id) return;
+    final bridge = NativeSheetBridge.instance;
+    final profile = fresh ?? shown;
+    if (fresh != null && nativeProfileSheetFieldsDiffer(shown, fresh)) {
+      final updated = await bridge.updateProfile(
+        _nativeAccountProfileUser(
+          ref,
+          l10n: l10n,
+          user: user,
+          api: api,
+          displayName: displayName,
+          initials: initials,
+          accountProfile: fresh,
+        ),
+      );
+      // The editors would still read the cached copy, so the page stays on
+      // its loading row.
+      if (!updated) return;
+    }
+    await bridge.applyDetailPatch(
+      detailId: NativeSheetRoutes.profile,
+      items: const [],
+      clearSubtitle: true,
+      sections: buildNativeProfileDetailSections(
+        l10n,
+        displayName: displayName,
+        accountProfile: profile,
+      ),
+    );
+  }
+
+  /// The signed-in account as the native Settings sheet shows and edits it.
+  NativeProfileSheetUser _nativeAccountProfileUser(
+    WidgetRef ref, {
+    required AppLocalizations l10n,
     required dynamic user,
     required dynamic api,
     required String displayName,
     required String initials,
+    required AccountMetadata? accountProfile,
   }) {
-    final l10n = AppLocalizations.of(context)!;
     final avatarUrl = resolveUserAvatarUrlForUser(api, user);
     final avatarBytes = _decodeDataImage(avatarUrl);
-    final email = _extractEmail(user) ?? l10n.noEmailLabel;
-    final accountProfile = ref.read(accountProfileProvider).asData?.value;
+    return NativeProfileSheetUser(
+      displayName: displayName,
+      email: _extractEmail(user) ?? l10n.noEmailLabel,
+      initials: initials,
+      avatarUrl: avatarBytes == null ? avatarUrl : null,
+      avatarBytes: avatarBytes,
+      avatarHeaders: avatarUrl == null
+          ? const {}
+          : buildImageHeadersForUrlFromWidgetRef(ref, avatarUrl) ?? const {},
+      bio: accountProfile?.bio,
+      gender: accountProfile?.gender,
+      dateOfBirth: accountProfile?.dateOfBirth,
+      profileImageUrl: accountProfile?.profileImageUrl,
+    );
+  }
+
+  NativeProfileSheetConfig _buildNativeProfileSheetConfig({
+    required BuildContext context,
+    required WidgetRef ref,
+    required AccountMetadata? accountProfile,
+    required dynamic user,
+    required dynamic api,
+    required String displayName,
+    required String initials,
+    required NativeProfileRootAccount? rootAccount,
+    required NativeProfileRootVisibility visibility,
+    bool profilePending = false,
+    Uint8List? hermesAvatarBytes,
+  }) {
+    final l10n = AppLocalizations.of(context)!;
     final appSettings = ref.read(appSettingsProvider);
-    final nativeAudio = buildNativeAudioSheetParts(l10n, appSettings);
-    final settingsTitle = nativeSettingsTitle(l10n);
-    final profileTitle = nativeProfileTitle(l10n);
+    final nativeAudio = buildNativeAudioSheetParts(
+      l10n,
+      appSettings,
+      voiceProviderCandidates:
+          (ref.read(directConnectionProfilesProvider).value ?? const [])
+              .where(canBeVoiceProvider)
+              .toList(growable: false),
+      serverOffersVoiceChoice:
+          ref.read(serverSpeechProviderProvider)?.offersVoiceChoice ?? false,
+    );
     final appearanceTitle = nativeAppearanceTitle(l10n);
     final chatsTitle = nativeChatsTitle(l10n);
     final aiMemoryTitle = nativeAiMemoryTitle(l10n);
     final dataConnectionTitle = nativeDataConnectionTitle(l10n);
-    final profileSummary = [
-      displayName,
-      if (accountProfile?.bio?.trim().isNotEmpty == true)
-        accountProfile!.bio!.trim(),
-    ].join(' · ');
+    final card = readNativeAccountCard(ref.read, l10n, account: rootAccount);
+    final sections = buildNativeProfileRootSections(
+      l10n,
+      account: rootAccount,
+      visibility: visibility,
+      card: (title: card.title, subtitle: card.subtitle),
+      otherAccountCount: readNativeOtherAccountCount(ref.read),
+    );
+    final supportItems = buildNativeSupportItems(l10n);
+    // The native sheet lays itself out from [sections]; the flat lists are
+    // its fallback when a payload carries none.
+    final menuItems = <NativeSheetItemConfig>[
+      for (final section in sections)
+        if (section.title != l10n.supportConduit) ...section.items,
+    ];
 
     return NativeProfileSheetConfig(
-      profileMenuTitle: settingsTitle,
-      profile: NativeProfileSheetUser(
-        displayName: displayName,
-        email: email,
-        initials: initials,
-        avatarUrl: avatarBytes == null ? avatarUrl : null,
-        avatarBytes: avatarBytes,
-        avatarHeaders: buildImageHeadersFromWidgetRef(ref) ?? const {},
-        bio: accountProfile?.bio,
-        gender: accountProfile?.gender,
-        dateOfBirth: accountProfile?.dateOfBirth,
-        profileImageUrl: accountProfile?.profileImageUrl,
-      ),
+      profileMenuTitle: nativeSettingsTitle(l10n),
+      // The account card draws this profile's avatar beside its own text,
+      // so both name the same one.
+      profile: switch (card.kind) {
+        AccountCardKind.hermes => NativeProfileSheetUser(
+          displayName: card.title,
+          email: _hermesHostLabel(
+            ref,
+            fallback: l10n.hermesSelfHostedAgentLabel,
+          ),
+          initials: hermesConnectionInitials(card.title),
+          avatarBytes: hermesAvatarBytes,
+          avatarIsTemplate: true,
+        ),
+        AccountCardKind.direct => NativeProfileSheetUser(
+          displayName: l10n.directConnectionsTitle,
+          email: l10n.directConnectionsSubtitle,
+          initials: l10n.directConnectionsTitle.characters.first.toUpperCase(),
+        ),
+        AccountCardKind.openWebUi => _nativeAccountProfileUser(
+          ref,
+          l10n: l10n,
+          user: user,
+          api: api,
+          displayName: displayName,
+          initials: initials,
+          accountProfile: accountProfile,
+        ),
+      },
       editProfileLabel: l10n.edit,
       editProfileSheet: NativeEditProfileSheetConfig(
         title: l10n.profileDetails,
@@ -204,125 +816,35 @@ class SidebarProfileAppBarLeading extends ConsumerWidget {
         removeAvatarLabel: l10n.removeAvatar,
         currentAvatarLabel: l10n.currentAvatar,
       ),
-      menuItems: const [],
-      sections: [
-        NativeSheetSectionConfig(
-          items: [
-            NativeSheetItemConfig(
-              id: NativeSheetRoutes.profile,
-              title: displayName,
-              subtitle: email,
-              sfSymbol: 'person.crop.circle',
-            ),
-          ],
-        ),
-        NativeSheetSectionConfig(
-          items: [
-            NativeSheetItemConfig(
-              id: NativeSheetRoutes.appearance,
-              title: appearanceTitle,
-              sfSymbol: 'paintpalette',
-            ),
-            NativeSheetItemConfig(
-              id: NativeSheetRoutes.chats,
-              title: chatsTitle,
-              sfSymbol: 'bubble.left.and.bubble.right',
-            ),
-            NativeSheetItemConfig(
-              id: NativeSheetRoutes.voice,
-              title: l10n.voice,
-              sfSymbol: 'waveform',
-            ),
-            NativeSheetItemConfig(
-              id: NativeSheetRoutes.aiMemory,
-              title: aiMemoryTitle,
-              sfSymbol: 'wand.and.stars',
-            ),
-            NativeSheetItemConfig(
-              id: NativeSheetRoutes.dataConnection,
-              title: dataConnectionTitle,
-              sfSymbol: 'network',
-            ),
-          ],
-        ),
-        NativeSheetSectionConfig(
-          items: [
-            NativeSheetItemConfig(
-              id: NativeSheetRoutes.helpAbout,
-              title: l10n.aboutApp,
-              sfSymbol: 'info.circle',
-            ),
-          ],
-        ),
-        NativeSheetSectionConfig(
-          items: [
-            NativeSheetItemConfig(
-              id: 'sign-out',
-              title: l10n.signOut,
-              subtitle: l10n.endYourSession,
-              sfSymbol: 'rectangle.portrait.and.arrow.right',
-              destructive: true,
-            ),
-          ],
-        ),
-      ],
+      menuItems: menuItems,
+      supportTitle: l10n.supportConduit,
+      supportItems: supportItems,
+      sections: sections,
       detailSheets: [
-        NativeSheetDetailConfig(
-          id: NativeSheetRoutes.profile,
-          title: profileTitle,
-          sections: [
-            NativeSheetSectionConfig(
-              footer: l10n.accountSettingsSubtitle,
-              items: [
-                NativeSheetItemConfig(
-                  id: 'profile-photo',
-                  title: l10n.editPhoto,
-                  sfSymbol: 'person.crop.circle',
-                ),
-              ],
+        readNativeAccountsDetail(ref.read, l10n),
+        if (user != null && profilePending)
+          buildNativeLoadingDetail(
+            l10n: l10n,
+            id: NativeSheetRoutes.profile,
+            title: nativeProfileTitle(l10n),
+            subtitle: l10n.loadingShort,
+          )
+        else if (user != null)
+          NativeSheetDetailConfig(
+            id: NativeSheetRoutes.profile,
+            title: nativeProfileTitle(l10n),
+            sections: buildNativeProfileDetailSections(
+              l10n,
+              displayName: displayName,
+              accountProfile: accountProfile,
             ),
-            NativeSheetSectionConfig(
-              items: [
-                NativeSheetItemConfig(
-                  id: 'profile-name',
-                  title: l10n.name,
-                  subtitle: profileSummary,
-                  sfSymbol: 'person.text.rectangle',
-                ),
-                NativeSheetItemConfig(
-                  id: 'profile-about',
-                  title: l10n.bioLabel,
-                  subtitle: accountProfile?.bio?.trim().isNotEmpty == true
-                      ? accountProfile!.bio!.trim()
-                      : l10n.notSet,
-                  sfSymbol: 'text.bubble',
-                ),
-                NativeSheetItemConfig(
-                  id: 'profile-details',
-                  title: l10n.profileDetails,
-                  subtitle: l10n.genderLabel,
-                  sfSymbol: 'person.crop.circle',
-                ),
-              ],
-            ),
-            NativeSheetSectionConfig(
-              title: l10n.accountSettingsTitle,
-              items: [
-                NativeSheetItemConfig(
-                  id: 'password',
-                  title: l10n.changePasswordTitle,
-                  subtitle: l10n.passwordChangesLabel,
-                  sfSymbol: 'lock',
-                ),
-              ],
-            ),
-          ],
-        ),
-        buildNativePasswordDetail(
-          l10n,
-          passwordChangeEnabled: true,
-          subtitle: l10n.passwordFieldsRequired,
-        ),
+          ),
+        if (user != null)
+          buildNativePasswordDetail(
+            l10n,
+            passwordChangeEnabled: true,
+            subtitle: l10n.passwordFieldsRequired,
+          ),
         buildNativeLoadingDetail(
           l10n: l10n,
           id: NativeSheetRoutes.appearance,
@@ -332,10 +854,10 @@ class SidebarProfileAppBarLeading extends ConsumerWidget {
         NativeSheetDetailConfig(
           id: NativeSheetRoutes.voice,
           title: l10n.voice,
-          subtitle: l10n.audioSettingsSubtitle,
-          items: nativeAudio.mainItems,
+          sections: nativeAudio.mainSections,
         ),
         nativeAudio.voicePickerDetail,
+        nativeAudio.voiceProviderDetail,
         buildNativeLoadingDetail(
           l10n: l10n,
           id: NativeSheetRoutes.chats,
@@ -346,6 +868,12 @@ class SidebarProfileAppBarLeading extends ConsumerWidget {
           l10n: l10n,
           id: NativeSheetRoutes.aiMemory,
           title: aiMemoryTitle,
+          subtitle: l10n.loadingShort,
+        ),
+        buildNativeLoadingDetail(
+          l10n: l10n,
+          id: NativeSheetRoutes.notificationSettings,
+          title: l10n.notificationsTitle,
           subtitle: l10n.loadingShort,
         ),
         buildNativeLoadingDetail(
@@ -364,14 +892,42 @@ class SidebarProfileAppBarLeading extends ConsumerWidget {
     );
   }
 
+  /// Header subtitle for the Hermes-only profile sheet: the configured agent's
+  /// host, falling back to a generic label.
+  String _hermesHostLabel(WidgetRef ref, {required String fallback}) {
+    final baseUrl = ref.read(hermesConfigProvider).baseUrl;
+    final host = Uri.tryParse(baseUrl)?.host;
+    return host != null && host.isNotEmpty ? host : fallback;
+  }
+
+  static final LinkedHashMap<String, Uint8List> _dataImageBytesCache =
+      LinkedHashMap<String, Uint8List>();
+
   Uint8List? _decodeDataImage(String? dataUrl) {
     if (dataUrl == null || !dataUrl.startsWith('data:image')) {
       return null;
     }
+    final cached = _dataImageBytesCache.remove(dataUrl);
+    if (cached != null) {
+      _dataImageBytesCache[dataUrl] = cached;
+      return cached;
+    }
     try {
       final commaIndex = dataUrl.indexOf(',');
       if (commaIndex == -1) return null;
-      return base64Decode(dataUrl.substring(commaIndex + 1));
+      final encodedLength = dataUrl.length - commaIndex - 1;
+      final maximumBase64Length =
+          ((_sidebarAvatarMaximumEncodedBytes + 2) ~/ 3) * 4;
+      if (encodedLength > maximumBase64Length) return null;
+      final decoded = base64Decode(dataUrl.substring(commaIndex + 1));
+      if (decoded.lengthInBytes > _sidebarAvatarMaximumEncodedBytes) {
+        return null;
+      }
+      _dataImageBytesCache[dataUrl] = decoded;
+      while (_dataImageBytesCache.length > 4) {
+        _dataImageBytesCache.remove(_dataImageBytesCache.keys.first);
+      }
+      return decoded;
     } catch (_) {
       return null;
     }

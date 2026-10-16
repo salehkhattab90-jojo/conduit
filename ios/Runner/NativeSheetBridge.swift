@@ -1,6 +1,59 @@
+import CryptoKit
 import Flutter
+import ImageIO
 import PhotosUI
+import SafariServices
+import StoreKit
 import UIKit
+import UniformTypeIdentifiers
+
+func loadFlutterAssetImage(_ asset: String, bundle: Bundle = .main) -> UIImage? {
+    let assetKey = FlutterDartProject.lookupKey(forAsset: asset)
+    guard let assetPath = bundle.path(forResource: assetKey, ofType: nil) else {
+        return nil
+    }
+    return UIImage(contentsOfFile: assetPath)
+}
+
+func nativeDownsampleImageFile(
+    at url: URL,
+    maxPixelSize: Int
+) -> UIImage? {
+    guard maxPixelSize > 0,
+          let source = CGImageSourceCreateWithURL(
+              url as CFURL,
+              [kCGImageSourceShouldCache: false] as CFDictionary
+          ) else { return nil }
+    let options: [CFString: Any] = [
+        kCGImageSourceCreateThumbnailFromImageAlways: true,
+        kCGImageSourceCreateThumbnailWithTransform: true,
+        kCGImageSourceShouldCacheImmediately: true,
+        kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
+    ]
+    guard let image = CGImageSourceCreateThumbnailAtIndex(
+        source,
+        0,
+        options as CFDictionary
+    ) else { return nil }
+    return UIImage(cgImage: image)
+}
+
+func nativeAvatarImage(_ image: UIImage, isTemplate: Bool) -> UIImage {
+    isTemplate ? image.withRenderingMode(.alwaysTemplate) : image
+}
+
+func applyNativeAvatarImage(
+    _ image: UIImage,
+    isTemplate: Bool,
+    to imageView: UIImageView,
+    initialsLabel: UILabel
+) {
+    imageView.image = nativeAvatarImage(image, isTemplate: isTemplate)
+    imageView.tintColor = isTemplate ? NativeSheetTheme.shared.foreground : nil
+    imageView.contentMode = isTemplate ? .scaleAspectFit : .scaleAspectFill
+    imageView.isHidden = false
+    initialsLabel.isHidden = true
+}
 
 private func nativeLocalized(_ key: String, _ fallback: String) -> String {
     NSLocalizedString(key, tableName: nil, bundle: .main, value: fallback, comment: "")
@@ -12,11 +65,32 @@ private struct NativeSheetProfile {
     let initials: String
     let avatarUrl: String?
     let avatarData: Data?
+    let avatarIsTemplate: Bool
     let avatarHeaders: [String: String]
     let bio: String
     let gender: String
     let dateOfBirth: String?
     let savedProfileImageUrl: String?
+}
+
+private extension NativeSheetProfile {
+    init(payload profilePayload: [String: Any]) {
+        self.init(
+            displayName: (profilePayload["displayName"] as? String)
+                ?? nativeLocalized("native.user", "User"),
+            email: (profilePayload["email"] as? String)
+                ?? nativeLocalized("native.noEmail", "No email"),
+            initials: (profilePayload["initials"] as? String) ?? "U",
+            avatarUrl: profilePayload["avatarUrl"] as? String,
+            avatarData: (profilePayload["avatarBytes"] as? FlutterStandardTypedData)?.data,
+            avatarIsTemplate: (profilePayload["avatarIsTemplate"] as? Bool) ?? false,
+            avatarHeaders: (profilePayload["avatarHeaders"] as? [String: String]) ?? [:],
+            bio: (profilePayload["bio"] as? String) ?? "",
+            gender: (profilePayload["gender"] as? String) ?? "",
+            dateOfBirth: profilePayload["dateOfBirth"] as? String,
+            savedProfileImageUrl: profilePayload["profileImageUrl"] as? String
+        )
+    }
 }
 
 private struct NativeEditProfileSheetCopy {
@@ -111,7 +185,13 @@ private struct NativeSheetItem {
     let title: String
     let subtitle: String?
     let sfSymbol: String
+    let iconAsset: String?
+    let iconSize: Double?
+    let showsDisclosure: Bool?
     let destructive: Bool
+    let dismissOnSelect: Bool
+    let actionId: String?
+    let actionValue: Any?
     let url: URL?
     let kind: String
     let value: Any?
@@ -128,6 +208,16 @@ private struct NativeSheetItem {
     let sliderMin: Double?
     let sliderMax: Double?
     let sliderDivisions: Int?
+    /// A round picture in place of the symbol: these bytes, else the initials
+    /// of `avatarName`.
+    let avatarName: String?
+    let avatarData: Data?
+    /// Marks the row in use with a check.
+    let checked: Bool
+    /// Draws the row in the accent color, as an action.
+    let accent: Bool
+    /// Draws the row as the sheet's profile summary.
+    let usesProfileAvatar: Bool
 
     init?(_ payload: [String: Any]) {
         guard
@@ -143,7 +233,13 @@ private struct NativeSheetItem {
         self.title = title
         subtitle = payload["subtitle"] as? String
         sfSymbol = (payload["sfSymbol"] as? String) ?? "circle"
+        iconAsset = payload["iconAsset"] as? String
+        iconSize = NativeSheetItem.optionalDouble(payload["iconSize"])
+        showsDisclosure = payload["showsDisclosure"] as? Bool
         destructive = payload["destructive"] as? Bool ?? false
+        dismissOnSelect = payload["dismissOnSelect"] as? Bool ?? false
+        actionId = payload["actionId"] as? String
+        actionValue = payload["actionValue"]
         if let urlString = payload["url"] as? String {
             url = URL(string: urlString)
         } else {
@@ -174,6 +270,12 @@ private struct NativeSheetItem {
         } else {
             sliderDivisions = nil
         }
+        avatarName = payload["avatarName"] as? String
+        avatarData = (payload["avatarBytes"] as? FlutterStandardTypedData)?.data
+            ?? payload["avatarBytes"] as? Data
+        checked = payload["checked"] as? Bool ?? false
+        accent = payload["accent"] as? Bool ?? false
+        usesProfileAvatar = payload["usesProfileAvatar"] as? Bool ?? false
     }
 
     private static func optionalDouble(_ value: Any?) -> Double? {
@@ -336,18 +438,37 @@ private struct NativeModelSelectorOption {
 }
 
 private struct NativeModelSelectorConfiguration {
+    let presentationId: String
     let title: String
     let selectedModelId: String?
     let models: [NativeModelSelectorOption]
     let pinnedModelIds: [String]
+    let featuredModelIds: [String]
     let allowsPinning: Bool
     let pinTitle: String
     let unpinTitle: String
+    let moreModelsTitle: String
+    let searchModelsTitle: String
+    let reasoningEffortTitle: String
+    let reasoningEffortValue: String
+    let reasoningEffortOptions: [String]
+    let reasoningEffortLabels: [String: String]
+    let allowsCustomReasoningEffort: Bool
+    let customReasoningEffortTitle: String
+    let customReasoningEffortHint: String
 
     init?(_ arguments: Any?) {
         guard let payload = arguments as? [String: Any] else {
             return nil
         }
+
+        guard let rawPresentationId = payload["presentationId"] as? String else {
+            return nil
+        }
+        presentationId = rawPresentationId.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        guard !presentationId.isEmpty else { return nil }
 
         title = (payload["title"] as? String) ?? nativeLocalized("native.chooseModel", "Choose Model")
         selectedModelId = payload["selectedModelId"] as? String
@@ -361,9 +482,22 @@ private struct NativeModelSelectorConfiguration {
             }
             return trimmed
         }
+        featuredModelIds = payload["featuredModelIds"] as? [String] ?? []
         allowsPinning = payload["allowsPinning"] as? Bool ?? false
         pinTitle = (payload["pinTitle"] as? String) ?? nativeLocalized("native.pin", "Pin")
         unpinTitle = (payload["unpinTitle"] as? String) ?? nativeLocalized("native.unpin", "Unpin")
+        moreModelsTitle = (payload["moreModelsTitle"] as? String) ?? "More models"
+        searchModelsTitle = (payload["searchModelsTitle"] as? String) ?? "Search models"
+        reasoningEffortTitle = (payload["reasoningEffortTitle"] as? String) ?? "Effort"
+        reasoningEffortValue = (payload["reasoningEffortValue"] as? String) ?? "medium"
+        reasoningEffortOptions = payload["reasoningEffortOptions"] as? [String]
+            ?? ["low", "medium", "high"]
+        reasoningEffortLabels = payload["reasoningEffortLabels"] as? [String: String] ?? [:]
+        allowsCustomReasoningEffort = payload["allowsCustomReasoningEffort"] as? Bool ?? true
+        customReasoningEffortTitle = (payload["customReasoningEffortTitle"] as? String)
+            ?? "Custom effort"
+        customReasoningEffortHint = (payload["customReasoningEffortHint"] as? String)
+            ?? "Enter effort"
         if models.isEmpty {
             return nil
         }
@@ -553,6 +687,9 @@ private struct NativeSheetDetail {
     let confirmActionLabel: String?
     /// When set (0...1], sheet uses a single custom detent at this fraction of `maximumDetentValue`.
     let maxHeightFraction: CGFloat?
+    /// A bar button that closes the sheet and then sends this action.
+    let trailingActionId: String?
+    let trailingActionSfSymbol: String?
 
     init(
         id: String,
@@ -562,7 +699,9 @@ private struct NativeSheetDetail {
         sections: [NativeSheetSection] = [],
         confirmActionId: String? = nil,
         confirmActionLabel: String? = nil,
-        maxHeightFraction: CGFloat? = nil
+        maxHeightFraction: CGFloat? = nil,
+        trailingActionId: String? = nil,
+        trailingActionSfSymbol: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -572,6 +711,8 @@ private struct NativeSheetDetail {
         self.confirmActionId = confirmActionId
         self.confirmActionLabel = confirmActionLabel
         self.maxHeightFraction = maxHeightFraction
+        self.trailingActionId = trailingActionId
+        self.trailingActionSfSymbol = trailingActionSfSymbol
     }
 
     init?(_ payload: [String: Any]) {
@@ -594,6 +735,8 @@ private struct NativeSheetDetail {
         sections = (payload["sections"] as? [[String: Any]] ?? [])
             .compactMap(NativeSheetSection.init)
         maxHeightFraction = NativeSheetDetail.parseMaxHeightFraction(payload["maxHeightFraction"])
+        trailingActionId = payload["trailingActionId"] as? String
+        trailingActionSfSymbol = payload["trailingActionSfSymbol"] as? String
     }
 
     private static func parseMaxHeightFraction(_ value: Any?) -> CGFloat? {
@@ -641,16 +784,19 @@ private struct NativeSheetSection {
 }
 
 private struct NativeSheetConfiguration {
-    let profile: NativeSheetProfile
-    let profileMenuTitle: String
+    /// Replaced when Flutter finishes refreshing the account profile after
+    /// the sheet opened, so the editors start from the stored values.
+    var profile: NativeSheetProfile
+    var profileMenuTitle: String
     let editProfileLabel: String
     let editProfileSheet: NativeEditProfileSheetCopy
     let supportTitle: String?
     let supportSubtitle: String?
     let menuItems: [NativeSheetItem]
     let supportItems: [NativeSheetItem]
-    let sections: [NativeSheetSection]
-    let details: [String: NativeSheetDetail]
+    /// Replaced by a root patch when a setting the root depends on changes.
+    var sections: [NativeSheetSection]
+    var details: [String: NativeSheetDetail]
 
     init?(_ arguments: Any?) {
         guard let payload = arguments as? [String: Any],
@@ -658,25 +804,7 @@ private struct NativeSheetConfiguration {
             return nil
         }
 
-        let displayName = (profilePayload["displayName"] as? String) ?? nativeLocalized("native.user", "User")
-        let email = (profilePayload["email"] as? String) ?? nativeLocalized("native.noEmail", "No email")
-        let initials = (profilePayload["initials"] as? String) ?? "U"
-        let bio = (profilePayload["bio"] as? String) ?? ""
-        let gender = (profilePayload["gender"] as? String) ?? ""
-        let dateOfBirth = profilePayload["dateOfBirth"] as? String
-        let savedUrl = profilePayload["profileImageUrl"] as? String
-        profile = NativeSheetProfile(
-            displayName: displayName,
-            email: email,
-            initials: initials,
-            avatarUrl: profilePayload["avatarUrl"] as? String,
-            avatarData: (profilePayload["avatarBytes"] as? FlutterStandardTypedData)?.data,
-            avatarHeaders: (profilePayload["avatarHeaders"] as? [String: String]) ?? [:],
-            bio: bio,
-            gender: gender,
-            dateOfBirth: dateOfBirth,
-            savedProfileImageUrl: savedUrl
-        )
+        profile = NativeSheetProfile(payload: profilePayload)
         editProfileLabel = (payload["editProfileLabel"] as? String)
             ?? nativeLocalized("native.editProfile", "Edit Profile")
         profileMenuTitle = (payload["profileMenuTitle"] as? String)
@@ -725,6 +853,7 @@ private extension PlatformNativeProfileSheetUser {
             "displayName": displayName,
             "email": email,
             "initials": initials,
+            "avatarIsTemplate": avatarIsTemplate,
             "avatarHeaders": avatarHeaders,
         ]
         payload["avatarUrl"] = avatarUrl
@@ -791,6 +920,8 @@ private extension PlatformNativeSheetDetail {
         payload["confirmActionId"] = confirmActionId
         payload["confirmActionLabel"] = confirmActionLabel
         payload["maxHeightFraction"] = maxHeightFraction
+        payload["trailingActionId"] = trailingActionId
+        payload["trailingActionSfSymbol"] = trailingActionSfSymbol
         return payload
     }
 }
@@ -802,6 +933,7 @@ private extension PlatformNativeSheetItem {
             "title": title,
             "sfSymbol": sfSymbol,
             "destructive": destructive,
+            "dismissOnSelect": dismissOnSelect,
             "kind": kind.payloadName,
             "options": options.map { $0.asPayload() },
             "queries": queries,
@@ -809,6 +941,11 @@ private extension PlatformNativeSheetItem {
             "pending": pending,
         ]
         payload["subtitle"] = subtitle
+        payload["iconAsset"] = iconAsset
+        payload["iconSize"] = iconSize
+        payload["showsDisclosure"] = showsDisclosure
+        payload["actionId"] = actionId
+        payload["actionValue"] = actionValue
         payload["url"] = url
         payload["value"] = value
         payload["placeholder"] = placeholder
@@ -820,6 +957,11 @@ private extension PlatformNativeSheetItem {
         payload["min"] = min
         payload["max"] = max
         if let divisions { payload["divisions"] = Int(divisions) }
+        payload["avatarName"] = avatarName
+        payload["avatarBytes"] = avatarBytes
+        payload["checked"] = checked
+        payload["accent"] = accent
+        payload["usesProfileAvatar"] = usesProfileAvatar
         return payload
     }
 }
@@ -889,10 +1031,21 @@ private extension PlatformNativeSheetModelOption {
 private extension PlatformNativeSheetModelSelectorRequest {
     func asPayload() -> [String: Any] {
         var payload: [String: Any] = [
+            "presentationId": presentationId,
             "title": title,
             "models": models.map { $0.asPayload() },
             "pinnedModelIds": pinnedModelIds,
+            "featuredModelIds": featuredModelIds,
             "allowsPinning": allowsPinning,
+            "moreModelsTitle": moreModelsTitle,
+            "searchModelsTitle": searchModelsTitle,
+            "reasoningEffortTitle": reasoningEffortTitle,
+            "reasoningEffortValue": reasoningEffortValue,
+            "reasoningEffortOptions": reasoningEffortOptions,
+            "reasoningEffortLabels": reasoningEffortLabels,
+            "allowsCustomReasoningEffort": allowsCustomReasoningEffort,
+            "customReasoningEffortTitle": customReasoningEffortTitle,
+            "customReasoningEffortHint": customReasoningEffortHint,
         ]
         payload["selectedModelId"] = selectedModelId
         payload["pinTitle"] = pinTitle
@@ -980,8 +1133,43 @@ private final class NativeSheetPresentationDelegate:
     }
 }
 
-final class NativeSheetBridge: NativeSheetHostApi {
+/// Applies a model-selector hydration update before its synchronous Pigeon
+/// call returns while keeping all UIKit and presentation-state access on main.
+func applyNativeSheetModelUpdateSynchronouslyOnMain(
+    presentationId: String,
+    activePresentationId: @escaping () -> String?,
+    update: @escaping () -> Void
+) {
+    let applyUpdate = {
+        guard activePresentationId() == presentationId else { return }
+        update()
+    }
+    if Thread.isMainThread {
+        applyUpdate()
+    } else {
+        DispatchQueue.main.sync(execute: applyUpdate)
+    }
+}
+
+/// Detail id a patch uses to replace the rows of the Settings root itself.
+let nativeSheetProfileMenuDetailId = "profile-menu"
+
+/// Whether a row that closes the sheet waits for it to finish leaving before
+/// telling Flutter. Rows that open a Flutter page send at once, so the page is
+/// already underneath as the sheet slides away. The memory editor waits: it
+/// opens a Flutter sheet that takes keyboard focus, which must not be asked
+/// for while this sheet still holds it.
+func nativeSheetSelectionWaitsForDismiss(actionId: String) -> Bool {
+    actionId == "memory-editor-new" || actionId.hasPrefix("memory-editor:")
+        // Switching, adding or signing out of an account can ask a question
+        // in a sheet of its own, which cannot present over this one.
+        || actionId == "account-switch" || actionId == "account-add"
+        || actionId == "account-sign-out" || actionId == "account-direct-edit"
+}
+
+final class NativeSheetBridge: ConduitBridge, NativeSheetHostApi {
     static let shared = NativeSheetBridge()
+    static let profileChannelName = "app.cogwheel.conduit/native_sheet"
 
     private enum ActiveSheetMode {
         case profileMenu
@@ -997,22 +1185,104 @@ final class NativeSheetBridge: NativeSheetHostApi {
     private var configuration: NativeSheetConfiguration?
     private var detailPayloads: [String: NativeSheetDetail] = [:]
     private weak var activeDetailTableController: NativeDetailTableViewController?
+    private weak var activeProfileMenuController: NativeProfileMenuTableViewController?
+    private var profileChannel: FlutterMethodChannel?
     private var activeSheetMode: ActiveSheetMode = .profileMenu
     private var pendingModelSelectorResult: PendingStringResult?
     private var pendingOptionsSelectorResult: PendingStringResult?
     private var pendingTextEditorResult: PendingActionResult?
     private var pendingResultSheetResult: PendingActionResult?
     private var resultSheetValues: [String: Any] = [:]
+    /// True while the result sheet is itself a confirmation (ThemedDialogs.confirm),
+    /// so its destructive action must not ask a second time.
+    private var resultSheetIsConfirmation = false
     private weak var activeTextEditorController: NativeTextEditorViewController?
+    private weak var activeModelSelectorController: NativeModelSelectorTableViewController?
+    private var activeModelSelectorPresentationId: String?
+
+    private var host: ConduitBridgeHost?
 
     private init() {}
 
-    func configure(messenger: FlutterBinaryMessenger) {
+    func attach(to host: ConduitBridgeHost) {
+        self.host = host
+        let messenger = host.messenger
         flutterApi = NativeSheetFlutterApi(binaryMessenger: messenger)
         NativeSheetHostApiSetup.setUp(
             binaryMessenger: messenger,
             api: self
         )
+        profileChannel?.setMethodCallHandler(nil)
+        let channel = FlutterMethodChannel(
+            name: NativeSheetBridge.profileChannelName,
+            binaryMessenger: messenger
+        )
+        channel.setMethodCallHandler { [weak self] call, result in
+            guard call.method == "updateProfile" else {
+                result(FlutterMethodNotImplemented)
+                return
+            }
+            guard let payload = call.arguments as? [String: Any] else {
+                result(false)
+                return
+            }
+            DispatchQueue.main.async {
+                result(self?.updateProfile(payload) ?? false)
+            }
+        }
+        profileChannel = channel
+    }
+
+    /// Hands the open Settings sheet the account profile Flutter just read,
+    /// so its rows and editors stop showing the copy it opened with.
+    private func updateProfile(_ payload: [String: Any]) -> Bool {
+        guard activeSheetMode == .profileMenu,
+              var configuration,
+              let controller = activeProfileMenuController
+        else { return false }
+        configuration.profile = NativeSheetProfile(payload: payload)
+        self.configuration = configuration
+        controller.applyUpdatedConfiguration(configuration)
+        return true
+    }
+
+    /// Replaces the rows of the open Settings root, for a setting it depends
+    /// on (Advanced, the language) that changed while it was up.
+    private func applyProfileMenuPatch(
+        title: String?,
+        sections: [NativeSheetSection],
+        relatedDetails: [NativeSheetDetail]
+    ) -> Bool {
+        guard activeSheetMode == .profileMenu,
+              var configuration,
+              let controller = activeProfileMenuController,
+              !sections.isEmpty
+        else { return false }
+        configuration.sections = sections
+        if let title, !title.isEmpty {
+            configuration.profileMenuTitle = title
+        }
+        for detail in relatedDetails {
+            configuration.details[detail.id] = detail
+            detailPayloads[detail.id] = detail
+        }
+        self.configuration = configuration
+        controller.applyUpdatedConfiguration(configuration)
+        return true
+    }
+
+    func setTheme(theme: PlatformNativeSheetTheme) throws {
+        let applyTheme = { [weak self] in
+            NativeSheetTheme.shared.update(theme)
+            if let activeController = self?.activeController {
+                NativeSheetTheme.shared.apply(to: activeController)
+            }
+        }
+        if Thread.isMainThread {
+            applyTheme()
+        } else {
+            DispatchQueue.main.sync(execute: applyTheme)
+        }
     }
 
     func presentProfileMenu(
@@ -1046,6 +1316,24 @@ final class NativeSheetBridge: NativeSheetHostApi {
         return true
     }
 
+    func requestAppStoreReview() throws -> Bool {
+        let request = {
+            MainActor.assumeIsolated {
+                guard let scene = self.host?.activeWindowScene else {
+                    return false
+                }
+
+                AppStore.requestReview(in: scene)
+                return true
+            }
+        }
+
+        if Thread.isMainThread {
+            return request()
+        }
+        return DispatchQueue.main.sync(execute: request)
+    }
+
     func presentModelSelector(
         request: PlatformNativeSheetModelSelectorRequest,
         completion: @escaping (Result<String?, Error>) -> Void
@@ -1063,6 +1351,50 @@ final class NativeSheetBridge: NativeSheetHostApi {
             }
             self.presentModelSelector(configuration, result: completion)
         }
+    }
+
+    func updateModelSelectorModels(
+        presentationId: String,
+        models: [PlatformNativeSheetModelOption]
+    ) throws {
+        let normalizedPresentationId = presentationId.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        guard !normalizedPresentationId.isEmpty else { return }
+        let hydratedModels = models.compactMap {
+            NativeModelSelectorOption($0.asPayload())
+        }
+        guard !hydratedModels.isEmpty else { return }
+        applyNativeSheetModelUpdateSynchronouslyOnMain(
+            presentationId: normalizedPresentationId,
+            activePresentationId: { self.activeModelSelectorPresentationId },
+            update: {
+                self.activeModelSelectorController?.updateModels(hydratedModels)
+            }
+        )
+    }
+
+    func updateModelSelectorReasoningEffort(
+        presentationId: String,
+        value: String,
+        options: [String],
+        allowsCustom: Bool
+    ) throws {
+        let normalizedPresentationId = presentationId.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        guard !normalizedPresentationId.isEmpty else { return }
+        applyNativeSheetModelUpdateSynchronouslyOnMain(
+            presentationId: normalizedPresentationId,
+            activePresentationId: { self.activeModelSelectorPresentationId },
+            update: {
+                self.activeModelSelectorController?.updateReasoningEffort(
+                    value: value,
+                    options: options,
+                    allowsCustom: allowsCustom
+                )
+            }
+        )
     }
 
     func presentOptionsSelector(
@@ -1149,9 +1481,19 @@ final class NativeSheetBridge: NativeSheetHostApi {
             let items = request.items
                 .map { $0.asPayload() }
                 .compactMap(NativeSheetItem.init)
+            let sections = request.sections
+                .map { $0.asPayload() }
+                .compactMap(NativeSheetSection.init)
             let relatedDetails = (request.detailSheets ?? [])
                 .map { $0.asPayload() }
                 .compactMap(NativeSheetDetail.init)
+            if detailId == nativeSheetProfileMenuDetailId {
+                return self.applyProfileMenuPatch(
+                    title: request.title,
+                    sections: sections,
+                    relatedDetails: relatedDetails
+                )
+            }
             guard let existing = self.detailPayloads[detailId] else {
                 return false
             }
@@ -1161,12 +1503,16 @@ final class NativeSheetBridge: NativeSheetHostApi {
             let patched = NativeSheetDetail(
                 id: existing.id,
                 title: request.title ?? existing.title,
-                subtitle: request.subtitle ?? existing.subtitle,
+                subtitle: request.clearSubtitle
+                    ? nil
+                    : request.subtitle ?? existing.subtitle,
                 items: items,
-                sections: existing.sections,
+                sections: sections,
                 confirmActionId: existing.confirmActionId,
                 confirmActionLabel: existing.confirmActionLabel,
-                maxHeightFraction: existing.maxHeightFraction
+                maxHeightFraction: existing.maxHeightFraction,
+                trailingActionId: existing.trailingActionId,
+                trailingActionSfSymbol: existing.trailingActionSfSymbol
             )
             self.detailPayloads[detailId] = patched
             if self.activeDetailTableController?.detailId == detailId {
@@ -1190,7 +1536,11 @@ final class NativeSheetBridge: NativeSheetHostApi {
             onClose: { [weak self] in self?.dismissActive() }
         )
         let navigation = NativeSheetNavigationController(rootViewController: controller)
-        return present(navigation, initialDetent: .large)
+        let presented = present(navigation, initialDetent: .large)
+        if presented {
+            activeProfileMenuController = controller
+        }
+        return presented
     }
 
     private func sendControlChanged(id: String, value: Any?) {
@@ -1250,6 +1600,7 @@ final class NativeSheetBridge: NativeSheetHostApi {
         self.configuration = nil
         detailPayloads = configuration.details
         resultSheetValues = configuration.initialValues
+        resultSheetIsConfirmation = configuration.root.id == "confirmation-dialog"
         pendingResultSheetResult = result
 
         let navigation = NativeSheetNavigationController(
@@ -1375,12 +1726,17 @@ final class NativeSheetBridge: NativeSheetHostApi {
             return
         }
 
-        if item.destructive {
+        if item.destructive, !resultSheetIsConfirmation {
             presentDestructiveConfirm(for: item)
             return
         }
 
         if let url = item.url {
+            if item.kind == "source",
+               let presenter = activeNavigationController?.visibleViewController {
+                presenter.present(SFSafariViewController(url: url), animated: true)
+                return
+            }
             UIApplication.shared.open(url)
             return
         }
@@ -1538,6 +1894,9 @@ final class NativeSheetBridge: NativeSheetHostApi {
                 self?.presentationDelegate = nil
                 self?.activeTextEditorController = nil
                 self?.activeDetailTableController = nil
+                self?.activeProfileMenuController = nil
+                self?.activeModelSelectorController = nil
+                self?.activeModelSelectorPresentationId = nil
                 self?.detailPayloads = [:]
                 self?.resultSheetValues = [:]
                 let shouldNotifyDismiss = self?.activeSheetMode == .profileMenu
@@ -1586,15 +1945,24 @@ final class NativeSheetBridge: NativeSheetHostApi {
                     event: PlatformNativeSheetModelPinToggledEvent(modelId: modelId)
                 ) { _ in }
             },
+            onEffortChanged: { [weak self] value in
+                self?.flutterApi?.onReasoningEffortChanged(
+                    event: PlatformNativeSheetReasoningEffortChangedEvent(value: value)
+                ) { _ in }
+            },
             onClose: { [weak self] in
                 guard let self else { return }
                 self.completeModelSelector(with: nil)
             }
         )
+        activeModelSelectorController = controller
+        activeModelSelectorPresentationId = configuration.presentationId
         let navigation = NativeSheetNavigationController(rootViewController: controller)
 
         if !present(navigation, initialDetent: .large) {
             pendingModelSelectorResult = nil
+            activeModelSelectorController = nil
+            activeModelSelectorPresentationId = nil
             activeSheetMode = .profileMenu
             result(.failure(PigeonError(
                 code: "PRESENTATION_FAILED",
@@ -1612,6 +1980,8 @@ final class NativeSheetBridge: NativeSheetHostApi {
         activeController = nil
         presentationDelegate = nil
         activeDetailTableController = nil
+        activeModelSelectorController = nil
+        activeModelSelectorPresentationId = nil
         detailPayloads = [:]
         resultSheetValues = [:]
         activeSheetMode = .profileMenu
@@ -1805,7 +2175,23 @@ final class NativeSheetBridge: NativeSheetHostApi {
         }
 
         if item.id == "sign-out" {
-            presentDestructiveConfirm(for: item)
+            presentSignOutOptions(for: item)
+            return
+        }
+
+        if item.dismissOnSelect {
+            let actionId = (item.actionId?.isEmpty == false ? item.actionId : nil) ?? item.id
+            let actionValue = item.actionValue ?? item.value ?? true
+            if nativeSheetSelectionWaitsForDismiss(actionId: actionId) {
+                dismissActive { [weak self] in
+                    self?.sendControlChanged(id: actionId, value: actionValue)
+                }
+            } else {
+                // The Flutter page opens under the sheet as it slides away,
+                // instead of appearing only after the sheet has gone.
+                dismissActive()
+                sendControlChanged(id: actionId, value: actionValue)
+            }
             return
         }
 
@@ -1845,15 +2231,45 @@ final class NativeSheetBridge: NativeSheetHostApi {
         sendControlChanged(id: item.id, value: item.value ?? true)
     }
 
+    private func presentSignOutOptions(for item: NativeSheetItem) {
+        guard let presenter = activeNavigationController?.visibleViewController else {
+            return
+        }
+        let option = item.options.first
+        let controller = NativeSignOutOptionsViewController(
+            title: item.title,
+            message: item.placeholder ?? item.subtitle,
+            optionTitle: option?.label
+                ?? nativeLocalized("native.keepServerDetails", "Keep server details"),
+            optionSubtitle: option?.subtitle,
+            cancelTitle: configuration?.editProfileSheet.cancelLabel
+                ?? nativeLocalized("native.cancel", "Cancel"),
+            confirmTitle: item.title,
+            onConfirm: { [weak self] keepServerDetails in
+                self?.dismissActive { [weak self] in
+                    self?.sendControlChanged(
+                        id: item.id,
+                        value: keepServerDetails
+                    )
+                }
+            }
+        )
+        let navigation = NativeSheetNavigationController(
+            rootViewController: controller
+        )
+        navigation.modalPresentationStyle = .pageSheet
+        if let sheet = navigation.sheetPresentationController {
+            sheet.detents = [.medium()]
+            sheet.prefersGrabberVisible = true
+            sheet.prefersScrollingExpandsWhenScrolledToEdge = false
+        }
+        presenter.present(navigation, animated: true)
+    }
+
     private func presentDestructiveConfirm(for item: NativeSheetItem) {
         guard let presenter = activeNavigationController?.visibleViewController else {
             switch activeSheetMode {
             case .profileMenu:
-                if item.id == "sign-out" {
-                    dismissActive()
-                    flutterApi?.onLogoutRequested { _ in }
-                    return
-                }
                 sendControlChanged(id: item.id, value: true)
             case .resultSheet:
                 resolvePendingResultSheetAfterDismiss(
@@ -1874,11 +2290,6 @@ final class NativeSheetBridge: NativeSheetHostApi {
             guard let self else { return }
             switch self.activeSheetMode {
             case .profileMenu:
-                if item.id == "sign-out" {
-                    self.dismissActive()
-                    self.flutterApi?.onLogoutRequested { _ in }
-                    return
-                }
                 self.sendControlChanged(id: item.id, value: true)
             case .resultSheet:
                 self.resolvePendingResultSheetAfterDismiss(
@@ -1897,12 +2308,19 @@ final class NativeSheetBridge: NativeSheetHostApi {
         activeNavigationController?.view.endEditing(true)
     }
 
-    private func dismissActive() {
+    private func dismissActive(completion: (() -> Void)? = nil) {
         flushActiveSheetEditing()
-        activeController?.dismiss(animated: true)
+        let controller = activeController
+        controller?.dismiss(animated: true, completion: completion)
+        if controller == nil {
+            completion?()
+        }
         activeController = nil
         presentationDelegate = nil
         activeDetailTableController = nil
+        activeProfileMenuController = nil
+        activeModelSelectorController = nil
+        activeModelSelectorPresentationId = nil
         detailPayloads = [:]
         resultSheetValues = [:]
         if let pending = pendingModelSelectorResult {
@@ -1934,13 +2352,7 @@ final class NativeSheetBridge: NativeSheetHostApi {
     }
 
     private func topViewController() -> UIViewController? {
-        let root = UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-            .flatMap(\.windows)
-            .first { $0.isKeyWindow }?
-            .rootViewController
-
-        return topViewController(from: root)
+        topViewController(from: host?.presentingViewController)
     }
 
     private func topViewController(from root: UIViewController?) -> UIViewController? {
@@ -2075,6 +2487,32 @@ private func nativeProfileCommitPayload(
     ]
 }
 
+final class NativeAvatarSelectionGeneration {
+    private let lock = NSLock()
+    private var generation: UInt64 = 0
+
+    func begin() -> UInt64 {
+        lock.lock()
+        generation &+= 1
+        let value = generation
+        lock.unlock()
+        return value
+    }
+
+    func invalidate() {
+        lock.lock()
+        generation &+= 1
+        lock.unlock()
+    }
+
+    func isCurrent(_ value: UInt64) -> Bool {
+        lock.lock()
+        let current = generation == value
+        lock.unlock()
+        return current
+    }
+}
+
 private final class NativeProfilePhotoEditorViewController: UIViewController, PHPickerViewControllerDelegate {
     private enum AvatarIntent {
         case unchanged
@@ -2088,6 +2526,8 @@ private final class NativeProfilePhotoEditorViewController: UIViewController, PH
     private let onCommit: ([String: Any]) -> Void
     private let avatarView: NativeAvatarView
     private let clearButton = UIButton(type: .system)
+    private let avatarSelectionGeneration = NativeAvatarSelectionGeneration()
+    private var pendingPhotoGeneration: UInt64?
     private var avatarIntent: AvatarIntent = .unchanged {
         didSet { updateSetButton() }
     }
@@ -2110,7 +2550,7 @@ private final class NativeProfilePhotoEditorViewController: UIViewController, PH
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .systemGroupedBackground
+        view.backgroundColor = NativeSheetTheme.shared.background
         navigationItem.title = nativeLocalized("native.editPhoto", "Edit Photo")
         navigationItem.leftBarButtonItem = iconBarButton(
             systemName: "xmark",
@@ -2131,8 +2571,8 @@ private final class NativeProfilePhotoEditorViewController: UIViewController, PH
         var clearConfiguration = UIButton.Configuration.filled()
         clearConfiguration.image = UIImage(systemName: "xmark")
         clearConfiguration.cornerStyle = .capsule
-        clearConfiguration.baseBackgroundColor = .secondarySystemGroupedBackground
-        clearConfiguration.baseForegroundColor = .secondaryLabel
+        clearConfiguration.baseBackgroundColor = NativeSheetTheme.shared.surface
+        clearConfiguration.baseForegroundColor = NativeSheetTheme.shared.secondaryForeground
         clearButton.configuration = clearConfiguration
         clearButton.translatesAutoresizingMaskIntoConstraints = false
         clearButton.addAction(UIAction { [weak self] _ in self?.removeAvatarTapped() }, for: .touchUpInside)
@@ -2186,7 +2626,10 @@ private final class NativeProfilePhotoEditorViewController: UIViewController, PH
         button.titleLabel?.adjustsFontForContentSizeCategory = true
         button.titleLabel?.numberOfLines = 2
         button.heightAnchor.constraint(greaterThanOrEqualToConstant: 76).isActive = true
-        button.addAction(UIAction { _ in handler() }, for: .touchUpInside)
+        button.addAction(UIAction { _ in
+            NativeSheetHaptics.selection()
+            handler()
+        }, for: .touchUpInside)
         return button
     }
 
@@ -2198,10 +2641,12 @@ private final class NativeProfilePhotoEditorViewController: UIViewController, PH
     }
 
     @objc private func cancelTapped() {
+        invalidatePendingPhotoSelection()
         dismiss(animated: true)
     }
 
     @objc private func saveTapped() {
+        invalidatePendingPhotoSelection()
         let imageUrl: String
         switch avatarIntent {
         case .unchanged:
@@ -2213,11 +2658,13 @@ private final class NativeProfilePhotoEditorViewController: UIViewController, PH
         case .removed:
             imageUrl = "/user.png"
         }
+        NativeSheetHaptics.success()
         onCommit(nativeProfileCommitPayload(profile: profile, profileImageUrl: imageUrl))
         dismiss(animated: true)
     }
 
     private func presentPhotoPicker() {
+        pendingPhotoGeneration = avatarSelectionGeneration.begin()
         var configuration = PHPickerConfiguration()
         configuration.filter = .images
         configuration.selectionLimit = 1
@@ -2228,22 +2675,46 @@ private final class NativeProfilePhotoEditorViewController: UIViewController, PH
 
     func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
         picker.dismiss(animated: true)
-        guard let provider = results.first?.itemProvider,
-              provider.canLoadObject(ofClass: UIImage.self) else {
+        guard let selectionGeneration = pendingPhotoGeneration else {
             return
         }
-        provider.loadObject(ofClass: UIImage.self) { [weak self] object, _ in
-            DispatchQueue.main.async {
-                guard let self, let image = object as? UIImage else { return }
-                let toCompress = image.preparingThumbnailSide(1024) ?? image
-                guard let data = toCompress.jpegData(compressionQuality: 0.85) else { return }
-                self.avatarIntent = .pickedJPEG(data)
-                self.avatarView.setPickedPreview(toCompress)
+        pendingPhotoGeneration = nil
+        guard let provider = results.first?.itemProvider,
+              provider.hasItemConformingToTypeIdentifier(
+                  UTType.image.identifier
+              ) else {
+            return
+        }
+        provider.loadFileRepresentation(
+            forTypeIdentifier: UTType.image.identifier
+        ) { [weak self] url, _ in
+            guard let self,
+                  self.avatarSelectionGeneration.isCurrent(
+                      selectionGeneration
+                  ),
+                  let url else { return }
+            autoreleasepool {
+                guard let thumbnail = nativeDownsampleImageFile(
+                    at: url,
+                    maxPixelSize: 1024
+                ),
+                let data = thumbnail.jpegData(
+                    compressionQuality: 0.85
+                ) else { return }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self,
+                          self.avatarSelectionGeneration.isCurrent(
+                              selectionGeneration
+                          ) else { return }
+                    self.avatarIntent = .pickedJPEG(data)
+                    self.avatarView.setPickedPreview(thumbnail)
+                }
             }
         }
     }
 
     private func useInitialsTapped() {
+        invalidatePendingPhotoSelection()
         avatarIntent = .initialsGenerated
         if let image = nativeInitialsAvatarUIImage(name: profile.displayName) {
             avatarView.setPickedPreview(image)
@@ -2251,8 +2722,14 @@ private final class NativeProfilePhotoEditorViewController: UIViewController, PH
     }
 
     private func removeAvatarTapped() {
+        invalidatePendingPhotoSelection()
         avatarIntent = .removed
         avatarView.showRemovedPlaceholder()
+    }
+
+    private func invalidatePendingPhotoSelection() {
+        pendingPhotoGeneration = nil
+        avatarSelectionGeneration.invalidate()
     }
 }
 
@@ -2279,7 +2756,7 @@ private final class NativeProfileNameEditorViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .systemGroupedBackground
+        view.backgroundColor = NativeSheetTheme.shared.background
         navigationItem.title = copy.nameLabel
         navigationItem.leftBarButtonItem = iconBarButton(
             systemName: "xmark",
@@ -2315,6 +2792,7 @@ private final class NativeProfileNameEditorViewController: UIViewController {
             presentNativeValidationAlert(message: copy.nameRequiredMessage)
             return
         }
+        NativeSheetHaptics.success()
         onCommit(nativeProfileCommitPayload(profile: profile, name: name))
         dismiss(animated: true)
     }
@@ -2343,7 +2821,7 @@ private final class NativeProfileAboutEditorViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .systemGroupedBackground
+        view.backgroundColor = NativeSheetTheme.shared.background
         navigationItem.title = copy.bioLabel
         navigationItem.leftBarButtonItem = iconBarButton(
             systemName: "xmark",
@@ -2358,13 +2836,13 @@ private final class NativeProfileAboutEditorViewController: UIViewController {
         let caption = UILabel()
         caption.text = copy.bioLabel
         caption.font = .preferredFont(forTextStyle: .caption1)
-        caption.textColor = .secondaryLabel
+        caption.textColor = NativeSheetTheme.shared.secondaryForeground
         caption.adjustsFontForContentSizeCategory = true
 
         textView.text = profile.bio
         textView.font = .preferredFont(forTextStyle: .body)
         textView.adjustsFontForContentSizeCategory = true
-        textView.backgroundColor = .secondarySystemGroupedBackground
+        textView.backgroundColor = NativeSheetTheme.shared.surface
         textView.layer.cornerRadius = 12
         textView.textContainerInset = UIEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
         textView.heightAnchor.constraint(greaterThanOrEqualToConstant: 160).isActive = true
@@ -2386,6 +2864,7 @@ private final class NativeProfileAboutEditorViewController: UIViewController {
     }
 
     @objc private func saveTapped() {
+        NativeSheetHaptics.success()
         onCommit(nativeProfileCommitPayload(profile: profile, bio: textView.text ?? ""))
         dismiss(animated: true)
     }
@@ -2422,7 +2901,7 @@ private final class NativeProfileDetailsEditorViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .systemGroupedBackground
+        view.backgroundColor = NativeSheetTheme.shared.background
         navigationItem.title = copy.title
         navigationItem.leftBarButtonItem = iconBarButton(
             systemName: "xmark",
@@ -2443,7 +2922,7 @@ private final class NativeProfileDetailsEditorViewController: UIViewController {
         rebuildGenderMenu()
 
         customGenderField.borderStyle = .none
-        customGenderField.backgroundColor = .secondarySystemFill
+        customGenderField.backgroundColor = NativeSheetTheme.shared.input
         customGenderField.layer.cornerRadius = 22
         customGenderField.leftView = UIView(frame: CGRect(x: 0, y: 0, width: 16, height: 44))
         customGenderField.leftViewMode = .always
@@ -2548,6 +3027,7 @@ private final class NativeProfileDetailsEditorViewController: UIViewController {
     }
 
     private func clearBirthTapped() {
+        NativeSheetHaptics.selection()
         birthIso = ""
         birthPicker.date = Calendar.current.date(from: DateComponents(year: 1990, month: 1, day: 1)) ?? Date()
     }
@@ -2573,6 +3053,7 @@ private final class NativeProfileDetailsEditorViewController: UIViewController {
             presentNativeValidationAlert(message: copy.customGenderRequiredMessage)
             return
         }
+        NativeSheetHaptics.success()
         onCommit(nativeProfileCommitPayload(
             profile: profile,
             gender: resolvedGenderPayload(),
@@ -2586,7 +3067,7 @@ private func captionLabel(_ text: String) -> UILabel {
     let label = UILabel()
     label.text = text
     label.font = .preferredFont(forTextStyle: .caption1)
-    label.textColor = .secondaryLabel
+    label.textColor = NativeSheetTheme.shared.secondaryForeground
     label.adjustsFontForContentSizeCategory = true
     return label
 }
@@ -2601,7 +3082,7 @@ private func labeledStack(caption: String, arrangedSubviews: [UIView]) -> UIStac
 private func inputContainer(caption: String, field: UITextField) -> UIStackView {
     field.font = .preferredFont(forTextStyle: .body)
     field.adjustsFontForContentSizeCategory = true
-    field.backgroundColor = .secondarySystemGroupedBackground
+    field.backgroundColor = NativeSheetTheme.shared.surface
     field.borderStyle = .none
     field.layer.cornerRadius = 12
     field.leftView = UIView(frame: CGRect(x: 0, y: 0, width: 12, height: 44))
@@ -2651,16 +3132,162 @@ private extension UIImage {
     }
 }
 
-private final class NativeSheetNavigationController: UINavigationController {
+private final class NativeSignOutOptionsViewController: UITableViewController {
+    private let message: String?
+    private let optionTitle: String
+    private let optionSubtitle: String?
+    private let cancelTitle: String
+    private let confirmTitle: String
+    private let onConfirm: (Bool) -> Void
+    private var keepServerDetails = false
+
+    init(
+        title: String,
+        message: String?,
+        optionTitle: String,
+        optionSubtitle: String?,
+        cancelTitle: String,
+        confirmTitle: String,
+        onConfirm: @escaping (Bool) -> Void
+    ) {
+        self.message = message
+        self.optionTitle = optionTitle
+        self.optionSubtitle = optionSubtitle
+        self.cancelTitle = cancelTitle
+        self.confirmTitle = confirmTitle
+        self.onConfirm = onConfirm
+        super.init(style: .insetGrouped)
+        self.title = title
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
-        modalPresentationStyle = .pageSheet
-        navigationBar.prefersLargeTitles = false
+        view.backgroundColor = NativeSheetTheme.shared.background
+        tableView.rowHeight = UITableView.automaticDimension
+        tableView.estimatedRowHeight = 72
+        navigationItem.leftBarButtonItem = UIBarButtonItem(
+            title: cancelTitle,
+            primaryAction: UIAction { [weak self] _ in
+                self?.dismiss(animated: true)
+            }
+        )
+        let confirmButton = UIBarButtonItem(
+            title: confirmTitle,
+            primaryAction: UIAction { [weak self] _ in
+                self?.confirm()
+            }
+        )
+        confirmButton.tintColor = NativeSheetTheme.shared.destructive
+        confirmButton.accessibilityIdentifier = "sign-out-confirm"
+        navigationItem.rightBarButtonItem = confirmButton
+        configureHeader()
+    }
+
+    private func configureHeader() {
+        guard let message, !message.isEmpty else { return }
+        let label = UILabel()
+        label.font = .preferredFont(forTextStyle: .body)
+        label.adjustsFontForContentSizeCategory = true
+        label.textColor = NativeSheetTheme.shared.secondaryForeground
+        label.numberOfLines = 0
+        label.text = message
+        label.translatesAutoresizingMaskIntoConstraints = false
+
+        let container = UIView()
+        container.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(
+                equalTo: container.layoutMarginsGuide.leadingAnchor
+            ),
+            label.trailingAnchor.constraint(
+                equalTo: container.layoutMarginsGuide.trailingAnchor
+            ),
+            label.topAnchor.constraint(equalTo: container.topAnchor, constant: 16),
+            label.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -8),
+        ])
+        tableView.tableHeaderView = container
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        guard let header = tableView.tableHeaderView else { return }
+        let target = CGSize(
+            width: tableView.bounds.width,
+            height: UIView.layoutFittingCompressedSize.height
+        )
+        let height = header.systemLayoutSizeFitting(
+            target,
+            withHorizontalFittingPriority: .required,
+            verticalFittingPriority: .fittingSizeLevel
+        ).height
+        if abs(header.frame.height - height) > 0.5 {
+            header.frame.size.height = height
+            tableView.tableHeaderView = header
+        }
+    }
+
+    override func numberOfSections(in tableView: UITableView) -> Int {
+        1
+    }
+
+    override func tableView(
+        _ tableView: UITableView,
+        numberOfRowsInSection section: Int
+    ) -> Int {
+        1
+    }
+
+    override func tableView(
+        _ tableView: UITableView,
+        cellForRowAt indexPath: IndexPath
+    ) -> UITableViewCell {
+        let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
+        var content = cell.defaultContentConfiguration()
+        content.text = optionTitle
+        content.secondaryText = optionSubtitle
+        content.secondaryTextProperties.numberOfLines = 0
+        content.image = UIImage(
+            systemName: keepServerDetails
+                ? "checkmark.square.fill"
+                : "square"
+        )
+        content.imageProperties.tintColor = keepServerDetails
+            ? view.tintColor
+            : NativeSheetTheme.shared.secondaryForeground
+        cell.contentConfiguration = content
+        applyTextAccessibilityLabel(to: cell, from: content)
+        cell.selectionStyle = .default
+        cell.accessibilityIdentifier = "sign-out-keep-server-details"
+        cell.accessibilityTraits = keepServerDetails
+            ? [.button, .selected]
+            : [.button]
+        return cell
+    }
+
+    override func tableView(
+        _ tableView: UITableView,
+        didSelectRowAt indexPath: IndexPath
+    ) {
+        NativeSheetHaptics.selection()
+        keepServerDetails.toggle()
+        tableView.reloadRows(at: [indexPath], with: .none)
+    }
+
+    private func confirm() {
+        NativeSheetHaptics.mediumImpact()
+        let selection = keepServerDetails
+        dismiss(animated: true) { [onConfirm] in
+            onConfirm(selection)
+        }
     }
 }
 
 private final class NativeProfileMenuTableViewController: UITableViewController {
-    private let configuration: NativeSheetConfiguration
+    private var configuration: NativeSheetConfiguration
     private let onSelect: (NativeSheetItem) -> Void
     private let onClose: () -> Void
 
@@ -2706,6 +3333,15 @@ private final class NativeProfileMenuTableViewController: UITableViewController 
         nil
     }
 
+    /// Shows rows rebuilt by Flutter while the sheet is open. A pushed page
+    /// stays where it is; the root is current when the user goes back.
+    func applyUpdatedConfiguration(_ newConfiguration: NativeSheetConfiguration) {
+        configuration = newConfiguration
+        title = newConfiguration.profileMenuTitle
+        guard isViewLoaded else { return }
+        tableView.reloadData()
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
         title = configuration.profileMenuTitle
@@ -2715,12 +3351,7 @@ private final class NativeProfileMenuTableViewController: UITableViewController 
         tableView.register(UITableViewCell.self, forCellReuseIdentifier: "cell")
         tableView.register(UITableViewCell.self, forCellReuseIdentifier: "profileCell")
         NativeSheetSettingsStyle.apply(to: tableView)
-        tableView.tableHeaderView = configuration.sections.isEmpty ? profileHeader() : nil
-    }
-
-    override func viewDidLayoutSubviews() {
-        super.viewDidLayoutSubviews()
-        updateHeaderSize()
+        tableView.tableHeaderView = nil
     }
 
     override func numberOfSections(in tableView: UITableView) -> Int {
@@ -2766,9 +3397,9 @@ private final class NativeProfileMenuTableViewController: UITableViewController 
         cellForRowAt indexPath: IndexPath
     ) -> UITableViewCell {
         let item = item(at: indexPath)
-        if item.id == "profile" && !configuration.sections.isEmpty {
+        if item.usesProfileAvatar {
             let cell = tableView.dequeueReusableCell(withIdentifier: "profileCell", for: indexPath)
-            configureProfileSummaryCell(cell)
+            configureProfileSummaryCell(cell, item: item)
             return cell
         }
 
@@ -2791,10 +3422,12 @@ private final class NativeProfileMenuTableViewController: UITableViewController 
     }
 
     private func shouldShowDisclosure(for item: NativeSheetItem) -> Bool {
-        item.url != nil || configuration.details[item.id] != nil
+        // A row that closes the sheet without opening anything says so.
+        item.showsDisclosure
+            ?? (item.url != nil || item.dismissOnSelect || configuration.details[item.id] != nil)
     }
 
-    private func configureProfileSummaryCell(_ cell: UITableViewCell) {
+    private func configureProfileSummaryCell(_ cell: UITableViewCell, item: NativeSheetItem) {
         cell.accessoryType = .disclosureIndicator
         cell.selectionStyle = .default
         NativeSheetSettingsStyle.applyCellStyle(cell)
@@ -2802,16 +3435,17 @@ private final class NativeProfileMenuTableViewController: UITableViewController 
         let avatar = NativeAvatarView(profile: configuration.profile, diameter: 56)
 
         let titleLabel = UILabel()
-        titleLabel.text = configuration.profile.displayName
+        titleLabel.text = item.title
         titleLabel.font = .preferredFont(forTextStyle: .body)
-        titleLabel.textColor = .label
+        titleLabel.textColor = NativeSheetTheme.shared.foreground
         titleLabel.adjustsFontForContentSizeCategory = true
         titleLabel.numberOfLines = 1
 
         let subtitleLabel = UILabel()
-        subtitleLabel.text = configuration.profile.email
+        subtitleLabel.text = item.subtitle
+        subtitleLabel.isHidden = item.subtitle?.isEmpty ?? true
         subtitleLabel.font = .preferredFont(forTextStyle: .footnote)
-        subtitleLabel.textColor = .secondaryLabel
+        subtitleLabel.textColor = NativeSheetTheme.shared.secondaryForeground
         subtitleLabel.adjustsFontForContentSizeCategory = true
         subtitleLabel.numberOfLines = 1
 
@@ -2834,65 +3468,6 @@ private final class NativeProfileMenuTableViewController: UITableViewController 
             row.topAnchor.constraint(equalTo: cell.contentView.topAnchor, constant: 11),
             row.bottomAnchor.constraint(equalTo: cell.contentView.bottomAnchor, constant: -11),
         ])
-    }
-
-    private func profileHeader() -> UIView {
-        let container = UIView()
-        let stack = UIStackView()
-        stack.axis = .vertical
-        stack.alignment = .center
-        stack.spacing = 6
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(stack)
-
-        let avatar = NativeAvatarView(profile: configuration.profile, diameter: 72)
-        stack.addArrangedSubview(avatar)
-
-        let nameLabel = UILabel()
-        nameLabel.text = configuration.profile.displayName
-        nameLabel.font = .preferredFont(forTextStyle: .title3)
-        nameLabel.adjustsFontForContentSizeCategory = true
-        nameLabel.textAlignment = .center
-        nameLabel.textColor = .label
-        nameLabel.numberOfLines = 2
-        stack.addArrangedSubview(nameLabel)
-
-        let emailLabel = UILabel()
-        emailLabel.text = configuration.profile.email
-        emailLabel.font = .preferredFont(forTextStyle: .footnote)
-        emailLabel.adjustsFontForContentSizeCategory = true
-        emailLabel.textAlignment = .center
-        emailLabel.textColor = .secondaryLabel
-        emailLabel.numberOfLines = 2
-        stack.addArrangedSubview(emailLabel)
-
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 20),
-            stack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -20),
-            stack.topAnchor.constraint(equalTo: container.topAnchor, constant: 16),
-            stack.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -8),
-        ])
-
-        container.frame.size = CGSize(width: tableView.bounds.width, height: 154)
-        return container
-    }
-
-    private func updateHeaderSize() {
-        guard let header = tableView.tableHeaderView else { return }
-        let targetSize = CGSize(
-            width: tableView.bounds.width,
-            height: UIView.layoutFittingCompressedSize.height
-        )
-        let size = header.systemLayoutSizeFitting(
-            targetSize,
-            withHorizontalFittingPriority: .required,
-            verticalFittingPriority: .fittingSizeLevel
-        )
-        guard header.frame.width != targetSize.width || header.frame.height != size.height
-        else { return }
-
-        header.frame.size = CGSize(width: targetSize.width, height: size.height)
-        tableView.tableHeaderView = header
     }
 
     private func closeButton() -> UIBarButtonItem {
@@ -2924,10 +3499,10 @@ private final class NativeSheetSegmentTableViewCell: UITableViewCell {
         titleLabel.adjustsFontForContentSizeCategory = true
         titleLabel.numberOfLines = 0
         subtitleLabel.font = .preferredFont(forTextStyle: .footnote)
-        subtitleLabel.textColor = .secondaryLabel
+        subtitleLabel.textColor = NativeSheetTheme.shared.secondaryForeground
         subtitleLabel.adjustsFontForContentSizeCategory = true
         subtitleLabel.numberOfLines = 0
-        segmentedControl.selectedSegmentTintColor = .tintColor
+        applyNativeSheetSegmentedControlTheme(segmentedControl)
         contentView.addSubview(stack)
         stack.addArrangedSubview(titleLabel)
         stack.addArrangedSubview(subtitleLabel)
@@ -2957,6 +3532,12 @@ private final class NativeSheetSegmentTableViewCell: UITableViewCell {
     }
 
     func configure(item: NativeSheetItem, onValueChanged: @escaping (String) -> Void) {
+        // Re-read the theme on every bind: reused cells otherwise keep the
+        // palette that was active when they were first created.
+        NativeSheetSettingsStyle.applyCellStyle(self)
+        applyNativeSheetSegmentedControlTheme(segmentedControl)
+        titleLabel.textColor = NativeSheetTheme.shared.foreground
+        subtitleLabel.textColor = NativeSheetTheme.shared.secondaryForeground
         titleLabel.text = item.title
         if let subtitle = item.subtitle, !subtitle.isEmpty {
             subtitleLabel.text = subtitle
@@ -3011,24 +3592,24 @@ private final class NativeSheetDropdownTableViewCell: UITableViewCell {
         textStack.spacing = 2
         textStack.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
-        iconView.tintColor = .secondaryLabel
+        iconView.tintColor = NativeSheetTheme.shared.icon
         iconView.contentMode = .scaleAspectFit
         iconView.setContentHuggingPriority(.required, for: .horizontal)
 
         titleLabel.font = .preferredFont(forTextStyle: .body)
-        titleLabel.textColor = .label
+        titleLabel.textColor = NativeSheetTheme.shared.foreground
         titleLabel.adjustsFontForContentSizeCategory = true
         titleLabel.numberOfLines = 0
 
         subtitleLabel.font = .preferredFont(forTextStyle: .footnote)
-        subtitleLabel.textColor = .secondaryLabel
+        subtitleLabel.textColor = NativeSheetTheme.shared.secondaryForeground
         subtitleLabel.adjustsFontForContentSizeCategory = true
         subtitleLabel.numberOfLines = 0
 
         button.titleLabel?.font = .preferredFont(forTextStyle: .body)
         button.titleLabel?.adjustsFontForContentSizeCategory = true
         button.titleLabel?.numberOfLines = 2
-        button.tintColor = .secondaryLabel
+        button.tintColor = NativeSheetTheme.shared.icon
         button.contentHorizontalAlignment = .leading
         button.showsMenuAsPrimaryAction = true
         button.changesSelectionAsPrimaryAction = true
@@ -3094,7 +3675,7 @@ private final class NativeSheetDropdownTableViewCell: UITableViewCell {
         configuration.title = title
         configuration.titleLineBreakMode = .byTruncatingTail
         configuration.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 10)
-        configuration.baseForegroundColor = .label
+        configuration.baseForegroundColor = NativeSheetTheme.shared.foreground
         configuration.cornerStyle = .medium
         button.configuration = configuration
     }
@@ -3126,14 +3707,14 @@ private final class NativeSheetMultilineTextTableViewCell: UITableViewCell, UITe
         stack.spacing = 8
         stack.translatesAutoresizingMaskIntoConstraints = false
         captionLabel.font = .preferredFont(forTextStyle: .caption1)
-        captionLabel.textColor = .secondaryLabel
+        captionLabel.textColor = NativeSheetTheme.shared.secondaryForeground
         captionLabel.adjustsFontForContentSizeCategory = true
         captionLabel.numberOfLines = 0
         textView.font = .preferredFont(forTextStyle: .body)
         textView.adjustsFontForContentSizeCategory = true
         textView.layer.cornerCurve = .continuous
         textView.layer.cornerRadius = 12
-        textView.backgroundColor = .tertiarySystemFill
+        textView.backgroundColor = NativeSheetTheme.shared.input
         textView.textContainerInset = UIEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
         textView.delegate = self
         textView.isScrollEnabled = false
@@ -3195,23 +3776,23 @@ private final class NativeSheetTextFieldTableViewCell: UITableViewCell {
         stack.translatesAutoresizingMaskIntoConstraints = false
 
         titleLabel.font = .preferredFont(forTextStyle: .body)
-        titleLabel.textColor = .label
+        titleLabel.textColor = NativeSheetTheme.shared.foreground
         titleLabel.adjustsFontForContentSizeCategory = true
         titleLabel.numberOfLines = 0
 
         subtitleLabel.font = .preferredFont(forTextStyle: .footnote)
-        subtitleLabel.textColor = .secondaryLabel
+        subtitleLabel.textColor = NativeSheetTheme.shared.secondaryForeground
         subtitleLabel.adjustsFontForContentSizeCategory = true
         subtitleLabel.numberOfLines = 0
 
         textField.font = .preferredFont(forTextStyle: .body)
         textField.adjustsFontForContentSizeCategory = true
-        textField.backgroundColor = .tertiarySystemFill
+        textField.backgroundColor = NativeSheetTheme.shared.input
         textField.layer.cornerRadius = 12
         textField.layer.cornerCurve = .continuous
         textField.clipsToBounds = true
-        textField.textColor = .label
-        textField.tintColor = .tintColor
+        textField.textColor = NativeSheetTheme.shared.foreground
+        textField.tintColor = NativeSheetTheme.shared.accent
         textField.returnKeyType = .done
         textField.leftView = UIView(frame: CGRect(x: 0, y: 0, width: 12, height: 44))
         textField.leftViewMode = .always
@@ -3292,7 +3873,7 @@ private final class NativeSheetReadOnlyTextTableViewCell: UITableViewCell {
         stack.spacing = 8
         stack.translatesAutoresizingMaskIntoConstraints = false
         captionLabel.font = .preferredFont(forTextStyle: .caption1)
-        captionLabel.textColor = .secondaryLabel
+        captionLabel.textColor = NativeSheetTheme.shared.secondaryForeground
         captionLabel.adjustsFontForContentSizeCategory = true
         captionLabel.numberOfLines = 0
         textView.font = .preferredFont(forTextStyle: .body)
@@ -3346,13 +3927,13 @@ private final class NativeSheetSliderTableViewCell: UITableViewCell {
         titleLabel.adjustsFontForContentSizeCategory = true
         titleLabel.numberOfLines = 0
         subtitleLabel.font = .preferredFont(forTextStyle: .footnote)
-        subtitleLabel.textColor = .secondaryLabel
+        subtitleLabel.textColor = NativeSheetTheme.shared.secondaryForeground
         subtitleLabel.adjustsFontForContentSizeCategory = true
         subtitleLabel.numberOfLines = 0
         valueLabel.font = .preferredFont(forTextStyle: .body)
         valueLabel.adjustsFontForContentSizeCategory = true
         valueLabel.textAlignment = .natural
-        valueLabel.textColor = .secondaryLabel
+        valueLabel.textColor = NativeSheetTheme.shared.secondaryForeground
         slider.addTarget(self, action: #selector(sliderEditingChanged), for: .valueChanged)
         slider.addTarget(self, action: #selector(sliderReleased), for: [.touchUpInside, .touchUpOutside, .touchCancel])
         contentView.addSubview(stack)
@@ -3416,7 +3997,8 @@ private final class NativeSheetSliderTableViewCell: UITableViewCell {
 
     @objc private func sliderEditingChanged() {
         guard let item = boundItem else { return }
-        refreshValueLabel(for: item, value: Double(slider.value))
+        let value = Double(slider.value)
+        refreshValueLabel(for: item, value: value)
     }
 
     @objc private func sliderReleased() {
@@ -3486,7 +4068,7 @@ private final class NativeSheetQueryChipButton: UIButton {
         configuration = nativeChipConfiguration(
             title: title,
             image: UIImage(systemName: "magnifyingglass"),
-            foregroundColor: .secondaryLabel
+            foregroundColor: NativeSheetTheme.shared.secondaryForeground
         )
     }
 }
@@ -3496,6 +4078,7 @@ private final class NativeSheetFaviconView: UIView {
     private let fallbackView = UIView()
     private let fallbackIconView = UIImageView()
     private var expectedImageUrl: String?
+    private var imageLoadToken: NativeSheetImageLoadToken?
 
     init(side: CGFloat) {
         super.init(frame: .zero)
@@ -3505,9 +4088,9 @@ private final class NativeSheetFaviconView: UIView {
         layer.cornerRadius = side / 2
         layer.cornerCurve = .continuous
         layer.borderWidth = 1
-        layer.borderColor = UIColor.systemBackground.cgColor
+        layer.borderColor = NativeSheetTheme.shared.border.cgColor
         clipsToBounds = true
-        backgroundColor = .systemBackground
+        backgroundColor = NativeSheetTheme.shared.surface
 
         imageView.translatesAutoresizingMaskIntoConstraints = false
         imageView.contentMode = .scaleAspectFill
@@ -3515,12 +4098,12 @@ private final class NativeSheetFaviconView: UIView {
         addSubview(imageView)
 
         fallbackView.translatesAutoresizingMaskIntoConstraints = false
-        fallbackView.backgroundColor = .tertiarySystemFill
+        fallbackView.backgroundColor = NativeSheetTheme.shared.input
         addSubview(fallbackView)
 
         fallbackIconView.translatesAutoresizingMaskIntoConstraints = false
         fallbackIconView.contentMode = .scaleAspectFit
-        fallbackIconView.tintColor = .secondaryLabel
+        fallbackIconView.tintColor = NativeSheetTheme.shared.icon
         fallbackView.addSubview(fallbackIconView)
 
         NSLayoutConstraint.activate([
@@ -3543,7 +4126,13 @@ private final class NativeSheetFaviconView: UIView {
         nil
     }
 
+    deinit {
+        imageLoadToken?.cancel()
+    }
+
     func configure(rawUrl: String?, faviconUrl: String?, fallbackSystemName: String) {
+        imageLoadToken?.cancel()
+        imageLoadToken = nil
         expectedImageUrl = faviconUrl ?? NativeSheetURLFormatting.googleFaviconUrl(rawUrl: rawUrl, size: 32)
         imageView.image = nil
         imageView.isHidden = true
@@ -3551,7 +4140,10 @@ private final class NativeSheetFaviconView: UIView {
         fallbackIconView.image = UIImage(systemName: fallbackSystemName)
 
         guard let imageUrl = expectedImageUrl else { return }
-        NativeSheetImageLoader.load(rawUrl: imageUrl) { [weak self] image in
+        imageLoadToken = NativeSheetImageLoader.load(
+            rawUrl: imageUrl,
+            targetPixelSize: 96
+        ) { [weak self] image in
             guard let self, self.expectedImageUrl == imageUrl else { return }
             self.imageView.image = image
             self.imageView.isHidden = false
@@ -3564,6 +4156,7 @@ private final class NativeSheetLinkChipButton: UIButton {
     private var actionUrl: URL?
     private var onOpen: ((URL) -> Void)?
     private var expectedImageUrl: String?
+    private var imageLoadToken: NativeSheetImageLoadToken?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -3585,23 +4178,32 @@ private final class NativeSheetLinkChipButton: UIButton {
         nil
     }
 
+    deinit {
+        imageLoadToken?.cancel()
+    }
+
     func configure(link: NativeSheetLink, onOpen: @escaping (URL) -> Void) {
+        imageLoadToken?.cancel()
+        imageLoadToken = nil
         self.onOpen = onOpen
         actionUrl = link.url
         expectedImageUrl = link.faviconUrl
             ?? NativeSheetURLFormatting.googleFaviconUrl(rawUrl: link.rawUrl, size: 16)
 
-        var buttonConfiguration = nativeChipConfiguration(
+        let buttonConfiguration = nativeChipConfiguration(
             title: link.title ?? NativeSheetURLFormatting.displayLabel(for: link.rawUrl),
             image: UIImage(systemName: "globe"),
-            foregroundColor: .label
+            foregroundColor: NativeSheetTheme.shared.foreground
         )
         configuration = buttonConfiguration
         isEnabled = link.url != nil
         alpha = link.url == nil ? 0.75 : 1
 
         guard let imageUrl = expectedImageUrl else { return }
-        NativeSheetImageLoader.load(rawUrl: imageUrl) { [weak self] image in
+        imageLoadToken = NativeSheetImageLoader.load(
+            rawUrl: imageUrl,
+            targetPixelSize: 48
+        ) { [weak self] image in
             guard let self, self.expectedImageUrl == imageUrl else { return }
             var updated = self.configuration ?? buttonConfiguration
             updated.image = image.withRenderingMode(.alwaysOriginal)
@@ -3635,7 +4237,7 @@ private final class NativeSheetSourceTableViewCell: UITableViewCell {
         indexLabel.font = UIFontMetrics(forTextStyle: .caption1)
             .scaledFont(for: .systemFont(ofSize: 12, weight: .semibold))
         indexLabel.adjustsFontForContentSizeCategory = true
-        indexLabel.textColor = .tertiaryLabel
+        indexLabel.textColor = NativeSheetTheme.shared.secondaryForeground
         indexLabel.textAlignment = .natural
         indexLabel.setContentHuggingPriority(.required, for: .horizontal)
         indexLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
@@ -3647,18 +4249,18 @@ private final class NativeSheetSourceTableViewCell: UITableViewCell {
         titleLabel.font = UIFontMetrics(forTextStyle: .body)
             .scaledFont(for: .systemFont(ofSize: 17, weight: .semibold))
         titleLabel.adjustsFontForContentSizeCategory = true
-        titleLabel.textColor = .label
+        titleLabel.textColor = NativeSheetTheme.shared.foreground
         titleLabel.numberOfLines = 2
 
         detailLabel.font = .preferredFont(forTextStyle: .caption1)
         detailLabel.adjustsFontForContentSizeCategory = true
-        detailLabel.textColor = .secondaryLabel
+        detailLabel.textColor = NativeSheetTheme.shared.secondaryForeground
         detailLabel.numberOfLines = 1
         detailLabel.lineBreakMode = .byTruncatingMiddle
 
         snippetLabel.font = .preferredFont(forTextStyle: .footnote)
         snippetLabel.adjustsFontForContentSizeCategory = true
-        snippetLabel.textColor = .secondaryLabel
+        snippetLabel.textColor = NativeSheetTheme.shared.secondaryForeground
         snippetLabel.numberOfLines = 4
 
         contentView.addSubview(rootStack)
@@ -3737,7 +4339,7 @@ private final class NativeSheetStatusTableViewCell: UITableViewCell {
         headerStack.alignment = .top
         headerStack.spacing = NativeSheetSettingsStyle.iconSpacing
 
-        iconView.tintColor = .secondaryLabel
+        iconView.tintColor = NativeSheetTheme.shared.icon
         iconView.contentMode = .scaleAspectFit
         iconView.preferredSymbolConfiguration = UIImage.SymbolConfiguration(
             pointSize: NativeSheetSettingsStyle.iconSize,
@@ -3752,13 +4354,13 @@ private final class NativeSheetStatusTableViewCell: UITableViewCell {
         titleLabel.font = UIFontMetrics(forTextStyle: .body)
             .scaledFont(for: .systemFont(ofSize: 17, weight: .semibold))
         titleLabel.adjustsFontForContentSizeCategory = true
-        titleLabel.textColor = .label
+        titleLabel.textColor = NativeSheetTheme.shared.foreground
         titleLabel.numberOfLines = 0
 
         querySectionLabel.text = nativeLocalized("native.sheet.searches", "Searches")
         querySectionLabel.font = .preferredFont(forTextStyle: .caption1)
         querySectionLabel.adjustsFontForContentSizeCategory = true
-        querySectionLabel.textColor = .secondaryLabel
+        querySectionLabel.textColor = NativeSheetTheme.shared.secondaryForeground
 
         queryStack.axis = .vertical
         queryStack.spacing = 6
@@ -3767,7 +4369,7 @@ private final class NativeSheetStatusTableViewCell: UITableViewCell {
         linkSectionLabel.text = nativeLocalized("native.sheet.sources", "Sources")
         linkSectionLabel.font = .preferredFont(forTextStyle: .caption1)
         linkSectionLabel.adjustsFontForContentSizeCategory = true
-        linkSectionLabel.textColor = .secondaryLabel
+        linkSectionLabel.textColor = NativeSheetTheme.shared.secondaryForeground
 
         linkStack.axis = .vertical
         linkStack.spacing = 6
@@ -3810,7 +4412,9 @@ private final class NativeSheetStatusTableViewCell: UITableViewCell {
         titleLabel.text = item.title
         let symbolName = item.pending ? "circle.dotted" : "circle.fill"
         iconView.image = UIImage(systemName: symbolName)
-        iconView.tintColor = item.pending ? .tintColor : .secondaryLabel
+        iconView.tintColor = item.pending
+            ? NativeSheetTheme.shared.accent
+            : NativeSheetTheme.shared.icon
 
         clearArrangedSubviews(from: queryStack)
         clearArrangedSubviews(from: linkStack)
@@ -4076,6 +4680,7 @@ private final class NativeDetailTableViewController: UITableViewController {
         let item = item(at: indexPath)
         switch item.kind {
         case "toggle":
+            NativeSheetHaptics.selection()
             if let toggle = tableView.cellForRow(at: indexPath)?.accessoryView as? UISwitch {
                 toggle.setOn(!toggle.isOn, animated: true)
                 onControlChanged(item, toggle.isOn)
@@ -4091,6 +4696,17 @@ private final class NativeDetailTableViewController: UITableViewController {
             onSelect(item)
         default:
             commitPendingTextChanges()
+            if item.destructive {
+                NativeSheetHaptics.mediumImpact()
+            } else if item.url == nil
+                && !(item.dismissOnSelect && item.showsDisclosure != false)
+                && !canNavigate(item) {
+                // A row that leaves (a link, a page, or one that closes the
+                // sheet to open a page) moves on instead; only an in-place
+                // action ticks. Closing rows that open nothing, such as a
+                // confirmation's buttons, say so with showsDisclosure false.
+                NativeSheetHaptics.selection()
+            }
             onSelect(item)
         }
     }
@@ -4123,10 +4739,13 @@ private final class NativeDetailTableViewController: UITableViewController {
             configureNavigationCell(cell, item: item, showsDisclosure: true)
 
         default:
+            // Rows that close the sheet to open a page get a chevron, as on
+            // the root.
             configureNavigationCell(
                 cell,
                 item: item,
-                showsDisclosure: item.url != nil || canNavigate(item)
+                showsDisclosure: item.showsDisclosure
+                    ?? (item.url != nil || item.dismissOnSelect || canNavigate(item))
             )
         }
     }
@@ -4162,7 +4781,28 @@ private final class NativeDetailTableViewController: UITableViewController {
         }
 
         if pendingTextValues.isEmpty {
-            navigationItem.rightBarButtonItem = closeButton()
+            if let trailingActionId = detail.trailingActionId, !trailingActionId.isEmpty,
+               let action = NativeSheetItem([
+                   "id": trailingActionId,
+                   "title": trailingActionId,
+                   "dismissOnSelect": true,
+                   "actionId": trailingActionId,
+                   "actionValue": true,
+               ]) {
+                // Handled as a row that closes the sheet to send it.
+                navigationItem.rightBarButtonItem = iconBarButton(
+                    systemName: detail.trailingActionSfSymbol ?? "plus",
+                    action: UIAction { [weak self] _ in self?.onSelect(action) }
+                )
+                return
+            }
+            // A pushed detail already has a Back button. Showing Close as
+            // well creates two competing exit actions, so reserve Close for
+            // the root controller of a presented sheet.
+            navigationItem.rightBarButtonItem =
+                navigationController?.viewControllers.first === self
+                ? closeButton()
+                : nil
             return
         }
 
@@ -4217,6 +4857,7 @@ private final class NativeDetailTableViewController: UITableViewController {
 
     private func confirmPendingTextChanges() {
         guard commitPendingTextChanges() else { return }
+        NativeSheetHaptics.success()
         if let actionItem = textChangeConfirmationActionItem() {
             onSelect(actionItem)
         } else if let confirmActionId = detail.confirmActionId, !confirmActionId.isEmpty {
@@ -4230,6 +4871,7 @@ private final class NativeDetailTableViewController: UITableViewController {
             return
         }
 
+        NativeSheetHaptics.success()
         _ = commitPendingTextChanges()
         onConfirmAction(actionId)
     }
@@ -4249,29 +4891,38 @@ private final class NativeModelSelectorTableViewController: UITableViewControlle
     private let configuration: NativeModelSelectorConfiguration
     private let onSelect: (String) -> Void
     private let onTogglePin: (String) -> Void
+    private let onEffortChanged: (String) -> Void
     private let onClose: () -> Void
-    private var filteredModels: [NativeModelSelectorOption]
     private var pinnedModelIds: [String]
     private var pinnedModelIdSet: Set<String>
-    private var currentSearchQuery = ""
+    private var models: [NativeModelSelectorOption]
+    private var featuredModels: [NativeModelSelectorOption] = []
+    private var moreModels: [NativeModelSelectorOption] = []
+    private var reasoningEffortValue: String
+    private var reasoningEffortOptions: [String]
+    private var allowsCustomReasoningEffort: Bool
+    private weak var moreModelsController: NativeMoreModelsTableViewController?
 
     init(
         configuration: NativeModelSelectorConfiguration,
         onSelect: @escaping (String) -> Void,
         onTogglePin: @escaping (String) -> Void,
+        onEffortChanged: @escaping (String) -> Void,
         onClose: @escaping () -> Void
     ) {
         self.configuration = configuration
         self.onSelect = onSelect
         self.onTogglePin = onTogglePin
+        self.onEffortChanged = onEffortChanged
         self.onClose = onClose
         pinnedModelIds = configuration.pinnedModelIds
         pinnedModelIdSet = Set(configuration.pinnedModelIds)
-        filteredModels = Self.sortedModels(
-            configuration.models,
-            pinnedModelIds: configuration.pinnedModelIds
-        )
+        models = configuration.models
+        reasoningEffortValue = configuration.reasoningEffortValue
+        reasoningEffortOptions = configuration.reasoningEffortOptions
+        allowsCustomReasoningEffort = configuration.allowsCustomReasoningEffort
         super.init(style: .insetGrouped)
+        refreshModelPartitions()
     }
 
     required init?(coder: NSCoder) {
@@ -4287,38 +4938,90 @@ private final class NativeModelSelectorTableViewController: UITableViewControlle
             forCellReuseIdentifier: "modelCell"
         )
         NativeSheetSettingsStyle.apply(to: tableView)
-
-        let searchController = UISearchController(searchResultsController: nil)
-        searchController.searchResultsUpdater = self
-        searchController.obscuresBackgroundDuringPresentation = false
-        navigationItem.searchController = searchController
-        navigationItem.hidesSearchBarWhenScrolling = false
     }
 
+    override func numberOfSections(in tableView: UITableView) -> Int { 3 }
+
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        filteredModels.count
+        switch section {
+        case 0: featuredModels.count
+        // Like the Flutter sheet, offer the row only when the selected model
+        // has an effort to choose; a disabled row looks tappable but does
+        // nothing. A late hydration update reloads this section.
+        case 1: effortSelectionEnabled ? 1 : 0
+        case 2: moreModels.isEmpty ? 0 : 1
+        default: 0
+        }
     }
 
     override func tableView(
         _ tableView: UITableView,
         cellForRowAt indexPath: IndexPath
     ) -> UITableViewCell {
-        let model = filteredModels[indexPath.row]
-        let cell = tableView.dequeueReusableCell(
-            withIdentifier: "modelCell",
-            for: indexPath
-        ) as! NativeModelSelectorTableViewCell
-        cell.configure(
-            model: model,
-            isSelected: model.id == configuration.selectedModelId,
-            isPinned: pinnedModelIdSet.contains(model.id)
-        )
+        if indexPath.section == 0 {
+            let model = featuredModels[indexPath.row]
+            let cell = tableView.dequeueReusableCell(
+                withIdentifier: "modelCell",
+                for: indexPath
+            ) as! NativeModelSelectorTableViewCell
+            cell.configure(
+                model: model,
+                isSelected: model.id == configuration.selectedModelId,
+                isPinned: pinnedModelIdSet.contains(model.id),
+                avatarCacheIdentifier: "\(configuration.presentationId):\(model.id)"
+            )
+            return cell
+        }
+
+        let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
+        var content = cell.defaultContentConfiguration()
+        if indexPath.section == 1 {
+            content.image = UIImage(systemName: "clock")
+            content.text = configuration.reasoningEffortTitle
+            content.secondaryText = effortLabel(reasoningEffortValue)
+            cell.accessoryType = .disclosureIndicator
+        } else {
+            content.image = UIImage(systemName: "ellipsis")
+            content.text = configuration.moreModelsTitle
+            cell.accessoryType = .disclosureIndicator
+        }
+        content.imageProperties.tintColor = NativeSheetTheme.shared.icon
+        cell.contentConfiguration = content
+        applyTextAccessibilityLabel(to: cell, from: content)
         return cell
     }
 
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
-        onSelect(filteredModels[indexPath.row].id)
+        switch indexPath.section {
+        case 0:
+            NativeSheetHaptics.selection()
+            onSelect(featuredModels[indexPath.row].id)
+        case 1:
+            guard effortSelectionEnabled else { return }
+            presentEffortSelector(sourceView: tableView.cellForRow(at: indexPath))
+        case 2:
+            let controller = NativeMoreModelsTableViewController(
+                title: configuration.moreModelsTitle,
+                searchPlaceholder: configuration.searchModelsTitle,
+                presentationId: configuration.presentationId,
+                models: moreModels,
+                selectedModelId: configuration.selectedModelId,
+                pinnedModelIds: pinnedModelIdSet,
+                allowsPinning: configuration.allowsPinning,
+                pinTitle: configuration.pinTitle,
+                unpinTitle: configuration.unpinTitle,
+                onSelect: onSelect,
+                onTogglePin: { [weak self] modelId in
+                    self?.togglePinnedModel(modelId)
+                    self?.onTogglePin(modelId)
+                }
+            )
+            moreModelsController = controller
+            navigationController?.pushViewController(controller, animated: true)
+        default:
+            break
+        }
     }
 
     override func tableView(
@@ -4327,7 +5030,8 @@ private final class NativeModelSelectorTableViewController: UITableViewControlle
         point: CGPoint
     ) -> UIContextMenuConfiguration? {
         guard configuration.allowsPinning else { return nil }
-        let model = filteredModels[indexPath.row]
+        guard indexPath.section == 0 else { return nil }
+        let model = featuredModels[indexPath.row]
         let isPinned = pinnedModelIdSet.contains(model.id)
         let title = isPinned ? configuration.unpinTitle : configuration.pinTitle
         let image = UIImage(systemName: isPinned ? "pin.slash" : "pin")
@@ -4336,6 +5040,7 @@ private final class NativeModelSelectorTableViewController: UITableViewControlle
                 title: title,
                 image: image
             ) { [weak self] _ in
+                NativeSheetHaptics.selection()
                 self?.togglePinnedModel(model.id)
                 self?.onTogglePin(model.id)
             }
@@ -4358,57 +5063,280 @@ private final class NativeModelSelectorTableViewController: UITableViewControlle
             pinnedModelIdSet.insert(modelId)
             pinnedModelIds.append(modelId)
         }
-        applyFilterAndSort(query: currentSearchQuery)
-    }
-
-    private func applyFilterAndSort(query: String) {
-        currentSearchQuery = query
-        let searchedModels = query.isEmpty
-            ? configuration.models
-            : configuration.models.filter { model in
-                model.name.lowercased().contains(query)
-                    || model.id.lowercased().contains(query)
-                    || model.tags.contains { $0.lowercased().contains(query) }
-            }
-        filteredModels = Self.sortedModels(searchedModels, pinnedModelIds: pinnedModelIds)
+        refreshModelPartitions()
+        moreModelsController?.updateModels(moreModels)
         tableView.reloadData()
     }
 
-    private static func sortedModels(
-        _ models: [NativeModelSelectorOption],
-        pinnedModelIds: [String]
-    ) -> [NativeModelSelectorOption] {
-        guard !models.isEmpty, !pinnedModelIds.isEmpty else {
-            return models
+    func updateModels(_ updatedModels: [NativeModelSelectorOption]) {
+        guard !updatedModels.isEmpty else { return }
+        var updatesById: [String: NativeModelSelectorOption] = [:]
+        updatedModels.forEach { updatesById[$0.id] = $0 }
+        models = models.map { updatesById[$0.id] ?? $0 }
+        refreshModelPartitions()
+        moreModelsController?.updateModels(moreModels)
+        if isViewLoaded { tableView.reloadData() }
+    }
+
+    func updateReasoningEffort(
+        value: String,
+        options: [String],
+        allowsCustom: Bool
+    ) {
+        guard let normalized = normalizedEffort(value) else { return }
+        reasoningEffortValue = normalized
+        reasoningEffortOptions = options
+        allowsCustomReasoningEffort = allowsCustom
+        if isViewLoaded {
+            tableView.reloadSections(IndexSet(integer: 1), with: .none)
         }
-        let pinnedOrder = Dictionary(
-            uniqueKeysWithValues: pinnedModelIds.enumerated().map { index, modelId in
-                (modelId, index)
-            }
+    }
+
+    private func refreshModelPartitions() {
+        let ids = nativeModelSelectorFeaturedIds(
+            pinnedModelIds: pinnedModelIds,
+            configuredFeaturedModelIds: configuration.featuredModelIds,
+            selectedModelId: configuration.selectedModelId
         )
-        return models.enumerated().sorted { lhs, rhs in
-            let leftOrder = pinnedOrder[lhs.element.id]
-            let rightOrder = pinnedOrder[rhs.element.id]
-            switch (leftOrder, rightOrder) {
-            case let (left?, right?):
-                return left == right ? lhs.offset < rhs.offset : left < right
-            case (_?, nil):
-                return true
-            case (nil, _?):
-                return false
-            case (nil, nil):
-                return lhs.offset < rhs.offset
+        let byId = Dictionary(
+            models.map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        featuredModels = ids.compactMap { byId[$0] }
+        let featuredIds = Set(featuredModels.map(\.id))
+        moreModels = models.filter { !featuredIds.contains($0.id) }
+    }
+
+    private func effortLabel(_ value: String) -> String {
+        configuration.reasoningEffortLabels[value] ?? value.capitalized
+    }
+
+    private var effortSelectionEnabled: Bool {
+        !reasoningEffortOptions.isEmpty || allowsCustomReasoningEffort
+    }
+
+    private func presentEffortSelector(sourceView: UIView?) {
+        let alert = UIAlertController(
+            title: configuration.reasoningEffortTitle,
+            message: nil,
+            preferredStyle: .actionSheet
+        )
+        for option in reasoningEffortOptions {
+            let label = option == reasoningEffortValue
+                ? "✓ \(effortLabel(option))"
+                : effortLabel(option)
+            let action = UIAlertAction(title: label, style: .default) {
+                [weak self] _ in self?.commitEffort(option)
             }
-        }.map(\.element)
+            alert.addAction(action)
+        }
+        if allowsCustomReasoningEffort {
+            alert.addAction(UIAlertAction(
+                title: configuration.customReasoningEffortTitle,
+                style: .default
+            ) { [weak self] _ in self?.presentCustomEffort() })
+        }
+        alert.addAction(UIAlertAction(title: nativeLocalized("native.cancel", "Cancel"), style: .cancel))
+        if let popover = alert.popoverPresentationController {
+            popover.sourceView = sourceView ?? view
+            popover.sourceRect = sourceView?.bounds ?? view.bounds
+        }
+        present(alert, animated: true)
+    }
+
+    private func presentCustomEffort() {
+        let alert = UIAlertController(
+            title: configuration.customReasoningEffortTitle,
+            message: nil,
+            preferredStyle: .alert
+        )
+        alert.addTextField { [weak self] field in
+            guard let self else { return }
+            field.placeholder = configuration.customReasoningEffortHint
+            if !reasoningEffortOptions.contains(reasoningEffortValue) {
+                field.text = reasoningEffortValue
+            }
+            field.autocapitalizationType = .none
+            field.autocorrectionType = .no
+        }
+        alert.addAction(UIAlertAction(title: nativeLocalized("native.cancel", "Cancel"), style: .cancel))
+        alert.addAction(UIAlertAction(title: nativeLocalized("native.save", "Save"), style: .default) {
+            [weak self, weak alert] _ in
+            guard let self else { return }
+            guard let value = alert?.textFields?.first?.text?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+                  !value.isEmpty else { return }
+            guard let normalized = self.normalizedEffort(value) else {
+                DispatchQueue.main.async { [weak self] in
+                    self?.presentCustomEffort()
+                }
+                return
+            }
+            self.commitEffort(normalized)
+        })
+        present(alert, animated: true)
+    }
+
+    private func commitEffort(_ value: String) {
+        guard let normalized = normalizedEffort(value) else { return }
+        NativeSheetHaptics.selection()
+        reasoningEffortValue = normalized
+        tableView.reloadSections(IndexSet(integer: 1), with: .none)
+        onEffortChanged(normalized)
+    }
+
+    private func normalizedEffort(_ value: String) -> String? {
+        let normalized = value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard normalized.count <= 64,
+              normalized.range(
+                of: #"^[a-z0-9][a-z0-9_-]{0,63}$"#,
+                options: .regularExpression
+              ) != nil else {
+            return nil
+        }
+        return normalized
     }
 }
 
-extension NativeModelSelectorTableViewController: UISearchResultsUpdating {
+func nativeModelSelectorFeaturedIds(
+    pinnedModelIds: [String],
+    configuredFeaturedModelIds: [String],
+    selectedModelId: String?
+) -> [String] {
+    var ids = pinnedModelIds.isEmpty
+        ? configuredFeaturedModelIds
+        : pinnedModelIds
+    if let selectedModelId,
+       !selectedModelId.isEmpty,
+       !ids.contains(selectedModelId) {
+        ids.append(selectedModelId)
+    }
+    return ids
+}
+
+private final class NativeMoreModelsTableViewController: UITableViewController, UISearchResultsUpdating {
+    private let searchPlaceholder: String
+    private let presentationId: String
+    private let selectedModelId: String?
+    private var pinnedModelIds: Set<String>
+    private let allowsPinning: Bool
+    private let pinTitle: String
+    private let unpinTitle: String
+    private let onSelect: (String) -> Void
+    private let onTogglePin: (String) -> Void
+    private var models: [NativeModelSelectorOption]
+    private var filteredModels: [NativeModelSelectorOption]
+    private var query = ""
+
+    init(
+        title: String,
+        searchPlaceholder: String,
+        presentationId: String,
+        models: [NativeModelSelectorOption],
+        selectedModelId: String?,
+        pinnedModelIds: Set<String>,
+        allowsPinning: Bool,
+        pinTitle: String,
+        unpinTitle: String,
+        onSelect: @escaping (String) -> Void,
+        onTogglePin: @escaping (String) -> Void
+    ) {
+        self.searchPlaceholder = searchPlaceholder
+        self.presentationId = presentationId
+        self.models = models
+        filteredModels = models
+        self.selectedModelId = selectedModelId
+        self.pinnedModelIds = pinnedModelIds
+        self.allowsPinning = allowsPinning
+        self.pinTitle = pinTitle
+        self.unpinTitle = unpinTitle
+        self.onSelect = onSelect
+        self.onTogglePin = onTogglePin
+        super.init(style: .insetGrouped)
+        self.title = title
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        tableView.register(NativeModelSelectorTableViewCell.self, forCellReuseIdentifier: "modelCell")
+        NativeSheetSettingsStyle.apply(to: tableView)
+        let search = UISearchController(searchResultsController: nil)
+        search.searchResultsUpdater = self
+        search.searchBar.placeholder = searchPlaceholder
+        search.obscuresBackgroundDuringPresentation = false
+        navigationItem.searchController = search
+        navigationItem.hidesSearchBarWhenScrolling = false
+    }
+
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        filteredModels.count
+    }
+
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let model = filteredModels[indexPath.row]
+        let cell = tableView.dequeueReusableCell(withIdentifier: "modelCell", for: indexPath)
+            as! NativeModelSelectorTableViewCell
+        cell.configure(
+            model: model,
+            isSelected: model.id == selectedModelId,
+            isPinned: pinnedModelIds.contains(model.id),
+            avatarCacheIdentifier: "\(presentationId):\(model.id)"
+        )
+        return cell
+    }
+
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        NativeSheetHaptics.selection()
+        onSelect(filteredModels[indexPath.row].id)
+    }
+
+    override func tableView(
+        _ tableView: UITableView,
+        contextMenuConfigurationForRowAt indexPath: IndexPath,
+        point: CGPoint
+    ) -> UIContextMenuConfiguration? {
+        guard allowsPinning else { return nil }
+        let model = filteredModels[indexPath.row]
+        let pinned = pinnedModelIds.contains(model.id)
+        return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { [weak self] _ in
+            let action = UIAction(
+                title: pinned ? self?.unpinTitle ?? "Unpin" : self?.pinTitle ?? "Pin",
+                image: UIImage(systemName: pinned ? "pin.slash" : "pin")
+            ) { [weak self] _ in
+                NativeSheetHaptics.selection()
+                if pinned { self?.pinnedModelIds.remove(model.id) }
+                else { self?.pinnedModelIds.insert(model.id) }
+                self?.tableView.reloadRows(at: [indexPath], with: .none)
+                self?.onTogglePin(model.id)
+            }
+            return UIMenu(children: [action])
+        }
+    }
+
+    func updateModels(_ updated: [NativeModelSelectorOption]) {
+        models = updated
+        applyFilter()
+    }
+
     func updateSearchResults(for searchController: UISearchController) {
-        let query = searchController.searchBar.text?
+        query = searchController.searchBar.text?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased() ?? ""
-        applyFilterAndSort(query: query)
+        applyFilter()
+    }
+
+    private func applyFilter() {
+        filteredModels = query.isEmpty ? models : models.filter { model in
+            model.name.lowercased().contains(query)
+                || model.id.lowercased().contains(query)
+                || model.tags.contains { $0.lowercased().contains(query) }
+        }
+        if isViewLoaded { tableView.reloadData() }
     }
 }
 
@@ -4426,12 +5354,12 @@ private final class NativeModelTagButton: UIButton {
             bottom: 2,
             trailing: 6
         )
-        configuration.baseForegroundColor = .secondaryLabel
-        configuration.baseBackgroundColor = .quaternarySystemFill
+        configuration.baseForegroundColor = NativeSheetTheme.shared.secondaryForeground
+        configuration.baseBackgroundColor = NativeSheetTheme.shared.elevatedSurface
         configuration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer {
             incoming in
             var outgoing = incoming
-            outgoing.font = .preferredFont(forTextStyle: .caption2)
+            outgoing.font = .preferredFont(forTextStyle: .caption1)
             return outgoing
         }
         self.configuration = configuration
@@ -4530,6 +5458,7 @@ private final class NativeOptionsSelectorTableViewController: UITableViewControl
         tableView.deselectRow(at: indexPath, animated: true)
         let option = filteredOptions[indexPath.row]
         guard option.enabled else { return }
+        NativeSheetHaptics.selection()
         onSelect(option.id)
     }
 
@@ -4576,17 +5505,27 @@ private final class NativeModelSelectorTableViewCell: UITableViewCell {
         nil
     }
 
-    func configure(model: NativeModelSelectorOption, isSelected: Bool, isPinned: Bool) {
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        avatarView.cancelImageLoad()
+    }
+
+    func configure(
+        model: NativeModelSelectorOption,
+        isSelected: Bool,
+        isPinned: Bool,
+        avatarCacheIdentifier: String
+    ) {
         titleLabel.text = model.name
         titleLabel.font = .preferredFont(forTextStyle: .body)
-        titleLabel.textColor = .label
+        titleLabel.textColor = NativeSheetTheme.shared.foreground
         titleLabel.adjustsFontForContentSizeCategory = true
         titleLabel.numberOfLines = 2
 
         let subtitle = model.subtitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         subtitleLabel.text = subtitle
-        subtitleLabel.font = .preferredFont(forTextStyle: .footnote)
-        subtitleLabel.textColor = .secondaryLabel
+        subtitleLabel.font = .preferredFont(forTextStyle: .subheadline)
+        subtitleLabel.textColor = NativeSheetTheme.shared.secondaryForeground
         subtitleLabel.adjustsFontForContentSizeCategory = true
         subtitleLabel.numberOfLines = 2
         subtitleLabel.isHidden = subtitle.isEmpty
@@ -4598,7 +5537,9 @@ private final class NativeModelSelectorTableViewCell: UITableViewCell {
             avatarUrl: model.avatarUrl,
             avatarData: model.avatarData,
             avatarHeaders: model.avatarHeaders,
-            sfSymbol: model.sfSymbol
+            sfSymbol: model.sfSymbol,
+            usesTemplateImage: model.id.hasPrefix("hermes:agent:"),
+            avatarCacheIdentifier: avatarCacheIdentifier
         )
 
         accessoryType = isSelected ? .checkmark : .none
@@ -4642,7 +5583,7 @@ private final class NativeModelSelectorTableViewCell: UITableViewCell {
     }
 
     private func configureViews() {
-        backgroundColor = .secondarySystemGroupedBackground
+        backgroundColor = NativeSheetTheme.shared.surface
         contentView.addSubview(avatarView)
         contentView.addSubview(textStack)
         contentView.addSubview(pinImageView)
@@ -4664,7 +5605,7 @@ private final class NativeModelSelectorTableViewCell: UITableViewCell {
         tagsStack.isHidden = true
         pinImageView.translatesAutoresizingMaskIntoConstraints = false
         pinImageView.contentMode = .scaleAspectFit
-        pinImageView.tintColor = .secondaryLabel
+        pinImageView.tintColor = NativeSheetTheme.shared.icon
         pinImageView.isHidden = true
         pinImageView.setContentHuggingPriority(.required, for: .horizontal)
         pinWidthConstraint = pinImageView.widthAnchor.constraint(equalToConstant: 0)
@@ -4712,15 +5653,15 @@ private final class NativeSheetOptionTableViewCell: UITableViewCell {
 
     func configure(option: NativeSheetOption, isSelected: Bool) {
         let isDestructive = option.destructive
-        let tintColor: UIColor = isDestructive ? .systemRed : .secondaryLabel
-        let textColor: UIColor = isDestructive ? .systemRed : .label
+        let tintColor: UIColor = isDestructive ? NativeSheetTheme.shared.destructive : NativeSheetTheme.shared.secondaryForeground
+        let textColor: UIColor = isDestructive ? NativeSheetTheme.shared.destructive : NativeSheetTheme.shared.foreground
 
         titleLabel.text = option.label
         titleLabel.textColor = textColor
         titleLabel.numberOfLines = 2
 
         subtitleLabel.text = option.subtitle
-        subtitleLabel.textColor = .secondaryLabel
+        subtitleLabel.textColor = NativeSheetTheme.shared.secondaryForeground
         subtitleLabel.numberOfLines = 2
         subtitleLabel.isHidden = option.subtitle == nil || option.subtitle?.isEmpty == true
 
@@ -4753,7 +5694,7 @@ private final class NativeSheetOptionTableViewCell: UITableViewCell {
     }
 
     private func configureViews() {
-        backgroundColor = .secondarySystemGroupedBackground
+        backgroundColor = NativeSheetTheme.shared.surface
 
         hierarchyGuideView.translatesAutoresizingMaskIntoConstraints = false
         iconView.translatesAutoresizingMaskIntoConstraints = false
@@ -4843,7 +5784,9 @@ private final class NativeFolderHierarchyGuideView: UIView {
         guard showBranch || ancestorHasMoreSiblings.contains(true) else { return }
         guard let context = UIGraphicsGetCurrentContext() else { return }
 
-        context.setStrokeColor(UIColor.secondaryLabel.withAlphaComponent(0.28).cgColor)
+        context.setStrokeColor(
+            NativeSheetTheme.shared.secondaryForeground.withAlphaComponent(0.28).cgColor
+        )
         context.setLineWidth(1.25)
         context.setLineCap(.square)
         context.setLineJoin(.miter)
@@ -4875,54 +5818,762 @@ private final class NativeFolderHierarchyGuideView: UIView {
     }
 }
 
-private enum NativeSheetImageLoader {
-    private static let cache = NSCache<NSString, UIImage>()
+func nativeSheetImageCacheKey(
+    rawUrl: String,
+    headers: [String: String]
+) -> NSString {
+    guard !headers.isEmpty else {
+        return NSString(string: rawUrl)
+    }
 
+    let canonicalHeaders = headers
+        .map { ($0.key.lowercased(), $0.value) }
+        .sorted {
+            if $0.0 == $1.0 { return $0.1 < $1.1 }
+            return $0.0 < $1.0
+        }
+    var digestInput = Data()
+
+    func appendComponent(_ value: String) {
+        var byteCount = UInt64(value.utf8.count).bigEndian
+        withUnsafeBytes(of: &byteCount) { digestInput.append(contentsOf: $0) }
+        digestInput.append(contentsOf: value.utf8)
+    }
+
+    appendComponent(rawUrl)
+    for (key, value) in canonicalHeaders {
+        appendComponent(key)
+        appendComponent(value)
+    }
+
+    let fingerprint = SHA256.hash(data: digestInput)
+        .map { String(format: "%02x", $0) }
+        .joined()
+    return NSString(string: "\(rawUrl)#headers=\(fingerprint)")
+}
+
+func nativeSheetAvatarDataCacheKey(
+    cacheIdentifier: String,
+    data: Data,
+    targetPixelSize: Int
+) -> NSString {
+    let fingerprint = SHA256.hash(data: data)
+        .map { String(format: "%02x", $0) }
+        .joined()
+    return NSString(
+        string: "data:\(cacheIdentifier)#sha256=\(fingerprint)#px=\(targetPixelSize)"
+    )
+}
+
+func nativeSheetImageSessionConfiguration() -> URLSessionConfiguration {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.timeoutIntervalForRequest = 10
+    configuration.timeoutIntervalForResource = 15
+    configuration.httpMaximumConnectionsPerHost = 4
+    configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+    configuration.urlCache = nil
+    configuration.httpCookieStorage = nil
+    configuration.httpShouldSetCookies = false
+    configuration.urlCredentialStorage = nil
+    return configuration
+}
+
+final class NativeSheetImageLoadToken {
+    private let lock = NSLock()
+    private var cancellationHandler: (() -> Void)?
+    private var cancelled = false
+
+    var isCancelled: Bool {
+        lock.lock()
+        let value = cancelled
+        lock.unlock()
+        return value
+    }
+
+    func installCancellationHandler(_ handler: @escaping () -> Void) {
+        lock.lock()
+        if cancelled {
+            lock.unlock()
+            handler()
+            return
+        }
+        cancellationHandler = handler
+        lock.unlock()
+    }
+
+    func cancel() {
+        lock.lock()
+        guard !cancelled else {
+            lock.unlock()
+            return
+        }
+        cancelled = true
+        let handler = cancellationHandler
+        cancellationHandler = nil
+        lock.unlock()
+        handler?()
+    }
+}
+
+private struct NativeSheetHTTPOrigin: Equatable {
+    let scheme: String
+    let host: String
+    let port: Int
+
+    init?(_ url: URL) {
+        guard let components = URLComponents(
+            url: url,
+            resolvingAgainstBaseURL: false
+        ),
+        let rawScheme = components.scheme?.lowercased(),
+        rawScheme == "http" || rawScheme == "https",
+        let rawHost = components.host?.lowercased(),
+        !rawHost.isEmpty,
+        components.user == nil,
+        components.password == nil else {
+            return nil
+        }
+        scheme = rawScheme
+        host = rawHost
+        port = components.port ?? (rawScheme == "https" ? 443 : 80)
+    }
+}
+
+func nativeSheetRedirectStaysWithinOrigin(
+    originalURL: URL,
+    redirectURL: URL
+) -> Bool {
+    guard let original = NativeSheetHTTPOrigin(originalURL),
+          let redirected = NativeSheetHTTPOrigin(redirectURL) else {
+        return false
+    }
+    if original == redirected {
+        return true
+    }
+
+    // Google's public favicon endpoint always redirects the headerless image
+    // request to a numbered gstatic shard. Keep the general same-origin rule,
+    // but allow this exact HTTPS asset hop so source favicons can render.
+    guard original.scheme == "https",
+          original.host == "www.google.com",
+          original.port == 443,
+          originalURL.path == "/s2/favicons",
+          redirected.scheme == "https",
+          redirected.port == 443,
+          redirectURL.path == "/faviconV2" else {
+        return false
+    }
+    return redirected.host.range(
+        of: #"^t[0-9]+\.gstatic\.com$"#,
+        options: .regularExpression
+    ) != nil
+}
+
+/// Builds an image request without allowing caller-supplied credentials to
+/// choose their own destination. Headerless HTTP(S) URLs remain valid, while
+/// nonempty headers are forwarded only for the explicitly trusted origin.
+func nativeSheetImageRequest(
+    rawUrl: String,
+    headers: [String: String],
+    trustedServerOriginURL: URL?
+) -> URLRequest? {
+    guard let url = URL(string: rawUrl),
+          let targetOrigin = NativeSheetHTTPOrigin(url) else {
+        return nil
+    }
+    var request = URLRequest(url: url)
+    guard !headers.isEmpty,
+          let trustedServerOriginURL,
+          let trustedOrigin = NativeSheetHTTPOrigin(trustedServerOriginURL),
+          targetOrigin == trustedOrigin else {
+        return request
+    }
+    for (key, value) in headers {
+        request.setValue(value, forHTTPHeaderField: key)
+    }
+    return request
+}
+
+final class NativeSheetRequestAdmission {
+    private let lock = NSLock()
+    private let limit: Int
+    private var outstanding = 0
+
+    init(limit: Int) {
+        self.limit = max(1, limit)
+    }
+
+    func acquire() -> Bool {
+        lock.lock()
+        guard outstanding < limit else {
+            lock.unlock()
+            return false
+        }
+        outstanding += 1
+        lock.unlock()
+        return true
+    }
+
+    func release() {
+        lock.lock()
+        outstanding = max(0, outstanding - 1)
+        lock.unlock()
+    }
+
+    var count: Int {
+        lock.lock()
+        let value = outstanding
+        lock.unlock()
+        return value
+    }
+}
+
+private final class NativeSheetBoundedImageClient: NSObject, URLSessionDataDelegate {
+    static let shared = NativeSheetBoundedImageClient()
+    private static let maximumOutstandingRequests = 24
+
+    private final class RequestState {
+        let maxBytes: Int
+        let originalURL: URL
+        let completion: (Data?) -> Void
+        var receivedData = Data()
+
+        init(
+            maxBytes: Int,
+            originalURL: URL,
+            completion: @escaping (Data?) -> Void
+        ) {
+            self.maxBytes = maxBytes
+            self.originalURL = originalURL
+            self.completion = completion
+        }
+    }
+
+    private let delegateQueue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "app.cogwheel.conduit.native-sheet-image-network"
+        queue.qualityOfService = .userInitiated
+        queue.maxConcurrentOperationCount = 1
+        return queue
+    }()
+    private let stateLock = NSLock()
+    private let admission = NativeSheetRequestAdmission(
+        limit: NativeSheetBoundedImageClient.maximumOutstandingRequests
+    )
+    private var requests: [Int: RequestState] = [:]
+    private lazy var session = URLSession(
+        configuration: nativeSheetImageSessionConfiguration(),
+        delegate: self,
+        delegateQueue: delegateQueue
+    )
+
+    private override init() {
+        super.init()
+    }
+
+    func load(
+        _ request: URLRequest,
+        maxBytes: Int,
+        completion: @escaping (Data?) -> Void
+    ) -> NativeSheetImageLoadToken {
+        let token = NativeSheetImageLoadToken()
+        guard maxBytes > 0,
+              let originalURL = request.url,
+              NativeSheetHTTPOrigin(originalURL) != nil,
+              admission.acquire() else {
+            completion(nil)
+            token.cancel()
+            return token
+        }
+
+        let task = session.dataTask(with: request)
+        let state = RequestState(
+            maxBytes: maxBytes,
+            originalURL: originalURL,
+            completion: completion
+        )
+        stateLock.lock()
+        requests[task.taskIdentifier] = state
+        stateLock.unlock()
+        token.installCancellationHandler { [weak self, weak task] in
+            task?.cancel()
+            self?.finish(taskIdentifier: task?.taskIdentifier, data: nil)
+        }
+        task.resume()
+        return token
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        guard let state = requestState(for: task.taskIdentifier),
+              let redirectURL = request.url,
+              nativeSheetRedirectStaysWithinOrigin(
+                originalURL: state.originalURL,
+                redirectURL: redirectURL
+              ) else {
+            completionHandler(nil)
+            task.cancel()
+            finish(taskIdentifier: task.taskIdentifier, data: nil)
+            return
+        }
+        completionHandler(request)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        dataTask: URLSessionDataTask,
+        didReceive response: URLResponse,
+        completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
+    ) {
+        guard let state = requestState(for: dataTask.taskIdentifier) else {
+            completionHandler(.cancel)
+            return
+        }
+        if let http = response as? HTTPURLResponse,
+           !(200..<300).contains(http.statusCode) {
+            completionHandler(.cancel)
+            finish(taskIdentifier: dataTask.taskIdentifier, data: nil)
+            return
+        }
+        if let mimeType = response.mimeType,
+           !mimeType.lowercased().hasPrefix("image/") {
+            completionHandler(.cancel)
+            finish(taskIdentifier: dataTask.taskIdentifier, data: nil)
+            return
+        }
+        if response.expectedContentLength > Int64(state.maxBytes) {
+            completionHandler(.cancel)
+            finish(taskIdentifier: dataTask.taskIdentifier, data: nil)
+            return
+        }
+        if response.expectedContentLength > 0 {
+            stateLock.lock()
+            state.receivedData.reserveCapacity(
+                min(Int(response.expectedContentLength), state.maxBytes)
+            )
+            stateLock.unlock()
+        }
+        completionHandler(.allow)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        dataTask: URLSessionDataTask,
+        didReceive data: Data
+    ) {
+        stateLock.lock()
+        guard let state = requests[dataTask.taskIdentifier] else {
+            stateLock.unlock()
+            dataTask.cancel()
+            return
+        }
+        guard data.count <= state.maxBytes - state.receivedData.count else {
+            stateLock.unlock()
+            dataTask.cancel()
+            finish(taskIdentifier: dataTask.taskIdentifier, data: nil)
+            return
+        }
+        state.receivedData.append(data)
+        stateLock.unlock()
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didCompleteWithError error: Error?
+    ) {
+        stateLock.lock()
+        let state = requests[task.taskIdentifier]
+        let data = error == nil && state?.receivedData.isEmpty == false
+            ? state?.receivedData
+            : nil
+        stateLock.unlock()
+        guard state != nil else { return }
+        finish(taskIdentifier: task.taskIdentifier, data: data)
+    }
+
+    private func requestState(for taskIdentifier: Int) -> RequestState? {
+        stateLock.lock()
+        let state = requests[taskIdentifier]
+        stateLock.unlock()
+        return state
+    }
+
+    private func finish(taskIdentifier: Int?, data: Data?) {
+        guard let taskIdentifier else { return }
+        stateLock.lock()
+        let state = requests.removeValue(forKey: taskIdentifier)
+        stateLock.unlock()
+        guard let state else { return }
+        admission.release()
+        state.completion(data)
+    }
+}
+
+enum NativeSheetImageLoader {
+    private final class InFlightRequest {
+        let requestId: UUID
+        var callbacks: [UUID: (NativeSheetImageLoadToken, (UIImage) -> Void)]
+        var networkToken: NativeSheetImageLoadToken?
+
+        init(
+            requestId: UUID,
+            callbackId: UUID,
+            token: NativeSheetImageLoadToken,
+            completion: @escaping (UIImage) -> Void
+        ) {
+            self.requestId = requestId
+            callbacks = [callbackId: (token, completion)]
+        }
+    }
+
+    private static let maxEncodedBytes = 2 * 1024 * 1024
+    private static let cache: NSCache<NSString, UIImage> = {
+        let cache = NSCache<NSString, UIImage>()
+        cache.countLimit = 128
+        cache.totalCostLimit = 8 * 1024 * 1024
+        return cache
+    }()
+    private static let stateLock = NSLock()
+    private static var inFlight: [NSString: InFlightRequest] = [:]
+    private static var avatarHashExecutionObserver: ((Bool) -> Void)?
+    private static let processingQueue = DispatchQueue(
+        label: "app.cogwheel.conduit.native-sheet-images",
+        qos: .userInitiated
+    )
+
+    static func setAvatarHashExecutionObserverForTesting(
+        _ observer: ((Bool) -> Void)?
+    ) {
+        stateLock.lock()
+        avatarHashExecutionObserver = observer
+        stateLock.unlock()
+    }
+
+    @discardableResult
     static func load(
         rawUrl: String,
         headers: [String: String] = [:],
+        trustedServerOriginURL: URL? = nil,
+        targetPixelSize: Int = 96,
         completion: @escaping (UIImage) -> Void
-    ) {
-        if rawUrl.hasPrefix("data:image"),
-           let image = decodeDataImage(rawUrl) {
-            completion(image)
-            return
-        }
-
-        guard rawUrl.hasPrefix("http"),
-              let url = URL(string: rawUrl) else {
-            return
-        }
-
-        let cacheKey = NSString(string: rawUrl)
-        if let cached = cache.object(forKey: cacheKey) {
-            completion(cached)
-            return
-        }
-
-        var request = URLRequest(url: url)
-        for (key, value) in headers {
-            request.setValue(value, forHTTPHeaderField: key)
-        }
-
-        URLSession.shared.dataTask(with: request) { data, _, _ in
-            guard let data, let image = UIImage(data: data) else { return }
-            cache.setObject(image, forKey: cacheKey)
-            DispatchQueue.main.async {
-                completion(image)
+    ) -> NativeSheetImageLoadToken {
+        let token = NativeSheetImageLoadToken()
+        if rawUrl.hasPrefix("data:image") {
+            processingQueue.async {
+                guard !token.isCancelled else { return }
+                guard let image = decodeDataImage(
+                    rawUrl,
+                    targetPixelSize: targetPixelSize
+                ) else { return }
+                deliver(image, token: token, completion: completion)
             }
-        }.resume()
+            return token
+        }
+
+        guard let request = nativeSheetImageRequest(
+            rawUrl: rawUrl,
+            headers: headers,
+            trustedServerOriginURL: trustedServerOriginURL
+        ) else {
+            return token
+        }
+
+        let forwardedHeaders = request.allHTTPHeaderFields ?? [:]
+        let baseKey = nativeSheetImageCacheKey(
+            rawUrl: rawUrl,
+            headers: forwardedHeaders
+        )
+        let cacheKey = NSString(string: "\(baseKey)#px=\(targetPixelSize)")
+        if let cached = cache.object(forKey: cacheKey) {
+            deliver(cached, token: token, completion: completion)
+            return token
+        }
+
+        let callbackId = UUID()
+        let requestId = register(
+            cacheKey: cacheKey,
+            callbackId: callbackId,
+            token: token,
+            completion: completion
+        )
+        guard let requestId else { return token }
+
+        let networkToken = NativeSheetBoundedImageClient.shared.load(
+            request,
+            maxBytes: maxEncodedBytes
+        ) { data in
+            processingQueue.async {
+                let image = data.flatMap {
+                    downsample(data: $0, targetPixelSize: targetPixelSize)
+                }
+                finish(
+                    cacheKey: cacheKey,
+                    requestId: requestId,
+                    image: image
+                )
+            }
+        }
+        installNetworkToken(
+            networkToken,
+            cacheKey: cacheKey,
+            requestId: requestId
+        )
+        return token
     }
 
-    static func decodeDataImage(_ dataUrl: String) -> UIImage? {
+    @discardableResult
+    static func load(
+        data: Data,
+        cacheIdentifier: String? = nil,
+        targetPixelSize: Int,
+        completion: @escaping (UIImage) -> Void
+    ) -> NativeSheetImageLoadToken {
+        let token = NativeSheetImageLoadToken()
+        guard !data.isEmpty, data.count <= maxEncodedBytes else { return token }
+        processingQueue.async {
+            guard !token.isCancelled else { return }
+            stateLock.lock()
+            let observer = avatarHashExecutionObserver
+            stateLock.unlock()
+            observer?(Thread.isMainThread)
+            let cacheKey = cacheIdentifier.map {
+                nativeSheetAvatarDataCacheKey(
+                    cacheIdentifier: $0,
+                    data: data,
+                    targetPixelSize: targetPixelSize
+                )
+            }
+            guard !token.isCancelled else { return }
+            if let cacheKey, let cached = cache.object(forKey: cacheKey) {
+                deliver(cached, token: token, completion: completion)
+                return
+            }
+            if let cacheKey {
+                let callbackId = UUID()
+                let requestId = register(
+                    cacheKey: cacheKey,
+                    callbackId: callbackId,
+                    token: token,
+                    completion: completion
+                )
+                guard let requestId else { return }
+                let image = downsample(
+                    data: data,
+                    targetPixelSize: targetPixelSize
+                )
+                finish(
+                    cacheKey: cacheKey,
+                    requestId: requestId,
+                    image: image
+                )
+                return
+            }
+            let image = downsample(
+                data: data,
+                targetPixelSize: targetPixelSize
+            )
+            if let image {
+                deliver(image, token: token, completion: completion)
+            }
+        }
+        return token
+    }
+
+    private static func register(
+        cacheKey: NSString,
+        callbackId: UUID,
+        token: NativeSheetImageLoadToken,
+        completion: @escaping (UIImage) -> Void
+    ) -> UUID? {
+        stateLock.lock()
+        let requestId: UUID?
+        if let request = inFlight[cacheKey] {
+            request.callbacks[callbackId] = (token, completion)
+            requestId = nil
+        } else {
+            let newRequestId = UUID()
+            inFlight[cacheKey] = InFlightRequest(
+                requestId: newRequestId,
+                callbackId: callbackId,
+                token: token,
+                completion: completion
+            )
+            requestId = newRequestId
+        }
+        stateLock.unlock()
+        token.installCancellationHandler {
+            cancelSubscriber(cacheKey: cacheKey, callbackId: callbackId)
+        }
+        return requestId
+    }
+
+    private static func cancelSubscriber(
+        cacheKey: NSString,
+        callbackId: UUID
+    ) {
+        var networkToken: NativeSheetImageLoadToken?
+        stateLock.lock()
+        if let request = inFlight[cacheKey] {
+            request.callbacks.removeValue(forKey: callbackId)
+            if request.callbacks.isEmpty {
+                inFlight.removeValue(forKey: cacheKey)
+                networkToken = request.networkToken
+            }
+        }
+        stateLock.unlock()
+        networkToken?.cancel()
+    }
+
+    private static func installNetworkToken(
+        _ token: NativeSheetImageLoadToken,
+        cacheKey: NSString,
+        requestId: UUID
+    ) {
+        stateLock.lock()
+        if let request = inFlight[cacheKey],
+           request.requestId == requestId,
+           !request.callbacks.isEmpty {
+            request.networkToken = token
+            stateLock.unlock()
+        } else {
+            stateLock.unlock()
+            token.cancel()
+        }
+    }
+
+    private static func finish(
+        cacheKey: NSString,
+        requestId: UUID,
+        image: UIImage?
+    ) {
+        stateLock.lock()
+        let request: InFlightRequest?
+        if inFlight[cacheKey]?.requestId == requestId {
+            request = inFlight.removeValue(forKey: cacheKey)
+        } else {
+            request = nil
+        }
+        stateLock.unlock()
+        guard let request else { return }
+        if let image {
+            let pixelWidth = Int(image.size.width * image.scale)
+            let pixelHeight = Int(image.size.height * image.scale)
+            cache.setObject(
+                image,
+                forKey: cacheKey,
+                cost: max(1, pixelWidth * pixelHeight * 4)
+            )
+        }
+        guard let image else { return }
+        DispatchQueue.main.async {
+            request.callbacks.values.forEach { token, callback in
+                guard !token.isCancelled else { return }
+                callback(image)
+            }
+        }
+    }
+
+    /// Narrow test seam for reproducing stale completion and token-install
+    /// races without issuing a real network request.
+    static func beginInFlightRequestForTesting(
+        cacheKey: NSString,
+        completion: @escaping (UIImage) -> Void
+    ) -> (token: NativeSheetImageLoadToken, requestId: UUID?) {
+        let token = NativeSheetImageLoadToken()
+        let requestId = register(
+            cacheKey: cacheKey,
+            callbackId: UUID(),
+            token: token,
+            completion: completion
+        )
+        return (token, requestId)
+    }
+
+    static func installNetworkTokenForTesting(
+        _ token: NativeSheetImageLoadToken,
+        cacheKey: NSString,
+        requestId: UUID
+    ) {
+        installNetworkToken(
+            token,
+            cacheKey: cacheKey,
+            requestId: requestId
+        )
+    }
+
+    static func finishInFlightRequestForTesting(
+        cacheKey: NSString,
+        requestId: UUID,
+        image: UIImage?
+    ) {
+        finish(cacheKey: cacheKey, requestId: requestId, image: image)
+    }
+
+    private static func deliver(
+        _ image: UIImage,
+        token: NativeSheetImageLoadToken,
+        completion: @escaping (UIImage) -> Void
+    ) {
+        let callback = {
+            guard !token.isCancelled else { return }
+            completion(image)
+        }
+        if Thread.isMainThread {
+            callback()
+        } else {
+            DispatchQueue.main.async(execute: callback)
+        }
+    }
+
+    private static func decodeDataImage(
+        _ dataUrl: String,
+        targetPixelSize: Int
+    ) -> UIImage? {
         guard let commaIndex = dataUrl.firstIndex(of: ",") else {
             return nil
         }
-        let base64Payload = String(dataUrl[dataUrl.index(after: commaIndex)...])
-        guard let data = Data(base64Encoded: base64Payload) else {
+        let payload = dataUrl[dataUrl.index(after: commaIndex)...]
+        // A base64 payload is roughly 4/3 the decoded size. Reject it before
+        // allocating a potentially huge intermediary String/Data pair.
+        guard payload.utf8.count <= (maxEncodedBytes * 4 / 3) + 8 else {
             return nil
         }
-        return UIImage(data: data)
+        guard let data = Data(base64Encoded: String(payload)),
+              data.count <= maxEncodedBytes else {
+            return nil
+        }
+        return downsample(data: data, targetPixelSize: targetPixelSize)
+    }
+
+    private static func downsample(
+        data: Data,
+        targetPixelSize: Int
+    ) -> UIImage? {
+        autoreleasepool {
+            guard targetPixelSize > 0,
+                  let source = CGImageSourceCreateWithData(
+                      data as CFData,
+                      [kCGImageSourceShouldCache: false] as CFDictionary
+                  ) else { return nil }
+            let options: [CFString: Any] = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceShouldCacheImmediately: true,
+                kCGImageSourceThumbnailMaxPixelSize: targetPixelSize,
+            ]
+            guard let cgImage = CGImageSourceCreateThumbnailAtIndex(
+                source,
+                0,
+                options as CFDictionary
+            ) else { return nil }
+            return UIImage(cgImage: cgImage)
+        }
     }
 }
 
@@ -4931,6 +6582,8 @@ private final class NativeModelAvatarView: UIView {
     private let initialsLabel = UILabel()
     private let symbolView = UIImageView()
     private var expectedImageUrl: String?
+    private var imageGeneration = UUID()
+    private var imageLoadToken: NativeSheetImageLoadToken?
 
     init(side: CGFloat = 32) {
         super.init(frame: .zero)
@@ -4984,15 +6637,34 @@ private final class NativeModelAvatarView: UIView {
         nil
     }
 
+    deinit {
+        imageLoadToken?.cancel()
+    }
+
+    func cancelImageLoad() {
+        imageLoadToken?.cancel()
+        imageLoadToken = nil
+        imageGeneration = UUID()
+        expectedImageUrl = nil
+    }
+
     func configure(
         name: String,
         avatarUrl: String?,
         avatarData: Data?,
         avatarHeaders: [String: String],
-        sfSymbol: String?
+        sfSymbol: String?,
+        usesTemplateImage: Bool = false,
+        avatarCacheIdentifier: String? = nil
     ) {
+        imageLoadToken?.cancel()
+        imageLoadToken = nil
+        imageGeneration = UUID()
+        let generation = imageGeneration
         expectedImageUrl = avatarUrl
         imageView.image = nil
+        imageView.tintColor = nil
+        imageView.contentMode = .scaleAspectFill
         imageView.isHidden = true
 
         let accentColor = nativeAvatarAccentColor(seed: name)
@@ -5014,11 +6686,24 @@ private final class NativeModelAvatarView: UIView {
             initialsLabel.isHidden = false
         }
 
-        if let avatarData, let image = UIImage(data: avatarData) {
-            imageView.image = image
-            imageView.isHidden = false
-            initialsLabel.isHidden = true
-            symbolView.isHidden = true
+        if let avatarData {
+            imageLoadToken = NativeSheetImageLoader.load(
+                data: avatarData,
+                cacheIdentifier: avatarCacheIdentifier,
+                targetPixelSize: 96
+            ) { [weak self] image in
+                guard let self, self.imageGeneration == generation else { return }
+                self.imageView.image = usesTemplateImage
+                    ? image.withRenderingMode(.alwaysTemplate)
+                    : image
+                self.imageView.tintColor = usesTemplateImage
+                    ? NativeSheetTheme.shared.foreground
+                    : nil
+                self.imageView.contentMode = usesTemplateImage ? .scaleAspectFit : .scaleAspectFill
+                self.imageView.isHidden = false
+                self.initialsLabel.isHidden = true
+                self.symbolView.isHidden = true
+            }
             return
         }
 
@@ -5026,9 +6711,26 @@ private final class NativeModelAvatarView: UIView {
             return
         }
 
-        NativeSheetImageLoader.load(rawUrl: avatarUrl, headers: avatarHeaders) { [weak self] image in
-            guard let self, self.expectedImageUrl == avatarUrl else { return }
-            self.imageView.image = image
+        // Dart builds nonempty avatar headers only for URLs on the active
+        // server origin (see imageUrlIsServerOrigin), so the avatar URL itself
+        // is the origin these credentials were issued for. Cross-origin
+        // redirects still drop the request entirely.
+        imageLoadToken = NativeSheetImageLoader.load(
+            rawUrl: avatarUrl,
+            headers: avatarHeaders,
+            trustedServerOriginURL: URL(string: avatarUrl),
+            targetPixelSize: 96
+        ) { [weak self] image in
+            guard let self,
+                  self.imageGeneration == generation,
+                  self.expectedImageUrl == avatarUrl else { return }
+            self.imageView.image = usesTemplateImage
+                ? image.withRenderingMode(.alwaysTemplate)
+                : image
+            self.imageView.tintColor = usesTemplateImage
+                ? NativeSheetTheme.shared.foreground
+                : nil
+            self.imageView.contentMode = usesTemplateImage ? .scaleAspectFit : .scaleAspectFill
             self.imageView.isHidden = false
             self.initialsLabel.isHidden = true
             self.symbolView.isHidden = true
@@ -5063,7 +6765,7 @@ private final class NativeTextEditorViewController: UIViewController, UITextView
     override func viewDidLoad() {
         super.viewDidLoad()
         title = configuration.title
-        view.backgroundColor = .systemBackground
+        view.backgroundColor = NativeSheetTheme.shared.background
         navigationItem.leftBarButtonItem = iconBarButton(
             systemName: "xmark",
             action: UIAction { [weak self] _ in self?.closeTapped() }
@@ -5079,8 +6781,8 @@ private final class NativeTextEditorViewController: UIViewController, UITextView
         textView.backgroundColor = .clear
         textView.font = .preferredFont(forTextStyle: .body)
         textView.adjustsFontForContentSizeCategory = true
-        textView.textColor = .label
-        textView.tintColor = .tintColor
+        textView.textColor = NativeSheetTheme.shared.foreground
+        textView.tintColor = NativeSheetTheme.shared.accent
         textView.text = configuration.initialValue
         textView.delegate = self
         textView.keyboardDismissMode = .interactive
@@ -5170,7 +6872,7 @@ private final class NativeDatePickerViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         title = configuration.title
-        view.backgroundColor = .systemGroupedBackground
+        view.backgroundColor = NativeSheetTheme.shared.background
         navigationItem.leftBarButtonItem = iconBarButton(
             systemName: "xmark",
             action: UIAction { [weak self] _ in self?.cancelTapped() }
@@ -5183,7 +6885,7 @@ private final class NativeDatePickerViewController: UIViewController {
 
         let container = UIView()
         container.translatesAutoresizingMaskIntoConstraints = false
-        container.backgroundColor = .secondarySystemGroupedBackground
+        container.backgroundColor = NativeSheetTheme.shared.surface
         container.layer.cornerRadius = 16
         container.layer.cornerCurve = .continuous
 
@@ -5215,6 +6917,7 @@ private final class NativeDatePickerViewController: UIViewController {
     }
 
     @objc private func doneTapped() {
+        NativeSheetHaptics.success()
         onConfirm(datePicker.date)
     }
 }
@@ -5229,91 +6932,107 @@ private func configureNavigationCell(
     content.secondaryText = item.kind == "searchablePicker"
         ? (item.selectedOptionLabel ?? item.subtitle)
         : item.subtitle
-    content.image = UIImage(systemName: item.sfSymbol)
+    let avatar = nativeRowAvatarImage(for: item)
+    if let avatar {
+        content.image = avatar
+    } else if let iconAsset = item.iconAsset {
+        content.image = loadFlutterAssetImage(iconAsset)?
+            .withRenderingMode(.alwaysTemplate)
+            ?? UIImage(systemName: item.sfSymbol)
+    } else {
+        content.image = UIImage(systemName: item.sfSymbol)
+    }
     NativeSheetSettingsStyle.applyContentStyle(&content)
+    if avatar != nil {
+        // A picture keeps its own colors, at the size a symbol takes.
+        content.imageProperties.tintColor = nil
+        content.imageProperties.maximumSize = CGSize(
+            width: nativeRowAvatarDiameter,
+            height: nativeRowAvatarDiameter
+        )
+        content.imageProperties.reservedLayoutSize = CGSize(
+            width: nativeRowAvatarDiameter,
+            height: nativeRowAvatarDiameter
+        )
+    } else if item.iconAsset != nil {
+        let assetSize = item.iconSize ?? NativeSheetSettingsStyle.iconSize
+        content.imageProperties.maximumSize = CGSize(
+            width: assetSize,
+            height: assetSize
+        )
+    }
     if item.destructive {
-        content.textProperties.color = .systemRed
-        content.imageProperties.tintColor = .systemRed
+        content.textProperties.color = NativeSheetTheme.shared.destructive
+        content.imageProperties.tintColor = NativeSheetTheme.shared.destructive
+    } else if item.accent {
+        content.textProperties.color = NativeSheetTheme.shared.accent
+        content.imageProperties.tintColor = NativeSheetTheme.shared.accent
     }
     content.textProperties.font = .preferredFont(forTextStyle: .body)
+    if item.kind == "info" && !showsDisclosure {
+        content.textProperties.numberOfLines = 0
+        content.textProperties.lineBreakMode = .byWordWrapping
+        content.secondaryTextProperties.numberOfLines = 0
+        content.secondaryTextProperties.lineBreakMode = .byWordWrapping
+    }
     cell.contentConfiguration = content
-    cell.accessoryType = showsDisclosure ? .disclosureIndicator : .none
+    applyTextAccessibilityLabel(to: cell, from: content)
+    if item.checked {
+        // The check takes the accent the sheet tints its views with.
+        cell.accessoryType = .checkmark
+        cell.accessibilityTraits.insert(.selected)
+    } else {
+        cell.accessoryType = showsDisclosure ? .disclosureIndicator : .none
+        cell.accessibilityTraits.remove(.selected)
+    }
     NativeSheetSettingsStyle.applyCellStyle(cell)
 }
 
-private enum NativeSheetSettingsStyle {
-    static let defaultCellHeight: CGFloat = 50
-    static let iconSize: CGFloat = 24
-    static let iconSpacing: CGFloat = 16
+private let nativeRowAvatarDiameter: CGFloat = 32
 
-    static var horizontalMargin: CGFloat {
-        let isWidePhone = UIDevice.current.userInterfaceIdiom == .phone &&
-            UIScreen.main.bounds.width >= 414
-        return isWidePhone ? 20 : 16
+/// A row's round picture: its bytes, cut to a circle, else its name's
+/// initials; nil for a row that has neither.
+private func nativeRowAvatarImage(for item: NativeSheetItem) -> UIImage? {
+    let size = CGSize(width: nativeRowAvatarDiameter, height: nativeRowAvatarDiameter)
+    if let data = item.avatarData, let picture = UIImage(data: data) {
+        return UIGraphicsImageRenderer(size: size).image { _ in
+            let rect = CGRect(origin: .zero, size: size)
+            UIBezierPath(ovalIn: rect).addClip()
+            let scale = max(size.width / picture.size.width, size.height / picture.size.height)
+            let drawn = CGSize(
+                width: picture.size.width * scale,
+                height: picture.size.height * scale
+            )
+            picture.draw(in: CGRect(
+                x: (size.width - drawn.width) / 2,
+                y: (size.height - drawn.height) / 2,
+                width: drawn.width,
+                height: drawn.height
+            ))
+        }.withRenderingMode(.alwaysOriginal)
     }
-
-    static func apply(to tableView: UITableView) {
-        tableView.keyboardDismissMode = .interactive
-        tableView.backgroundColor = .systemGroupedBackground
-        tableView.separatorStyle = .none
-        tableView.estimatedRowHeight = defaultCellHeight
-        tableView.rowHeight = UITableView.automaticDimension
-        tableView.estimatedSectionHeaderHeight = 20
-        tableView.estimatedSectionFooterHeight = 44
-        tableView.directionalLayoutMargins = NSDirectionalEdgeInsets(
-            top: 0,
-            leading: horizontalMargin,
-            bottom: 0,
-            trailing: horizontalMargin
-        )
-        if #available(iOS 15.0, *) {
-            tableView.sectionHeaderTopPadding = 12
-        }
-    }
-
-    static func applyContentStyle(_ content: inout UIListContentConfiguration) {
-        content.textProperties.font = .preferredFont(forTextStyle: .body)
-        content.textProperties.color = .label
-        content.textProperties.numberOfLines = 2
-        content.secondaryTextProperties.font = .preferredFont(forTextStyle: .footnote)
-        content.secondaryTextProperties.color = .secondaryLabel
-        content.secondaryTextProperties.numberOfLines = 2
-        content.imageProperties.preferredSymbolConfiguration = UIImage.SymbolConfiguration(
-            pointSize: iconSize,
-            weight: .regular
-        )
-        content.imageProperties.tintColor = .secondaryLabel
-        content.imageToTextPadding = iconSpacing
-    }
-
-    static func applyCellStyle(_ cell: UITableViewCell) {
-        cell.backgroundColor = .secondarySystemGroupedBackground
-        cell.preservesSuperviewLayoutMargins = true
-        cell.contentView.preservesSuperviewLayoutMargins = true
-        cell.directionalLayoutMargins = NSDirectionalEdgeInsets(
-            top: 11,
-            leading: horizontalMargin,
-            bottom: 11,
-            trailing: horizontalMargin
-        )
-        let selectedBackground = UIView()
-        selectedBackground.backgroundColor = .tertiarySystemFill
-        cell.selectedBackgroundView = selectedBackground
-    }
-
-    static func applyHeaderFooterStyle(_ view: UIView) {
-        guard let headerFooter = view as? UITableViewHeaderFooterView else { return }
-        headerFooter.textLabel?.font = .preferredFont(forTextStyle: .footnote)
-        headerFooter.textLabel?.textColor = .secondaryLabel
-        headerFooter.textLabel?.numberOfLines = 0
-    }
+    guard let name = item.avatarName else { return nil }
+    return nativeInitialsAvatarUIImage(name: name, diameter: nativeRowAvatarDiameter)?
+        .withRenderingMode(.alwaysOriginal)
 }
 
-
+/// VoiceOver otherwise leads with the SF Symbol's generated description
+/// ("Paint palette", "trash") instead of the row's title.
+private func applyTextAccessibilityLabel(
+    to cell: UITableViewCell,
+    from content: UIListContentConfiguration
+) {
+    cell.accessibilityLabel = [content.text, content.secondaryText]
+        .compactMap { $0 }
+        .filter { !$0.isEmpty }
+        .joined(separator: ", ")
+}
 
 private final class NativeAvatarView: UIView {
     private let imageView = UIImageView()
     private let initialsLabel = UILabel()
+    private let imageGeneration = NativeAvatarSelectionGeneration()
+    private var imageLoadToken: NativeSheetImageLoadToken?
 
     init(profile: NativeSheetProfile, diameter: CGFloat = 88) {
         super.init(frame: .zero)
@@ -5322,13 +7041,13 @@ private final class NativeAvatarView: UIView {
         heightAnchor.constraint(equalToConstant: diameter).isActive = true
         layer.cornerRadius = diameter / 2
         clipsToBounds = true
-        backgroundColor = .secondarySystemGroupedBackground
+        backgroundColor = NativeSheetTheme.shared.surface
 
         initialsLabel.text = profile.initials
         let fontStyle: UIFont.TextStyle = diameter >= 96 ? .largeTitle : .title2
         initialsLabel.font = .preferredFont(forTextStyle: fontStyle)
         initialsLabel.adjustsFontForContentSizeCategory = true
-        initialsLabel.textColor = .secondaryLabel
+        initialsLabel.textColor = NativeSheetTheme.shared.secondaryForeground
         initialsLabel.textAlignment = .center
         initialsLabel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(initialsLabel)
@@ -5356,31 +7075,55 @@ private final class NativeAvatarView: UIView {
         nil
     }
 
+    deinit {
+        imageLoadToken?.cancel()
+    }
+
     func setPickedPreview(_ image: UIImage?) {
+        imageLoadToken?.cancel()
+        imageLoadToken = nil
+        imageGeneration.invalidate()
         if let image {
-            imageView.image = image
-            imageView.tintColor = nil
-            imageView.contentMode = .scaleAspectFill
-            imageView.isHidden = false
-            initialsLabel.isHidden = true
+            applyNativeAvatarImage(
+                image,
+                isTemplate: false,
+                to: imageView,
+                initialsLabel: initialsLabel
+            )
         }
     }
 
     func showRemovedPlaceholder() {
+        imageLoadToken?.cancel()
+        imageLoadToken = nil
+        imageGeneration.invalidate()
         let img = UIImage(systemName: "person.crop.circle.fill")?
             .withRenderingMode(.alwaysTemplate)
         imageView.image = img
-        imageView.tintColor = .tertiaryLabel
+        imageView.tintColor = NativeSheetTheme.shared.icon
         imageView.contentMode = .scaleAspectFit
         imageView.isHidden = false
         initialsLabel.isHidden = true
     }
 
     private func loadImage(profile: NativeSheetProfile) {
-        if let avatarData = profile.avatarData,
-           let image = UIImage(data: avatarData) {
-            imageView.image = image
-            imageView.isHidden = false
+        imageLoadToken?.cancel()
+        imageLoadToken = nil
+        let generation = imageGeneration.begin()
+        if let avatarData = profile.avatarData {
+            imageLoadToken = NativeSheetImageLoader.load(
+                data: avatarData,
+                targetPixelSize: 408
+            ) { [weak self] image in
+                guard let self,
+                      self.imageGeneration.isCurrent(generation) else { return }
+                applyNativeAvatarImage(
+                    image,
+                    isTemplate: profile.avatarIsTemplate,
+                    to: self.imageView,
+                    initialsLabel: self.initialsLabel
+                )
+            }
             return
         }
 
@@ -5388,9 +7131,24 @@ private final class NativeAvatarView: UIView {
               !avatarUrl.isEmpty else {
             return
         }
-        NativeSheetImageLoader.load(rawUrl: avatarUrl, headers: profile.avatarHeaders) { [weak self] image in
-            self?.imageView.image = image
-            self?.imageView.isHidden = false
+        // Dart builds nonempty avatar headers only for URLs on the active
+        // server origin (see imageUrlIsServerOrigin), so the avatar URL itself
+        // is the origin these credentials were issued for. Cross-origin
+        // redirects still drop the request entirely.
+        imageLoadToken = NativeSheetImageLoader.load(
+            rawUrl: avatarUrl,
+            headers: profile.avatarHeaders,
+            trustedServerOriginURL: URL(string: avatarUrl),
+            targetPixelSize: 408
+        ) { [weak self] image in
+            guard let self,
+                  self.imageGeneration.isCurrent(generation) else { return }
+            applyNativeAvatarImage(
+                image,
+                isTemplate: profile.avatarIsTemplate,
+                to: self.imageView,
+                initialsLabel: self.initialsLabel
+            )
         }
     }
 }

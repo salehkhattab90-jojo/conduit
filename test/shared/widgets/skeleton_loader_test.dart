@@ -1,5 +1,5 @@
 import 'package:conduit/shared/widgets/skeleton_loader.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -23,7 +23,9 @@ void main() {
       expect(container.constraints?.maxHeight, 20);
     });
 
-    testWidgets('animation is running after pump', (tester) async {
+    testWidgets('animated placeholder pumps frames without errors', (
+      tester,
+    ) async {
       await tester.pumpWidget(
         const MaterialApp(
           home: Scaffold(body: SkeletonLoader(width: 100, height: 16)),
@@ -38,26 +40,37 @@ void main() {
       expect(find.byType(SkeletonLoader), findsOneWidget);
       expect(tester.takeException(), isNull);
     });
-  });
 
-  group('SkeletonChatMessage', () {
-    testWidgets('renders without errors', (tester) async {
+    testWidgets('reduced motion renders a static placeholder', (tester) async {
       await tester.pumpWidget(
-        const MaterialApp(home: Scaffold(body: SkeletonChatMessage())),
+        const MaterialApp(
+          home: Scaffold(
+            body: MediaQuery(
+              data: MediaQueryData(disableAnimations: true),
+              child: SkeletonLoader(width: 100, height: 16),
+            ),
+          ),
+        ),
       );
 
-      expect(find.byType(SkeletonChatMessage), findsOneWidget);
-      expect(tester.takeException(), isNull);
-    });
-  });
-
-  group('SkeletonListItem', () {
-    testWidgets('renders without errors', (tester) async {
-      await tester.pumpWidget(
-        const MaterialApp(home: Scaffold(body: SkeletonListItem())),
+      expect(
+        find.descendant(
+          of: find.byType(SkeletonLoader),
+          matching: find.byType(AnimatedBuilder),
+        ),
+        findsNothing,
       );
+      final container = tester.widget<Container>(
+        find.descendant(
+          of: find.byType(SkeletonLoader),
+          matching: find.byType(Container),
+        ),
+      );
+      final decoration = container.decoration! as BoxDecoration;
+      expect(decoration.color, isNotNull);
+      expect(decoration.gradient, isNull);
 
-      expect(find.byType(SkeletonListItem), findsOneWidget);
+      await tester.pump(const Duration(seconds: 1));
       expect(tester.takeException(), isNull);
     });
   });

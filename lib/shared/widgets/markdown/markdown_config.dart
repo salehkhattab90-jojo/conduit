@@ -1,34 +1,416 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:cached_network_image_ce/cached_network_image.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_highlight/themes/atom-one-dark.dart';
 import 'package:flutter_highlight/themes/github.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:highlight/highlight.dart' show Node, highlight;
+import 'package:mermaid_core/mermaid_core.dart' as mermaid_core;
+import 'package:mermaid_flutter/mermaid_flutter.dart' as mermaid_flutter;
 
 import 'package:conduit/l10n/app_localizations.dart';
 
 import '../web_content_embed.dart';
 import '../webview_content_height.dart';
+import '../horizontal_gesture_ownership.dart';
 import '../themed_sheets.dart';
 import '../../theme/color_tokens.dart';
 import '../../theme/theme_extensions.dart';
 import 'renderer/markdown_style.dart';
+
 import 'package:conduit/core/network/self_signed_image_cache_manager.dart';
 import 'package:conduit/core/network/image_header_utils.dart';
+import 'package:conduit_core/utils/debug_logger.dart';
+import 'package:conduit/shared/services/raster_media_policy.dart';
 
 typedef MarkdownLinkTapCallback = void Function(String url, String title);
 
 const _chartPreviewMinHeight = 320.0;
 const _mermaidPreviewMinHeight = 360.0;
 const _embeddedPreviewMaxHeight = 1200.0;
+const _maxConcurrentEmbeddedPreviews = 2;
+
+final _embeddedPreviewBudget = _EmbeddedPreviewBudget(
+  maxActive: _maxConcurrentEmbeddedPreviews,
+);
+final Set<_DeferredEmbeddedPreviewState> _embeddedPreviewRegistry =
+    HashSet<_DeferredEmbeddedPreviewState>.identity();
+bool _embeddedPreviewRegistryCheckScheduled = false;
+
+/// Re-evaluates every retained preview after markdown registry/layout changes.
+///
+/// Scroll listeners cover ordinary viewport movement, but inserting/removing a
+/// markdown block can move sibling previews without changing scroll offset.
+void scheduleEmbeddedPreviewEligibilityRecheck() {
+  if (_embeddedPreviewRegistryCheckScheduled ||
+      _embeddedPreviewRegistry.isEmpty) {
+    return;
+  }
+  _embeddedPreviewRegistryCheckScheduled = true;
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    _embeddedPreviewRegistryCheckScheduled = false;
+    for (final preview in _embeddedPreviewRegistry.toList(growable: false)) {
+      if (preview.mounted) {
+        preview._updateViewportEligibility();
+      }
+    }
+  });
+  WidgetsBinding.instance.ensureVisualUpdate();
+}
+
+@visibleForTesting
+void debugResetEmbeddedPreviewBudget() => _embeddedPreviewBudget.reset();
+
+@visibleForTesting
+void debugRequestEmbeddedPreviewBudget(
+  Object token, {
+  required bool eligible,
+  bool prioritize = false,
+}) {
+  _embeddedPreviewBudget.update(token, eligible: eligible);
+  if (prioritize) {
+    _embeddedPreviewBudget.prioritize(token);
+  }
+}
+
+@visibleForTesting
+bool debugHasEmbeddedPreviewBudget(Object token) =>
+    _embeddedPreviewBudget.isActive(token);
+
+@visibleForTesting
+int get debugActiveEmbeddedPreviewCount => _embeddedPreviewBudget.activeCount;
+
+class _EmbeddedPreviewBudget extends ChangeNotifier {
+  _EmbeddedPreviewBudget({required this.maxActive});
+
+  final int maxActive;
+  final LinkedHashSet<Object> _eligible = LinkedHashSet<Object>.identity();
+  final Set<Object> _active = HashSet<Object>.identity();
+
+  int get activeCount => _active.length;
+
+  bool isActive(Object token) => _active.contains(token);
+
+  void update(Object token, {required bool eligible}) {
+    final changed = eligible ? _eligible.add(token) : _eligible.remove(token);
+    if (changed) {
+      _recompute();
+      scheduleEmbeddedPreviewEligibilityRecheck();
+    }
+  }
+
+  void prioritize(Object token) {
+    if (!_eligible.contains(token)) {
+      _eligible.add(token);
+    }
+    final ordered = <Object>[
+      token,
+      ..._eligible.where((item) => item != token),
+    ];
+    _eligible
+      ..clear()
+      ..addAll(ordered);
+    _recompute();
+    scheduleEmbeddedPreviewEligibilityRecheck();
+  }
+
+  void reset() {
+    if (_eligible.isEmpty && _active.isEmpty) {
+      return;
+    }
+    _eligible.clear();
+    _active.clear();
+    notifyListeners();
+    scheduleEmbeddedPreviewEligibilityRecheck();
+  }
+
+  void _recompute() {
+    final next = HashSet<Object>.identity()..addAll(_eligible.take(maxActive));
+    if (setEquals(next, _active)) {
+      return;
+    }
+    _active
+      ..clear()
+      ..addAll(next);
+    notifyListeners();
+  }
+}
+
+class _DeferredEmbeddedPreview extends StatefulWidget {
+  const _DeferredEmbeddedPreview({
+    required this.placeholderHeight,
+    required this.loadActionLabel,
+    required this.icon,
+    required this.builder,
+    this.requiresExplicitActivation = false,
+    this.activationIdentity,
+  });
+
+  final double placeholderHeight;
+  final String loadActionLabel;
+  final IconData icon;
+  final WidgetBuilder builder;
+  final bool requiresExplicitActivation;
+  final Object? activationIdentity;
+
+  @override
+  State<_DeferredEmbeddedPreview> createState() =>
+      _DeferredEmbeddedPreviewState();
+}
+
+class _DeferredEmbeddedPreviewState extends State<_DeferredEmbeddedPreview> {
+  final Object _budgetToken = Object();
+  final GlobalKey _previewKey = GlobalKey();
+  ScrollPosition? _position;
+  bool _viewportCheckScheduled = false;
+  bool _measurementScheduled = false;
+  bool _nearViewport = false;
+  bool _routeVisible = true;
+  bool _eligible = false;
+  bool _explicitlyActivated = false;
+  bool _lastActive = false;
+  double? _lastMeasuredHeight;
+
+  bool get _active => _embeddedPreviewBudget.isActive(_budgetToken);
+
+  @override
+  void initState() {
+    super.initState();
+    _embeddedPreviewRegistry.add(this);
+    _embeddedPreviewBudget.addListener(_handleBudgetChanged);
+    scheduleEmbeddedPreviewEligibilityRecheck();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Register a dependency on the enclosing route so covered chat pages stop
+    // competing with the current route for the global platform-view budget.
+    _routeVisible =
+        TickerMode.valuesOf(context).enabled &&
+        (ModalRoute.isCurrentOf(context) ?? true);
+    final nextPosition = Scrollable.maybeOf(context)?.position;
+    if (!identical(nextPosition, _position)) {
+      _position?.removeListener(_scheduleViewportCheck);
+      _position?.isScrollingNotifier.removeListener(_scheduleViewportCheck);
+      _position = nextPosition;
+      _position?.addListener(_scheduleViewportCheck);
+      // Hydration waits for the scroll to rest, so the transition back to
+      // idle must re-run eligibility even though it changes no offset.
+      _position?.isScrollingNotifier.addListener(_scheduleViewportCheck);
+    }
+    _scheduleViewportCheck();
+  }
+
+  @override
+  void didUpdateWidget(covariant _DeferredEmbeddedPreview oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.requiresExplicitActivation &&
+        widget.activationIdentity != oldWidget.activationIdentity) {
+      _explicitlyActivated = false;
+      _lastMeasuredHeight = null;
+      _embeddedPreviewBudget.update(_budgetToken, eligible: false);
+    }
+    scheduleEmbeddedPreviewEligibilityRecheck();
+  }
+
+  @override
+  void dispose() {
+    _position?.removeListener(_scheduleViewportCheck);
+    _position?.isScrollingNotifier.removeListener(_scheduleViewportCheck);
+    _embeddedPreviewRegistry.remove(this);
+    _embeddedPreviewBudget.removeListener(_handleBudgetChanged);
+    final budgetToken = _budgetToken;
+    // Removing this token can activate a waiting sibling and synchronously
+    // notify its State. Element disposal happens inside finalizeTree, where a
+    // sibling setState is illegal, so release the global budget post-frame.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _embeddedPreviewBudget.update(budgetToken, eligible: false);
+    });
+    WidgetsBinding.instance.ensureVisualUpdate();
+    super.dispose();
+  }
+
+  void _handleBudgetChanged() {
+    final nextActive = _active;
+    if (!mounted || nextActive == _lastActive) return;
+    _lastActive = nextActive;
+    setState(() {});
+  }
+
+  void _activate() {
+    if (widget.requiresExplicitActivation) {
+      _explicitlyActivated = true;
+      _embeddedPreviewBudget.update(_budgetToken, eligible: _eligible);
+    }
+    _embeddedPreviewBudget.prioritize(_budgetToken);
+  }
+
+  void _scheduleMeasurement() {
+    if (_measurementScheduled || !mounted) return;
+    _measurementScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _measurementScheduled = false;
+      if (!mounted) return;
+      final renderObject = _previewKey.currentContext?.findRenderObject();
+      if (renderObject is! RenderBox || !renderObject.hasSize) return;
+      final height = renderObject.size.height;
+      if (height.isFinite && height > 0) {
+        _lastMeasuredHeight = height;
+      }
+    });
+  }
+
+  void _scheduleViewportCheck() {
+    if (_viewportCheckScheduled || !mounted) {
+      return;
+    }
+    _viewportCheckScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _viewportCheckScheduled = false;
+      if (mounted) {
+        _updateViewportEligibility();
+      }
+    });
+  }
+
+  void _updateViewportEligibility() {
+    final renderObject = context.findRenderObject();
+    if (renderObject is! RenderBox || !renderObject.hasSize) {
+      return;
+    }
+    final margin = widget.placeholderHeight * 0.75;
+    final nextNearViewport = _isNearEnclosingViewport(
+      renderObject,
+      margin: margin,
+    );
+    // Platform-view creation is a guaranteed hitch mid-fling. A preview that
+    // is not yet hydrated keeps its fixed placeholder while the enclosing
+    // scrollable is moving; the notifier's return to idle re-runs this check
+    // and hydrates at rest. Already-active previews keep their eligibility so
+    // motion never unmounts a live platform view.
+    final scrollAtRest = !(_position?.isScrollingNotifier.value ?? false);
+    final nextEligible =
+        nextNearViewport && _routeVisible && (scrollAtRest || _active);
+    if (_nearViewport == nextNearViewport && _eligible == nextEligible) {
+      return;
+    }
+    _nearViewport = nextNearViewport;
+    _eligible = nextEligible;
+    _embeddedPreviewBudget.update(
+      _budgetToken,
+      eligible:
+          nextEligible &&
+          (!widget.requiresExplicitActivation || _explicitlyActivated),
+    );
+  }
+
+  bool _isNearEnclosingViewport(RenderBox target, {required double margin}) {
+    final position = _position;
+    final viewport = RenderAbstractViewport.maybeOf(target);
+    final RenderBox? viewportRenderObject = viewport is RenderBox
+        ? viewport as RenderBox
+        : null;
+    if (position != null &&
+        position.hasViewportDimension &&
+        viewportRenderObject != null &&
+        viewportRenderObject.hasSize) {
+      // Compare in the viewport's own coordinate system. Global screen bounds
+      // incorrectly admit previews clipped below a short/nested scroll view.
+      final targetRect = MatrixUtils.transformRect(
+        target.getTransformTo(viewportRenderObject),
+        target.paintBounds,
+      );
+      final viewportRect = viewportRenderObject.paintBounds;
+      return _rectIsNearViewport(
+        targetRect,
+        viewportRect,
+        axis: axisDirectionToAxis(position.axisDirection),
+        margin: margin,
+      );
+    }
+
+    // Non-scrollable markdown can still contain a preview (for example in a
+    // fixed sheet). Fall back to the visible media rectangle, while retaining
+    // cross-axis clipping instead of checking vertical coordinates alone.
+    final targetRect = MatrixUtils.transformRect(
+      target.getTransformTo(null),
+      target.paintBounds,
+    );
+    final viewportRect = Offset.zero & MediaQuery.sizeOf(context);
+    return _rectIsNearViewport(
+      targetRect,
+      viewportRect,
+      axis: Axis.vertical,
+      margin: margin,
+    );
+  }
+
+  bool _rectIsNearViewport(
+    Rect target,
+    Rect viewport, {
+    required Axis axis,
+    required double margin,
+  }) {
+    if (axis == Axis.vertical) {
+      return target.bottom >= viewport.top - margin &&
+          target.top <= viewport.bottom + margin &&
+          target.right >= viewport.left &&
+          target.left <= viewport.right;
+    }
+    return target.right >= viewport.left - margin &&
+        target.left <= viewport.right + margin &&
+        target.bottom >= viewport.top &&
+        target.top <= viewport.bottom;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Ancestor markdown/layout rebuilds can move this preview while the scroll
+    // position remains unchanged. Recheck against its post-layout geometry.
+    _scheduleViewportCheck();
+    // Platform views are intentionally absent in widget tests; keeping
+    // non-sensitive previews in the tree preserves structural assertions.
+    // Explicitly activated previews still require the same user action in tests.
+    if (_active ||
+        (_isRunningInWidgetTest() && !widget.requiresExplicitActivation)) {
+      return NotificationListener<SizeChangedLayoutNotification>(
+        onNotification: (_) {
+          _scheduleMeasurement();
+          return false;
+        },
+        child: SizeChangedLayoutNotifier(
+          child: SizedBox(
+            key: _previewKey,
+            width: double.infinity,
+            child: widget.builder(context),
+          ),
+        ),
+      );
+    }
+    return SizedBox(
+      height: _lastMeasuredHeight ?? widget.placeholderHeight,
+      width: double.infinity,
+      child: Center(
+        child: TextButton.icon(
+          onPressed: _activate,
+          icon: Icon(widget.icon),
+          label: Text(widget.loadActionLabel),
+        ),
+      ),
+    );
+  }
+}
 
 bool _isRunningInWidgetTest() {
   return WidgetsBinding.instance.runtimeType.toString().contains(
@@ -156,11 +538,18 @@ class ConduitMarkdown {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          WebContentEmbed(
-            source: code,
-            deferUntilExpanded: false,
-            initiallyExpanded: true,
-            previewTitle: _previewTitleForLanguage(language),
+          _DeferredEmbeddedPreview(
+            placeholderHeight: _mermaidPreviewMinHeight,
+            loadActionLabel: 'Load SVG preview',
+            icon: Icons.image_outlined,
+            requiresExplicitActivation: true,
+            activationIdentity: code,
+            builder: (_) => WebContentEmbed(
+              source: code,
+              deferUntilExpanded: false,
+              initiallyExpanded: true,
+              previewTitle: _previewTitleForLanguage(language),
+            ),
           ),
         ],
       ),
@@ -179,69 +568,29 @@ class ConduitMarkdown {
       return;
     }
 
-    return ThemedSheets.showCustom<void>(
+    return ThemedSheets.showRoundedPage<void>(
       context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
       builder: (sheetContext) {
         final markdownStyle = ConduitMarkdownStyle.fromTheme(sheetContext);
-        return SizedBox(
-          height: MediaQuery.sizeOf(sheetContext).height,
+        return SizedBox.expand(
           child: ColoredBox(
             color: theme.surfaceBackground,
             child: Column(
               children: [
-                SafeArea(
-                  bottom: false,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.only(top: Spacing.sm),
-                        child: Container(
-                          width: 36,
-                          height: 4,
-                          decoration: BoxDecoration(
-                            color: theme.dividerColor.withValues(alpha: 0.4),
-                            borderRadius: BorderRadius.circular(2),
-                          ),
-                        ),
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(
-                          Spacing.lg,
-                          Spacing.sm,
-                          Spacing.lg,
-                          Spacing.sm,
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(
-                              Icons.visibility_outlined,
-                              size: 18,
-                              color: theme.textSecondary,
-                            ),
-                            const SizedBox(width: Spacing.sm),
-                            Expanded(
-                              child: Text(
-                                title,
-                                overflow: TextOverflow.ellipsis,
-                                style: markdownStyle.sheetTitle,
-                              ),
-                            ),
-                            SheetCloseButton(
-                              onPressed: () => Navigator.of(sheetContext).pop(),
-                              color: theme.textSecondary,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
+                ConduitModalSheetHeader(
+                  leading: Icon(
+                    Icons.visibility_outlined,
+                    size: 18,
+                    color: theme.textSecondary,
                   ),
-                ),
-                Divider(
-                  height: 1,
-                  color: theme.dividerColor.withValues(alpha: 0.3),
+                  title: title,
+                  titleStyle: markdownStyle.sheetTitle,
+                  onClose: () => Navigator.of(sheetContext).pop(),
+                  onVerticalDragEnd: (details) {
+                    if ((details.primaryVelocity ?? 0) > 500) {
+                      Navigator.of(sheetContext).pop();
+                    }
+                  },
                 ),
                 Expanded(
                   child: WebContentEmbed(
@@ -333,14 +682,23 @@ class ConduitMarkdown {
 
       final base64String = dataUrl.substring(commaIndex + 1);
       final imageBytes = base64.decode(base64String);
+      final decodeTarget = RasterMediaPolicy.forBox(
+        context,
+        profile: RasterDecodeProfile.inline,
+        logicalWidth: math.min(MediaQuery.sizeOf(context).width, 480),
+        logicalHeight: 480,
+      );
 
       return Container(
         margin: const EdgeInsets.symmetric(vertical: Spacing.sm),
         constraints: const BoxConstraints(maxWidth: 480, maxHeight: 480),
         child: ClipRRect(
           borderRadius: BorderRadius.circular(AppBorderRadius.md),
-          child: Image.memory(
-            imageBytes,
+          child: Image(
+            image: RasterMediaPolicy.resizeProvider(
+              MemoryImage(imageBytes),
+              decodeTarget,
+            ),
             fit: BoxFit.contain,
             errorBuilder: (context, error, stackTrace) {
               return buildImageError(context, theme);
@@ -358,37 +716,73 @@ class ConduitMarkdown {
     BuildContext context,
     ConduitThemeExtension theme,
   ) {
-    // Read headers and optional self-signed cache manager from Riverpod
-    final container = ProviderScope.containerOf(context, listen: false);
-    final headers = buildImageHeadersForUrlFromContainer(container, url);
-    final cacheManager = container.read(selfSignedImageCacheManagerProvider);
+    // A markdown document can remain mounted across an account transition.
+    // Watch ownership here so both stale credentials and the URL cache identity
+    // are replaced without requiring the whole document to rebuild.
+    return Consumer(
+      builder: (context, ref, child) {
+        final headers = buildImageHeadersForUrlFromWidgetRef(ref, url);
+        final cacheKey = buildImageCacheKeyForUrlFromWidgetRef(ref, url);
+        final cacheManager = ref.watch(selfSignedImageCacheManagerProvider);
+        final decodeTarget = RasterMediaPolicy.forBox(
+          context,
+          profile: RasterDecodeProfile.inline,
+          logicalWidth: math.min(MediaQuery.sizeOf(context).width, 480),
+          logicalHeight: 480,
+        );
 
-    return CachedNetworkImage(
-      imageUrl: url,
-      cacheManager: cacheManager,
-      httpHeaders: headers,
-      placeholder: (context, _) => Container(
-        height: 200,
-        decoration: BoxDecoration(
-          color: theme.surfaceBackground.withValues(alpha: 0.5),
-          borderRadius: BorderRadius.circular(AppBorderRadius.md),
-        ),
-        child: Center(
-          child: CircularProgressIndicator(
-            color: theme.loadingIndicator,
-            strokeWidth: 2,
+        final placeholder = Container(
+          width: double.infinity,
+          decoration: BoxDecoration(
+            color: theme.surfaceContainer.withValues(alpha: 0.68),
           ),
-        ),
-      ),
-      errorBuilder: (context, error, stackTrace) =>
-          buildImageError(context, theme),
-      imageBuilder: (context, imageProvider) => Container(
-        margin: const EdgeInsets.symmetric(vertical: Spacing.sm),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(AppBorderRadius.md),
-          image: DecorationImage(image: imageProvider, fit: BoxFit.contain),
-        ),
-      ),
+          child: Center(
+            child: SizedBox.square(
+              dimension: IconSize.medium,
+              child: CircularProgressIndicator(
+                color: theme.loadingIndicator,
+                strokeWidth: 2,
+              ),
+            ),
+          ),
+        );
+        return Container(
+          margin: const EdgeInsets.symmetric(vertical: Spacing.sm),
+          constraints: const BoxConstraints(maxWidth: 480, maxHeight: 480),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(AppBorderRadius.md),
+            child: Image(
+              image: RasterMediaPolicy.resizeProvider(
+                CachedNetworkImageProvider(
+                  url,
+                  cacheKey: cacheKey,
+                  cacheManager: cacheManager,
+                  headers: headers,
+                ),
+                decodeTarget,
+              ),
+              width: double.infinity,
+              fit: BoxFit.contain,
+              frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+                final loaded = wasSynchronouslyLoaded || frame != null;
+                if (!loaded) {
+                  return AspectRatio(aspectRatio: 16 / 9, child: placeholder);
+                }
+                return AnimatedOpacity(
+                  opacity: 1,
+                  duration: context.motionDuration(
+                    AnimationDuration.microInteraction,
+                  ),
+                  curve: Curves.easeOutCubic,
+                  child: child,
+                );
+              },
+              errorBuilder: (context, error, stackTrace) =>
+                  Center(child: buildImageError(context, theme)),
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -440,6 +834,7 @@ class ConduitMarkdown {
     required String code,
   }) {
     final tokens = context.colorTokens;
+    final l10n = AppLocalizations.of(context);
     return Container(
       margin: const EdgeInsets.symmetric(vertical: Spacing.sm),
       decoration: BoxDecoration(
@@ -452,13 +847,72 @@ class ConduitMarkdown {
       width: double.infinity,
       child: ClipRRect(
         borderRadius: BorderRadius.circular(AppBorderRadius.sm),
-        child: MermaidDiagram(
-          code: code,
-          brightness: materialTheme.brightness,
-          colorScheme: materialTheme.colorScheme,
-          tokens: tokens,
+        child: _DeferredEmbeddedPreview(
+          placeholderHeight: _mermaidPreviewMinHeight,
+          loadActionLabel: l10n?.loadMermaidPreview ?? 'Load Mermaid preview',
+          icon: Icons.account_tree_outlined,
+          builder: (_) => MermaidDiagram(
+            code: code,
+            brightness: materialTheme.brightness,
+            colorScheme: materialTheme.colorScheme,
+            tokens: tokens,
+            onRequestFullscreen: (light, dark) =>
+                showMermaidPreviewSheet(context, light: light, dark: dark),
+          ),
         ),
       ),
+    );
+  }
+
+  static Future<void> showMermaidPreviewSheet(
+    BuildContext context, {
+    required MermaidRenderResult light,
+    required MermaidRenderResult dark,
+  }) async {
+    if (!context.mounted) {
+      return;
+    }
+
+    return ThemedSheets.showRoundedPage<void>(
+      context: context,
+      builder: (sheetContext) {
+        final conduitTheme = sheetContext.conduitTheme;
+        final markdownStyle = ConduitMarkdownStyle.fromTheme(sheetContext);
+        final diagram = Theme.of(sheetContext).brightness == Brightness.dark
+            ? dark
+            : light;
+        return SizedBox.expand(
+          child: ColoredBox(
+            color: conduitTheme.surfaceBackground,
+            child: Column(
+              children: [
+                ConduitModalSheetHeader(
+                  leading: Icon(
+                    Icons.account_tree_outlined,
+                    size: 18,
+                    color: conduitTheme.textSecondary,
+                  ),
+                  title: 'Mermaid Preview',
+                  titleStyle: markdownStyle.sheetTitle,
+                  onClose: () => Navigator.of(sheetContext).pop(),
+                  closeTooltip: 'Close Mermaid preview',
+                  onVerticalDragEnd: (details) {
+                    if ((details.primaryVelocity ?? 0) > 500) {
+                      Navigator.of(sheetContext).pop();
+                    }
+                  },
+                ),
+                Expanded(
+                  child: _MermaidSheetCanvas(
+                    svg: diagram.svg,
+                    sceneSize: diagram.sceneSize,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -550,6 +1004,7 @@ class ConduitMarkdown {
     required String htmlContent,
   }) {
     final tokens = context.colorTokens;
+    final l10n = AppLocalizations.of(context);
     return Container(
       margin: const EdgeInsets.symmetric(vertical: Spacing.sm),
       decoration: BoxDecoration(
@@ -562,11 +1017,16 @@ class ConduitMarkdown {
       width: double.infinity,
       child: ClipRRect(
         borderRadius: BorderRadius.circular(AppBorderRadius.sm),
-        child: ChartJsDiagram(
-          htmlContent: htmlContent,
-          brightness: materialTheme.brightness,
-          colorScheme: materialTheme.colorScheme,
-          tokens: tokens,
+        child: _DeferredEmbeddedPreview(
+          placeholderHeight: _chartPreviewMinHeight,
+          loadActionLabel: l10n?.loadChartPreview ?? 'Load chart preview',
+          icon: Icons.bar_chart_outlined,
+          builder: (_) => ChartJsDiagram(
+            htmlContent: htmlContent,
+            brightness: materialTheme.brightness,
+            colorScheme: materialTheme.colorScheme,
+            tokens: tokens,
+          ),
         ),
       ),
     );
@@ -641,31 +1101,145 @@ class _HighlightCacheKey {
 }
 
 class _HighlightSpanCache {
-  static const int maxEntries = 48;
+  // Sized past one transcript's worth of code blocks: an entry is a small
+  // span list, and a fling that cycles the cache re-runs highlight.parse.
+  static const int maxEntries = 128;
 
   final LinkedHashMap<_HighlightCacheKey, List<TextSpan>> _cache =
       LinkedHashMap<_HighlightCacheKey, List<TextSpan>>();
+
+  List<TextSpan>? peek(_HighlightCacheKey key) {
+    final cached = _cache.remove(key);
+    if (cached == null) return null;
+    _cache[key] = cached;
+    return cached;
+  }
+
+  void store(_HighlightCacheKey key, List<TextSpan> spans) {
+    _cache.remove(key);
+    if (_cache.length >= maxEntries) {
+      _cache.remove(_cache.keys.first);
+    }
+    _cache[key] = spans;
+  }
 
   List<TextSpan> resolve(
     _HighlightCacheKey key,
     List<TextSpan> Function() build,
   ) {
-    final cached = _cache.remove(key);
-    if (cached != null) {
-      _cache[key] = cached;
-      return cached;
-    }
-
+    final cached = peek(key);
+    if (cached != null) return cached;
     final spans = build();
-    if (_cache.length >= maxEntries) {
-      _cache.remove(_cache.keys.first);
-    }
-    _cache[key] = spans;
+    store(key, spans);
     return spans;
   }
 }
 
-class _HighlightedCodeText extends StatelessWidget {
+/// Runs `highlight.parse` off the UI isolate, one request at a time.
+///
+/// `highlight.parse` is regex-heavy and previously ran synchronously inside
+/// the first build of every code block — a guaranteed frame spike when a
+/// code-bearing row entered the cache extent mid-fling. Node trees are not
+/// isolate-sendable with their styles attached, so the worker returns a plain
+/// nested list and the caller applies the theme on the UI side (cheap object
+/// construction).
+class _HighlightParseQueue {
+  final Map<String, Future<List<Object?>?>> _pending =
+      <String, Future<List<Object?>?>>{};
+  Future<void> _tail = Future<void>.value();
+
+  Future<List<Object?>?> parse(String language, String code) {
+    // Length-prefixing the language makes the concatenated key unambiguous:
+    // without it, ("dart", "xcode") and ("dartx", "code") would collide.
+    final key = '${language.length}:$language$code';
+    final existing = _pending[key];
+    if (existing != null) return existing;
+    final request = _tail.then(
+      (_) => compute(_highlightParseWorker, <String, String>{
+        'language': language,
+        'code': code,
+      }),
+    );
+    _tail = request.then<void>((_) {}, onError: (_) {});
+    _pending[key] = request;
+    request.whenComplete(() {
+      _pending.remove(key);
+    });
+    return request;
+  }
+}
+
+final _highlightParseQueue = _HighlightParseQueue();
+
+/// Top-level worker for [compute]: parse and encode as sendable nested lists
+/// of `[value, className, children]`.
+///
+/// Language registration is isolate-safe by construction: `highlight` is
+/// package:highlight's top-level `final Highlight()..registerLanguages(
+/// allLanguages)`, a lazy static that re-initializes with the full language
+/// set on first access in ANY isolate — nothing depends on UI-isolate-only
+/// registration. Null (unknown language, malformed source) falls back to
+/// plain monospace at the call site.
+List<Object?>? _highlightParseWorker(Map<String, String> payload) {
+  try {
+    final nodes = highlight
+        .parse(payload['code']!, language: payload['language']!)
+        .nodes;
+    if (nodes == null || nodes.isEmpty) return null;
+    return nodes.map(_encodeHighlightNode).toList(growable: false);
+  } catch (error) {
+    // The caller renders plain text on null; surface the cause in debug
+    // builds so a broken language pack doesn't silently disable
+    // highlighting.
+    DebugLogger.warning(
+      'highlight-parse-failed',
+      scope: 'markdown/highlight',
+      data: {
+        'language': payload['language'],
+        'codeLength': payload['code']?.length,
+        'error': error.toString(),
+      },
+    );
+    return null;
+  }
+}
+
+List<Object?> _encodeHighlightNode(Node node) => <Object?>[
+  node.value,
+  node.className,
+  node.children?.map(_encodeHighlightNode).toList(growable: false),
+];
+
+List<TextSpan> _convertEncodedHighlightNodes(
+  List<Object?> encodedNodes,
+  Map<String, TextStyle> theme,
+) {
+  final spans = <TextSpan>[];
+  for (final encoded in encodedNodes) {
+    final node = encoded as List<Object?>;
+    final value = node[0] as String?;
+    final className = node[1] as String?;
+    final children = node[2] as List<Object?>?;
+    if (value != null) {
+      spans.add(
+        className == null
+            ? TextSpan(text: value)
+            : TextSpan(text: value, style: theme[className]),
+      );
+      continue;
+    }
+    if (children == null || children.isEmpty) continue;
+    spans.add(
+      TextSpan(
+        children: _convertEncodedHighlightNodes(children, theme),
+        style: className == null ? null : theme[className],
+      ),
+    );
+  }
+  return spans;
+}
+
+class _HighlightedCodeText extends StatefulWidget {
   const _HighlightedCodeText({
     required this.source,
     required this.language,
@@ -679,6 +1253,10 @@ class _HighlightedCodeText extends StatelessWidget {
   static const _defaultFontColor = Color(0xff000000);
   static const _defaultFontFamily = 'monospace';
 
+  /// At or below this size `highlight.parse` stays synchronous: the parse is
+  /// cheaper than a queue round-trip and small snippets never flash unstyled.
+  static const int _synchronousHighlightCharThreshold = 512;
+
   final String source;
   final String language;
   final Map<String, TextStyle> theme;
@@ -687,26 +1265,87 @@ class _HighlightedCodeText extends StatelessWidget {
   final bool plainText;
 
   @override
+  State<_HighlightedCodeText> createState() => _HighlightedCodeTextState();
+}
+
+class _HighlightedCodeTextState extends State<_HighlightedCodeText> {
+  List<TextSpan>? _spans;
+  _HighlightCacheKey? _spansKey;
+  _HighlightCacheKey? _requestedKey;
+
+  _HighlightCacheKey get _cacheKey => _HighlightCacheKey(
+    language: widget.language,
+    code: widget.source,
+    isDark: widget.isDark,
+  );
+
+  /// Highlighted spans if available now, otherwise null after arranging for
+  /// them to arrive.
+  ///
+  /// Large sources parse on a worker isolate; plain monospace paints in the
+  /// interim. Code lays out in a horizontal scroll view, so the plain and
+  /// highlighted trees (identical text) occupy the same extent and the swap
+  /// is paint-only — no timeline shift mid-scroll.
+  List<TextSpan>? _resolveSpans() {
+    final key = _cacheKey;
+    if (_spans != null && key == _spansKey) {
+      return _spans;
+    }
+    final cached = _highlightSpanCache.peek(key);
+    if (cached != null) {
+      _spans = cached;
+      _spansKey = key;
+      return cached;
+    }
+    // On web `compute` runs on the main thread anyway, so the queue would
+    // only add latency. Widget tests stay synchronous for deterministic pumps.
+    if (widget.source.length <=
+            _HighlightedCodeText._synchronousHighlightCharThreshold ||
+        kIsWeb ||
+        _isRunningInWidgetTest()) {
+      final spans = _buildHighlightedSpans(
+        source: widget.source,
+        language: widget.language,
+        theme: widget.theme,
+      );
+      _highlightSpanCache.store(key, spans);
+      _spans = spans;
+      _spansKey = key;
+      return spans;
+    }
+    if (key != _requestedKey) {
+      _requestedKey = key;
+      unawaited(
+        _highlightParseQueue.parse(widget.language, widget.source).then((
+          encoded,
+        ) {
+          if (!mounted || _cacheKey != key) return;
+          final spans = encoded == null
+              ? <TextSpan>[TextSpan(text: widget.source)]
+              : _convertEncodedHighlightNodes(encoded, widget.theme);
+          _highlightSpanCache.store(key, spans);
+          setState(() {
+            _spans = spans;
+            _spansKey = key;
+          });
+        }),
+      );
+    }
+    return null;
+  }
+
+  @override
   Widget build(BuildContext context) {
     final rootStyle = TextStyle(
-      fontFamily: _defaultFontFamily,
-      color: theme[_rootKey]?.color ?? _defaultFontColor,
-    ).merge(textStyle);
+      fontFamily: _HighlightedCodeText._defaultFontFamily,
+      color:
+          widget.theme[_HighlightedCodeText._rootKey]?.color ??
+          _HighlightedCodeText._defaultFontColor,
+    ).merge(widget.textStyle);
 
-    final children = plainText
-        ? <TextSpan>[TextSpan(text: source)]
-        : _highlightSpanCache.resolve(
-            _HighlightCacheKey(
-              language: language,
-              code: source,
-              isDark: isDark,
-            ),
-            () => _buildHighlightedSpans(
-              source: source,
-              language: language,
-              theme: theme,
-            ),
-          );
+    final children = widget.plainText
+        ? <TextSpan>[TextSpan(text: widget.source)]
+        : _resolveSpans() ?? <TextSpan>[TextSpan(text: widget.source)];
 
     return RichText(
       text: TextSpan(style: rootStyle, children: children),
@@ -799,45 +1438,65 @@ class _CodeBlockBody extends StatefulWidget {
   static const largeJsonPlainPreviewLineThreshold = 60;
   static const largeJsonPlainPreviewCharThreshold = 4000;
 
+  /// Above this size, code renders unhighlighted in any language.
+  /// `highlight.parse` runs synchronously in build; on an expanded block that
+  /// is still streaming it would re-parse the whole source on every flush.
+  // ponytail: hard cap instead of incremental/off-thread highlighting; move
+  // highlighting into the compiler isolate if large code blocks matter.
+  static const largePlainRenderCharThreshold = 50000;
+
   @override
   State<_CodeBlockBody> createState() => _CodeBlockBodyState();
 }
 
 class _CodeBlockBodyState extends State<_CodeBlockBody> {
   bool _isCollapsed = true;
+  String? _linesSource;
+  List<String> _lines = const <String>[];
+
+  List<String> _splitLines() {
+    if (!identical(_linesSource, widget.code)) {
+      _linesSource = widget.code;
+      _lines = widget.code.split('\n');
+    }
+    return _lines;
+  }
 
   @override
   Widget build(BuildContext context) {
-    final lines = widget.code.split('\n');
+    final lines = _splitLines();
     final isCollapsible = lines.length > _CodeBlockBody.collapseThreshold;
     final displayCode = (isCollapsible && _isCollapsed)
         ? lines.take(_CodeBlockBody.previewLines).join('\n')
         : widget.code;
     final hiddenCount = lines.length - _CodeBlockBody.previewLines;
     final renderPlainPreview =
-        _isCollapsed &&
-        widget.highlightLanguage == 'json' &&
-        (lines.length > _CodeBlockBody.largeJsonPlainPreviewLineThreshold ||
-            widget.code.length >
-                _CodeBlockBody.largeJsonPlainPreviewCharThreshold);
+        displayCode.length > _CodeBlockBody.largePlainRenderCharThreshold ||
+        (_isCollapsed &&
+            widget.highlightLanguage == 'json' &&
+            (lines.length > _CodeBlockBody.largeJsonPlainPreviewLineThreshold ||
+                widget.code.length >
+                    _CodeBlockBody.largeJsonPlainPreviewCharThreshold));
 
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          padding: const EdgeInsets.symmetric(
-            horizontal: Spacing.sm + 2,
-            vertical: Spacing.sm,
-          ),
-          child: _HighlightedCodeText(
-            source: displayCode,
-            language: widget.highlightLanguage,
-            theme: widget.highlightTheme,
-            textStyle: widget.codeStyle,
-            isDark: widget.isDark,
-            plainText: renderPlainPreview,
+        HorizontalScrollGestureBoundary(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(
+              horizontal: Spacing.sm + 2,
+              vertical: Spacing.sm,
+            ),
+            child: _HighlightedCodeText(
+              source: displayCode,
+              language: widget.highlightLanguage,
+              theme: widget.highlightTheme,
+              textStyle: widget.codeStyle,
+              isDark: widget.isDark,
+              plainText: renderPlainPreview,
+            ),
           ),
         ),
         if (isCollapsible)
@@ -900,7 +1559,7 @@ class _CollapseToggle extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             AnimatedSwitcher(
-              duration: AnimationDuration.fast,
+              duration: context.motionDuration(AnimationDuration.fast),
               child: Icon(
                 isCollapsed
                     ? Icons.expand_more_rounded
@@ -912,9 +1571,12 @@ class _CollapseToggle extends StatelessWidget {
             ),
             const SizedBox(width: Spacing.xs),
             AnimatedSwitcher(
-              duration: AnimationDuration.fast,
+              duration: context.motionDuration(AnimationDuration.fast),
               child: Text(
-                isCollapsed ? 'Show $hiddenLineCount more lines' : 'Show less',
+                isCollapsed
+                    ? AppLocalizations.of(context)!
+                          .markdownShowMoreLines(hiddenLineCount)
+                    : AppLocalizations.of(context)!.markdownShowLess,
                 key: ValueKey(isCollapsed),
                 style: markdownStyle.codeChrome.copyWith(
                   color: labelColor,
@@ -1031,7 +1693,7 @@ class _CodeBlockHeaderState extends State<CodeBlockHeader> {
             child: GestureDetector(
               onTap: _handleCopy,
               child: AnimatedContainer(
-                duration: AnimationDuration.fast,
+                duration: context.motionDuration(AnimationDuration.fast),
                 padding: const EdgeInsets.symmetric(
                   horizontal: Spacing.xs + 2,
                   vertical: Spacing.xs - 1,
@@ -1046,7 +1708,7 @@ class _CodeBlockHeaderState extends State<CodeBlockHeader> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     AnimatedSwitcher(
-                      duration: AnimationDuration.fast,
+                      duration: context.motionDuration(AnimationDuration.fast),
                       child: Icon(
                         _isCopied
                             ? Icons.check_rounded
@@ -1058,15 +1720,11 @@ class _CodeBlockHeaderState extends State<CodeBlockHeader> {
                     ),
                     if (_isHovering || _isCopied) ...[
                       const SizedBox(width: Spacing.xs),
-                      AnimatedOpacity(
-                        duration: AnimationDuration.fast,
-                        opacity: 1.0,
-                        child: Text(
-                          _isCopied ? 'Copied!' : 'Copy',
-                          style: markdownStyle.codeChrome.copyWith(
-                            color: _isCopied ? successColor : iconColor,
-                            fontWeight: FontWeight.w500,
-                          ),
+                      Text(
+                        _isCopied ? 'Copied!' : 'Copy',
+                        style: markdownStyle.codeChrome.copyWith(
+                          color: _isCopied ? successColor : iconColor,
+                          fontWeight: FontWeight.w500,
                         ),
                       ),
                     ],
@@ -1199,6 +1857,13 @@ class _ChartJsDiagramState extends State<ChartJsDiagram> {
       };
 
   bool get _isRunningInTestEnvironment => _isRunningInWidgetTest();
+
+  @override
+  void dispose() {
+    _loadRequestId += 1;
+    _controller = null;
+    super.dispose();
+  }
 
   @override
   void didUpdateWidget(ChartJsDiagram oldWidget) {
@@ -1629,7 +2294,15 @@ $runtimeScript
   }
 }
 
-// Mermaid diagram WebView widget
+// Native Flutter Mermaid diagram widget.
+@immutable
+class MermaidRenderResult {
+  const MermaidRenderResult({required this.svg, required this.sceneSize});
+
+  final String svg;
+  final Size sceneSize;
+}
+
 class MermaidDiagram extends StatefulWidget {
   const MermaidDiagram({
     super.key,
@@ -1637,361 +2310,490 @@ class MermaidDiagram extends StatefulWidget {
     required this.brightness,
     required this.colorScheme,
     required this.tokens,
+    this.allowFullscreen = true,
+    this.onRequestFullscreen,
   });
 
   final String code;
   final Brightness brightness;
   final ColorScheme colorScheme;
   final AppColorTokens tokens;
+  final bool allowFullscreen;
+  final Future<void> Function(
+    MermaidRenderResult light,
+    MermaidRenderResult dark,
+  )?
+  onRequestFullscreen;
 
-  static bool get isSupported => !kIsWeb;
-
-  static Future<String> _loadScript() {
-    return _scriptFuture ??= rootBundle.loadString('assets/mermaid.min.js');
-  }
-
-  static Future<String>? _scriptFuture;
+  static bool get isSupported => true;
 
   @override
   State<MermaidDiagram> createState() => _MermaidDiagramState();
 }
 
 class _MermaidDiagramState extends State<MermaidDiagram> {
-  InAppWebViewController? _controller;
-  String? _script;
-  double _height = _mermaidPreviewMinHeight;
-  bool _isLoading = true;
-  int _loadRequestId = 0;
-  bool _loadScheduled = false;
-  bool _retryLoadScheduled = false;
-  final Set<Factory<OneSequenceGestureRecognizer>> _gestureRecognizers =
-      <Factory<OneSequenceGestureRecognizer>>{
-        Factory<OneSequenceGestureRecognizer>(() => EagerGestureRecognizer()),
-      };
+  bool _presentingFullscreen = false;
+  String? _renderedCode;
+  MermaidRenderResult? _lightRender;
+  MermaidRenderResult? _darkRender;
+  Object? _renderError;
 
-  bool get _isRunningInTestEnvironment => _isRunningInWidgetTest();
+  void _renderIfNeeded() {
+    if (_renderedCode != widget.code) {
+      _renderedCode = widget.code;
+      _lightRender = null;
+      _darkRender = null;
+      _renderError = null;
+    }
 
-  @override
-  void didUpdateWidget(MermaidDiagram oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (_controller == null || _script == null) {
+    final needsActiveRender = widget.brightness == Brightness.dark
+        ? _darkRender == null
+        : _lightRender == null;
+    if (!needsActiveRender) return;
+
+    try {
+      if (widget.brightness == Brightness.dark) {
+        _darkRender = _render(widget.code, mermaid_core.MermaidTheme.darkTheme);
+      } else {
+        _lightRender = _render(
+          widget.code,
+          mermaid_core.MermaidTheme.defaultTheme,
+        );
+      }
+      _renderError = null;
+    } catch (error) {
+      _renderError = error;
+    }
+  }
+
+  MermaidRenderResult _render(String code, mermaid_core.MermaidTheme theme) {
+    final scene = mermaid_core.Mermaid(
+      measurer: const mermaid_flutter.FlutterTextMeasurer(),
+      theme: theme,
+    ).render(code);
+    return MermaidRenderResult(
+      svg: mermaid_core.renderSceneToSvg(scene),
+      sceneSize: Size(scene.size.width, scene.size.height),
+    );
+  }
+
+  Future<void> _openFullscreen() async {
+    final callback = widget.onRequestFullscreen;
+    if (callback == null || _presentingFullscreen) {
       return;
     }
-    final codeChanged = oldWidget.code != widget.code;
-    final themeChanged =
-        oldWidget.brightness != widget.brightness ||
-        oldWidget.colorScheme != widget.colorScheme ||
-        oldWidget.tokens != widget.tokens;
-    if (codeChanged || themeChanged) {
-      unawaited(_loadHtml());
+    final code = widget.code;
+    setState(() {
+      _presentingFullscreen = true;
+    });
+    await WidgetsBinding.instance.endOfFrame;
+    try {
+      if (!mounted || widget.code != code) return;
+
+      MermaidRenderResult light;
+      MermaidRenderResult dark;
+      try {
+        light =
+            _lightRender ??
+            _render(code, mermaid_core.MermaidTheme.defaultTheme);
+        dark =
+            _darkRender ?? _render(code, mermaid_core.MermaidTheme.darkTheme);
+        _lightRender = light;
+        _darkRender = dark;
+        _renderError = null;
+      } catch (error) {
+        if (mounted) {
+          setState(() {
+            _renderError = error;
+          });
+        }
+        return;
+      }
+
+      await callback(light, dark);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _presentingFullscreen = false;
+        });
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_isRunningInTestEnvironment) {
-      return const SizedBox(
-        height: _mermaidPreviewMinHeight,
-        width: double.infinity,
-      );
-    }
+    _renderIfNeeded();
+    final render = widget.brightness == Brightness.dark
+        ? _darkRender
+        : _lightRender;
+    Widget view = render != null
+        ? Padding(
+            padding: const EdgeInsets.all(Spacing.md),
+            child: FittedBox(
+              fit: BoxFit.contain,
+              child: SvgPicture.string(
+                render.svg,
+                key: ValueKey(
+                  'mermaid-${widget.brightness.name}-${widget.code.hashCode}',
+                ),
+                width: render.sceneSize.width,
+                height: render.sceneSize.height,
+              ),
+            ),
+          )
+        : _buildError(
+            context,
+            _renderError ?? 'Unable to render Mermaid diagram.',
+          );
 
-    if (_script == null) {
-      _scheduleInitialization(context);
-      return const SizedBox(
-        height: _mermaidPreviewMinHeight,
-        child: Center(child: CircularProgressIndicator()),
+    if (widget.allowFullscreen && widget.onRequestFullscreen != null) {
+      view = Stack(
+        children: [
+          Positioned.fill(child: view),
+          Positioned(
+            top: 8,
+            right: 8,
+            child: Semantics(
+              button: true,
+              label: 'Open Mermaid preview',
+              child: Material(
+                color: Theme.of(context).colorScheme.surface,
+                elevation: 1,
+                shape: RoundedRectangleBorder(
+                  side: BorderSide(
+                    color: Theme.of(context).dividerColor,
+                    width: BorderWidth.thin,
+                  ),
+                  borderRadius: BorderRadius.circular(AppBorderRadius.sm),
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: InkWell(
+                  onTap: _openFullscreen,
+                  child: const SizedBox(
+                    width: 36,
+                    height: 36,
+                    child: Icon(Icons.open_in_full, size: 18),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
       );
     }
 
     return SizedBox(
-      height: _height,
+      height: _mermaidPreviewMinHeight,
       width: double.infinity,
-      child: Stack(
-        children: [
-          Positioned.fill(
-            child: InAppWebView(
-              gestureRecognizers: _gestureRecognizers,
-              initialSettings: InAppWebViewSettings(
-                javaScriptEnabled: true,
-                transparentBackground: true,
-              ),
-              onWebViewCreated: (controller) {
-                _controller = controller;
-                unawaited(_loadHtml());
-              },
-              onLoadStop: (controller, _) async {
-                if (!mounted || controller != _controller) {
-                  return;
-                }
-                await _scheduleHeightUpdates(_loadRequestId);
-              },
-              onReceivedError: (controller, request, error) {
-                if (!mounted ||
-                    controller != _controller ||
-                    !(request.isForMainFrame ?? false)) {
-                  return;
-                }
-                setState(() {
-                  _isLoading = false;
-                });
-              },
-            ),
-          ),
-          if (_isLoading)
-            const Positioned.fill(
-              child: ColoredBox(
-                color: Colors.transparent,
-                child: Center(child: CircularProgressIndicator()),
-              ),
-            ),
-        ],
-      ),
+      child: view,
     );
   }
 
-  void _scheduleInitialization(BuildContext context) {
-    if (_isRunningInTestEnvironment ||
-        _loadScheduled ||
-        _script != null ||
-        !MermaidDiagram.isSupported) {
-      return;
-    }
+  Widget _buildError(BuildContext context, Object error) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(Spacing.md),
+        child: SelectableText(
+          '$error',
+          style: Theme.of(context).textTheme.bodySmall
+              ?.copyWith(color: Theme.of(context).colorScheme.error),
+        ),
+      ),
+    );
+  }
+}
 
-    if (Scrollable.recommendDeferredLoadingForContext(context)) {
-      if (_retryLoadScheduled) {
-        return;
-      }
-      _retryLoadScheduled = true;
-      Future<void>.delayed(const Duration(milliseconds: 250), () {
-        if (!mounted) {
-          return;
-        }
-        _retryLoadScheduled = false;
-        if (_script == null && !_loadScheduled) {
-          setState(() {});
-        }
-      });
-      return;
-    }
+class _MermaidSheetCanvas extends StatefulWidget {
+  const _MermaidSheetCanvas({required this.svg, required this.sceneSize});
 
-    _retryLoadScheduled = false;
-    _loadScheduled = true;
+  final String svg;
+  final Size sceneSize;
+
+  @override
+  State<_MermaidSheetCanvas> createState() => _MermaidSheetCanvasState();
+}
+
+class _MermaidSheetCanvasState extends State<_MermaidSheetCanvas> {
+  static const double _minScale = 0.2;
+  static const double _maxScale = 8;
+  static const double _controlSize = 32;
+  static const double _controlGap = 6;
+
+  final TransformationController _controller = TransformationController();
+  Size _viewportSize = Size.zero;
+  bool _interactive = true;
+  bool _resetScheduled = false;
+
+  @override
+  void didUpdateWidget(covariant _MermaidSheetCanvas oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.svg != widget.svg ||
+        oldWidget.sceneSize != widget.sceneSize) {
+      _scheduleReset(_viewportSize);
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _scheduleReset(Size viewportSize) {
+    if (viewportSize.isEmpty || _resetScheduled) return;
+    _resetScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) {
-        return;
-      }
-      unawaited(_initializeController());
+      _resetScheduled = false;
+      if (!mounted) return;
+      _reset(viewportSize);
     });
   }
 
-  Future<void> _initializeController() async {
-    if (_isRunningInTestEnvironment ||
-        !MermaidDiagram.isSupported ||
-        _script != null) {
-      _loadScheduled = false;
-      return;
-    }
+  void _reset([Size? viewportSize]) {
+    final viewport = viewportSize ?? _viewportSize;
+    if (viewport.isEmpty || widget.sceneSize.isEmpty) return;
 
-    try {
-      final value = await MermaidDiagram._loadScript();
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _script = value;
-      });
-    } finally {
-      _loadScheduled = false;
-    }
+    final availableWidth = math.max(1.0, viewport.width - (Spacing.lg * 2));
+    final availableHeight = math.max(1.0, viewport.height - (Spacing.lg * 2));
+    final scale = math
+        .min(
+          availableWidth / widget.sceneSize.width,
+          availableHeight / widget.sceneSize.height,
+        )
+        .clamp(_minScale, 1.0)
+        .toDouble();
+    final dx = (viewport.width - (widget.sceneSize.width * scale)) / 2;
+    final dy = (viewport.height - (widget.sceneSize.height * scale)) / 2;
+
+    _controller.value = Matrix4.identity()
+      ..setEntry(0, 0, scale)
+      ..setEntry(1, 1, scale)
+      ..setTranslationRaw(dx, dy, 0);
   }
 
-  Future<void> _loadHtml() async {
-    final controller = _controller;
-    final script = _script;
-    if (controller == null || script == null) {
-      return;
-    }
-    final requestId = ++_loadRequestId;
-    if (mounted) {
-      setState(() {
-        _height = _mermaidPreviewMinHeight;
-        _isLoading = true;
-      });
-    }
-    final baseUrl = WebUri('https://mermaid-preview.conduit.local/');
-    try {
-      await controller.loadData(
-        data: _buildHtml(_sanitizeMermaidCode(widget.code), script),
-        baseUrl: baseUrl,
-        historyUrl: baseUrl,
-      );
-      if (!mounted ||
-          controller != _controller ||
-          requestId != _loadRequestId) {
-        return;
-      }
-      await _scheduleHeightUpdates(requestId);
-    } catch (_) {
-      if (!mounted || controller != _controller) {
-        return;
-      }
-      setState(() {
-        _isLoading = false;
-      });
-    }
+  void _pan(Offset delta) {
+    final next = Matrix4.copy(_controller.value);
+    final translation = next.getTranslation();
+    next.setTranslationRaw(
+      translation.x + delta.dx,
+      translation.y + delta.dy,
+      translation.z,
+    );
+    _controller.value = next;
   }
 
-  Future<void> _scheduleHeightUpdates(int requestId) async {
-    await _updateHeight(requestId);
-    for (final delay in <int>[60, 250, 600]) {
-      Future<void>.delayed(Duration(milliseconds: delay), () {
-        _updateHeight(requestId);
-      });
-    }
-    Future<void>.delayed(const Duration(milliseconds: 900), () {
-      if (!mounted || requestId != _loadRequestId || !_isLoading) {
-        return;
-      }
-      setState(() {
-        _isLoading = false;
-      });
-    });
+  void _zoom(double factor) {
+    if (_viewportSize.isEmpty) return;
+    final current = _controller.value;
+    final currentScale = current.getMaxScaleOnAxis();
+    final targetScale = (currentScale * factor)
+        .clamp(_minScale, _maxScale)
+        .toDouble();
+    if (targetScale == currentScale) return;
+
+    final ratio = targetScale / currentScale;
+    final center = _viewportSize.center(Offset.zero);
+    final translation = current.getTranslation();
+    final dx = center.dx - ((center.dx - translation.x) * ratio);
+    final dy = center.dy - ((center.dy - translation.y) * ratio);
+
+    _controller.value = Matrix4.identity()
+      ..setEntry(0, 0, targetScale)
+      ..setEntry(1, 1, targetScale)
+      ..setTranslationRaw(dx, dy, 0);
   }
 
-  Future<void> _updateHeight(int requestId) async {
-    final controller = _controller;
-    if (controller == null) {
-      return;
-    }
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final safePadding = MediaQuery.viewPaddingOf(context);
+    final lockLabel = _interactive
+        ? 'Lock pan and zoom'
+        : 'Enable pan and zoom';
 
-    try {
-      final measuredHeight = await measureWebViewContentHeight(controller);
-      if (!mounted ||
-          requestId != _loadRequestId ||
-          measuredHeight == null ||
-          measuredHeight <= 0) {
-        return;
-      }
+    return ColoredBox(
+      color: colorScheme.surface,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final viewportSize = constraints.biggest;
+          if (_viewportSize != viewportSize) {
+            _viewportSize = viewportSize;
+            _scheduleReset(viewportSize);
+          }
 
-      final clampedHeight = measuredHeight
-          .clamp(_mermaidPreviewMinHeight, _embeddedPreviewMaxHeight)
-          .toDouble();
-      setState(() {
-        _height = clampedHeight;
-        _isLoading = false;
-      });
-    } catch (_) {}
+          return Stack(
+            children: [
+              Positioned.fill(
+                child: Semantics(
+                  label: 'Interactive Mermaid diagram',
+                  child: InteractiveViewer(
+                    key: const ValueKey<String>(
+                      'mermaid-sheet-interactive-viewer',
+                    ),
+                    transformationController: _controller,
+                    constrained: false,
+                    alignment: Alignment.topLeft,
+                    boundaryMargin: const EdgeInsets.all(double.infinity),
+                    minScale: _minScale,
+                    maxScale: _maxScale,
+                    panEnabled: _interactive,
+                    scaleEnabled: _interactive,
+                    child: SizedBox(
+                      width: widget.sceneSize.width,
+                      height: widget.sceneSize.height,
+                      child: SvgPicture.string(
+                        widget.svg,
+                        key: ValueKey<String>(
+                          'mermaid-sheet-${Theme.of(context).brightness.name}',
+                        ),
+                        width: widget.sceneSize.width,
+                        height: widget.sceneSize.height,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              Positioned(
+                top: Spacing.md,
+                right: Spacing.lg,
+                child: _MermaidCanvasControlButton(
+                  label: lockLabel,
+                  icon: Icons.open_with_rounded,
+                  active: _interactive,
+                  onPressed: () {
+                    setState(() => _interactive = !_interactive);
+                  },
+                ),
+              ),
+              Positioned(
+                right: Spacing.lg + safePadding.right,
+                bottom: Spacing.lg + safePadding.bottom,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const SizedBox.square(dimension: _controlSize),
+                        const SizedBox(width: _controlGap),
+                        _MermaidCanvasControlButton(
+                          label: 'Pan up',
+                          icon: Icons.arrow_upward_rounded,
+                          onPressed: () => _pan(const Offset(0, -64)),
+                        ),
+                        const SizedBox(width: _controlGap),
+                        _MermaidCanvasControlButton(
+                          label: 'Zoom in',
+                          icon: Icons.add_rounded,
+                          onPressed: () => _zoom(1.25),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: _controlGap),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _MermaidCanvasControlButton(
+                          label: 'Pan left',
+                          icon: Icons.arrow_back_rounded,
+                          onPressed: () => _pan(const Offset(-64, 0)),
+                        ),
+                        const SizedBox(width: _controlGap),
+                        _MermaidCanvasControlButton(
+                          label: 'Reset diagram position',
+                          icon: Icons.center_focus_strong_rounded,
+                          onPressed: _reset,
+                        ),
+                        const SizedBox(width: _controlGap),
+                        _MermaidCanvasControlButton(
+                          label: 'Pan right',
+                          icon: Icons.arrow_forward_rounded,
+                          onPressed: () => _pan(const Offset(64, 0)),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: _controlGap),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const SizedBox.square(dimension: _controlSize),
+                        const SizedBox(width: _controlGap),
+                        _MermaidCanvasControlButton(
+                          label: 'Pan down',
+                          icon: Icons.arrow_downward_rounded,
+                          onPressed: () => _pan(const Offset(0, 64)),
+                        ),
+                        const SizedBox(width: _controlGap),
+                        _MermaidCanvasControlButton(
+                          label: 'Zoom out',
+                          icon: Icons.remove_rounded,
+                          onPressed: () => _zoom(0.8),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
   }
+}
 
-  String _sanitizeMermaidCode(String source) {
-    final lines = source.split('\n');
-    final normalized = <String>[];
-
-    for (final line in lines) {
-      final trimmed = line.trim();
-      if (trimmed == 'end' || trimmed.startsWith('end %%')) {
-        normalized.add(line);
-        continue;
-      }
-
-      var updated = line;
-      updated = updated.replaceFirstMapped(
-        RegExp(r'^(\s*classDef\s+)end(\b)'),
-        (match) => '${match[1]}endNode${match[2]}',
-      );
-      updated = updated.replaceFirstMapped(
-        RegExp(r'^(\s*class\s+[^;\n]+\s+)end(\s*;?\s*)$'),
-        (match) => '${match[1]}endNode${match[2]}',
-      );
-
-      normalized.add(updated);
-    }
-
-    return normalized.join('\n');
-  }
-
-  String _buildHtml(String code, String script) {
-    final theme = widget.brightness == Brightness.dark ? 'dark' : 'default';
-
-    return '''
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8" />
-<style>
-  html, body {
-    width: 100%;
-    margin: 0;
-    background-color: transparent;
-  }
-  body {
-    box-sizing: border-box;
-    overflow-x: hidden;
-  }
-  #container {
-    width: 100%;
-    background-color: transparent;
-  }
-  #mermaid-diagram {
-    width: 100%;
-  }
-  #mermaid-diagram,
-  #mermaid-diagram svg {
-    display: block;
-  }
-  #mermaid-diagram svg {
-    max-width: 100%;
-    height: auto;
-    margin: 0 auto;
-  }
-</style>
-</head>
-<body>
-<div id="container">
-  <div class="mermaid" id="mermaid-diagram"></div>
-</div>
-<script>$script</script>
-<script>
-  mermaid.initialize({
-    startOnLoad: false,
-    theme: '$theme',
-    securityLevel: 'strict'
+class _MermaidCanvasControlButton extends StatelessWidget {
+  const _MermaidCanvasControlButton({
+    required this.label,
+    required this.icon,
+    required this.onPressed,
+    this.active = false,
   });
 
-  var diagramCode = ${jsonEncode(code)};
+  final String label;
+  final IconData icon;
+  final VoidCallback onPressed;
+  final bool active;
 
-  async function renderValidated(id, source) {
-    var parseResult = await mermaid.parse(source, { suppressErrors: false });
-    if (!parseResult) {
-      throw new Error('Mermaid parse failed');
-    }
-    var rendered = await mermaid.render(id, source);
-    if (
-      rendered &&
-      rendered.svg &&
-      rendered.svg.indexOf('Syntax error in text') !== -1
-    ) {
-      throw new Error('Mermaid render produced syntax error svg');
-    }
-    return rendered;
-  }
-
-  renderValidated('mermaid-svg', diagramCode).then(function(result) {
-    document.getElementById('mermaid-diagram').innerHTML = result.svg;
-  }).catch(function(err) {
-    var message = err.message || String(err);
-    var container = document.getElementById('mermaid-diagram');
-    container.textContent = '';
-    var pre = document.createElement('pre');
-    pre.style.color = 'red';
-    pre.style.padding = '16px';
-    pre.textContent = message;
-    container.appendChild(pre);
-  });
-</script>
-</body>
-</html>
-''';
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Tooltip(
+      message: label,
+      child: Semantics(
+        button: true,
+        label: label,
+        onTap: onPressed,
+        child: ExcludeSemantics(
+          child: SizedBox.square(
+            dimension: _MermaidSheetCanvasState._controlSize,
+            child: Material(
+              color: active
+                  ? colorScheme.secondaryContainer
+                  : colorScheme.surfaceContainerHighest,
+              elevation: Elevation.low,
+              shape: RoundedRectangleBorder(
+                side: BorderSide(
+                  color: colorScheme.outlineVariant,
+                  width: BorderWidth.thin,
+                ),
+                borderRadius: BorderRadius.circular(AppBorderRadius.sm),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: InkWell(
+                onTap: onPressed,
+                child: Icon(
+                  icon,
+                  size: 18,
+                  color: active
+                      ? colorScheme.onSecondaryContainer
+                      : colorScheme.onSurface,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }

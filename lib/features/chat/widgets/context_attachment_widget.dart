@@ -1,10 +1,11 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:conduit/l10n/app_localizations.dart';
 
 import '../../../shared/theme/theme_extensions.dart';
-import '../models/chat_context_attachment.dart';
-import '../providers/context_attachments_provider.dart';
+
+import 'package:conduit_core/features/chat/models/chat_context_attachment.dart';
+import 'package:conduit_core/features/chat/providers/context_attachments_provider.dart';
 
 class ContextAttachmentWidget extends ConsumerWidget {
   const ContextAttachmentWidget({super.key});
@@ -91,9 +92,8 @@ class _ContextAttachmentChip extends StatelessWidget {
               label,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: Theme.of(
-                context,
-              ).textTheme.bodySmall?.copyWith(color: theme.textPrimary),
+              style: Theme.of(context).textTheme.bodySmall
+                  ?.copyWith(color: theme.textPrimary),
             ),
           ),
           const SizedBox(width: Spacing.xs),

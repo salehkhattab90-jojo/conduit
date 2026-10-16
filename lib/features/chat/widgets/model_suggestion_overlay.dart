@@ -1,14 +1,17 @@
 import 'dart:io' show Platform;
 
-import 'package:flutter/cupertino.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../core/models/model.dart';
-import '../../../core/providers/app_providers.dart';
+import 'package:conduit_core/models/model.dart';
+import 'package:conduit_core/providers/app_providers.dart';
+
+import '../../../core/utils/model_icon_utils.dart';
 import '../../../shared/theme/theme_extensions.dart';
 import '../../../shared/widgets/model_avatar.dart';
+
 import 'package:conduit/l10n/app_localizations.dart';
 
 /// Autocomplete overlay that appears when the user types `@` to
@@ -40,6 +43,7 @@ class ModelSuggestionOverlay extends ConsumerWidget {
 
     final AsyncValue<List<Model>> modelsAsync = ref.watch(modelsProvider);
     final Model? currentModel = ref.watch(selectedModelProvider);
+    final api = ref.watch(apiServiceProvider);
 
     return Container(
       decoration: BoxDecoration(
@@ -98,8 +102,7 @@ class ModelSuggestionOverlay extends ConsumerWidget {
                           .withValues(alpha: 0.4)
                     : Colors.transparent;
 
-                final profileUrl =
-                    model.metadata?['profile_image_url'] as String?;
+                final profileUrl = resolveModelIconUrlForModel(api, model);
 
                 return Semantics(
                   button: true,
@@ -269,9 +272,8 @@ class _OverlayPlaceholder extends StatelessWidget {
             Flexible(
               child: Text(
                 message!,
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: context.conduitTheme.textSecondary,
-                ),
+                style: Theme.of(context).textTheme.bodySmall
+                    ?.copyWith(color: context.conduitTheme.textSecondary),
               ),
             ),
           ],

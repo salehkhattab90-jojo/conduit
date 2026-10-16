@@ -1,32 +1,77 @@
 import 'dart:async';
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/scheduler.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:riverpod/riverpod.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
-import '../database/local_conversation_loader.dart';
-import '../notifications/push_providers.dart';
-import '../providers/app_providers.dart';
-import '../sync/sync_triggers.dart';
-import '../../features/auth/providers/unified_auth_providers.dart';
-import '../services/navigation_service.dart';
-import '../services/app_intents_service.dart';
-import '../services/carplay_service.dart';
-import '../services/home_widget_service.dart';
-import '../services/api_service.dart';
-import '../models/conversation.dart';
+import 'package:conduit_core/database/account_storage_isolation.dart';
+// Re-exported because these used to live here and a dozen callers, and the
+// tests, still reach them through this library. An imported symbol is not
+// re-exported, so the move would otherwise be a breaking rename.
+export 'package:conduit_core/database/account_storage_isolation.dart';
+import 'package:conduit_core/database/local_conversation_loader.dart';
+import 'package:conduit_core/auth/auth_state_manager.dart';
+
+import 'package:conduit_core/features/hermes/services/hermes_session_provenance.dart';
+import 'package:conduit_core/providers/app_providers.dart';
+import 'package:conduit_core/providers/socket_access_refresh_provider.dart';
+
+import 'package:conduit_core/sync/sync_triggers.dart';
+
+import 'package:conduit_core/features/auth/providers/unified_auth_providers.dart';
+
+import 'package:conduit_core/services/interaction_activity.dart';
+
+import '../../shared/services/navigation_service.dart';
+import '../../features/navigation/providers/conversation_selection_provider.dart'
+    show conversationSelectionProvider;
+import 'package:conduit_core/features/notes/providers/notes_providers.dart'
+    show activeNoteProvider;
+import 'package:conduit_core/features/prompts/providers/prompts_providers.dart'
+    show activePromptCommandProvider;
+import '../../platform/app_intents_service.dart';
+import '../../platform/carplay_service.dart';
+import '../../platform/home_widget_service.dart';
+import '../services/image_attachment_cache_service.dart';
+import '../services/media_upload_controller.dart';
+
+import 'package:conduit_core/services/api_service.dart';
+
+import 'package:conduit_core/models/conversation.dart';
+
 import '../services/background_streaming_handler.dart';
-import '../services/socket_service.dart';
-import '../services/connectivity_service.dart';
-import '../services/share_receiver_service.dart';
-import '../utils/debug_logger.dart';
+
+import 'package:conduit_core/services/socket_service.dart';
+
+import 'package:conduit_core/services/connectivity_service.dart';
+
+import '../../platform/share_receiver_service.dart';
+
+import 'package:conduit_core/utils/debug_logger.dart';
+
 import '../utils/system_ui_style.dart';
-import '../models/server_config.dart';
-import '../../features/tools/providers/tools_providers.dart';
-import '../../features/chat/providers/chat_providers.dart';
-import '../../features/chat/providers/remap_route_sync_provider.dart';
+
+import 'package:conduit_core/models/server_config.dart';
+
+import 'package:conduit_core/features/tools/providers/tools_providers.dart';
+
+import 'package:conduit_core/features/chat/providers/chat_providers.dart';
+import 'package:conduit_core/features/chat/providers/context_attachments_provider.dart';
+import 'package:conduit_core/features/chat/providers/knowledge_cache_provider.dart';
+import 'package:conduit_core/features/chat/providers/remap_route_sync_provider.dart';
+import 'package:conduit_core/features/channels/providers/channel_providers.dart';
+
+import '../../features/channels/providers/channel_socket_handler.dart';
+
+import 'package:conduit_core/features/direct_connections/direct_connections.dart';
+import 'package:conduit_core/features/hermes/models/hermes_model.dart';
+
+import '../../features/notifications/providers/notification_socket_listener.dart';
+import '../../features/notifications/services/local_notification_service.dart';
+import '../../features/notifications/services/email_push_service.dart';
+import '../../shared/theme/theme_providers.dart';
 
 part 'app_startup_providers.g.dart';
 
@@ -35,9 +80,39 @@ part 'app_startup_providers.g.dart';
 /// depend on auth state, and invalidating them from inside the auth notifier
 /// trips Riverpod's circular dependency guard.
 final userScopedProviderCleanupProvider = Provider<void>((ref) {
+  // This provider owns auth-boundary listeners and must not inherit the
+  // storage-isolation notifier's rebuild lifecycle: that notifier changes at
+  // the exact boundary where this cleanup needs to remain mounted.
+  ref.read(openWebUiAccountStorageIsolationProvider);
+  var tokenlessCleanupScheduled = false;
+
+  void scheduleCleanup() {
+    if (tokenlessCleanupScheduled) return;
+    tokenlessCleanupScheduled = true;
+    // These stores contain no filesystem ownership and must cross the auth
+    // boundary synchronously. The broader cleanup below may need to await
+    // attachment retirement and must not leave the departing account's
+    // composer context or knowledge results visible in that interval.
+    ref.read(contextAttachmentsProvider.notifier).clear();
+    ref.read(knowledgeCacheProvider.notifier).clearAllCaches();
+    // Capture the departing composer's exact state objects and upload
+    // generations synchronously. Authentication can complete again before the
+    // delayed cleanup fence settles; that new session must remain untouched.
+    final attachmentOwnership = ref
+        .read(mediaUploadControllerProvider)
+        .captureAttachmentOwnership();
+    unawaited(
+      _cleanupUserScopedProvidersAfterSignOut(ref, attachmentOwnership),
+    );
+  }
+
   ref.listen<String?>(authTokenProvider3, (previous, next) {
+    if (next != null) {
+      tokenlessCleanupScheduled = false;
+      return;
+    }
     if (previous != null && next == null) {
-      _cleanupUserScopedProvidersAfterSignOut(ref);
+      scheduleCleanup();
     }
   });
 
@@ -46,43 +121,130 @@ final userScopedProviderCleanupProvider = Provider<void>((ref) {
     next,
   ) {
     if (previous != AuthNavigationState.authenticated ||
-        next == AuthNavigationState.authenticated) {
+        next == AuthNavigationState.authenticated ||
+        ref.read(authTokenProvider3) != null) {
       return;
     }
 
-    _cleanupUserScopedProvidersAfterSignOut(ref);
+    scheduleCleanup();
+  });
+
+  // Switching Open WebUI accounts goes tokenless only for the moment it takes
+  // to restore the next account's session, so the cleanup above sees the new
+  // session arrive and stands down. The account itself changing is the
+  // boundary: everything the departing account owned goes now.
+  ref.listen<String?>(settledActiveAccountIdProvider, (previous, next) {
+    if (previous == null || previous == next) return;
+    ref.read(contextAttachmentsProvider.notifier).clear();
+    ref.read(knowledgeCacheProvider.notifier).clearAllCaches();
+    final attachmentOwnership = ref
+        .read(mediaUploadControllerProvider)
+        .captureAttachmentOwnership();
+    unawaited(
+      ref
+          .read(mediaUploadControllerProvider)
+          .retireAttachmentOwnership(attachmentOwnership)
+          .catchError((Object error, StackTrace stackTrace) {
+            DebugLogger.error(
+              'account-switch-attachment-cleanup-failed',
+              scope: 'startup/auth-cleanup',
+              error: error,
+              stackTrace: stackTrace,
+            );
+          }),
+    );
+    _resetUserScopedProviders(ref);
   });
 });
 
-Future<void> _cleanupUserScopedProvidersAfterSignOut(Ref ref) async {
+Future<void> _cleanupUserScopedProvidersAfterSignOut(
+  Ref ref,
+  MediaAttachmentOwnershipSnapshot attachmentOwnership,
+) async {
   const attempts = 40;
+  var shouldResetCurrentUserProviders = false;
   for (var attempt = 0; attempt < attempts; attempt++) {
-    await Future<void>.delayed(const Duration(milliseconds: 50));
     if (!ref.mounted) {
       return;
     }
     if (ref.read(authNavigationStateProvider) ==
         AuthNavigationState.authenticated) {
-      return;
+      break;
     }
     if (ref.read(authTokenProvider3) == null &&
         !ref.read(isAuthLoadingProvider2)) {
+      shouldResetCurrentUserProviders = true;
       break;
     }
-    if (attempt == attempts - 1) {
-      return;
-    }
+    await Future<void>.delayed(const Duration(milliseconds: 50));
   }
 
   if (!ref.mounted) {
     return;
   }
   try {
+    // Composer state is user-owned. Retire its queue/staging owners through
+    // the media controller before dropping the previous account's providers;
+    // the UI clears synchronously even if best-effort cleanup later fails.
+    try {
+      await ref
+          .read(mediaUploadControllerProvider)
+          .retireAttachmentOwnership(attachmentOwnership);
+    } catch (error, stackTrace) {
+      DebugLogger.error(
+        'signed-out-attachment-cleanup-failed',
+        scope: 'startup/auth-cleanup',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    // A rapid reauthentication now owns the visible providers. The departing
+    // attachment snapshot above was still retired, but broader invalidation
+    // must not erase the replacement session's freshly loaded state. Recheck
+    // after attachment cleanup because its filesystem barrier may have waited
+    // long enough for a replacement session to publish fresh provider state.
+    if (!shouldResetCurrentUserProviders ||
+        ref.read(authNavigationStateProvider) ==
+            AuthNavigationState.authenticated ||
+        ref.read(authTokenProvider3) != null ||
+        ref.read(isAuthLoadingProvider2)) {
+      return;
+    }
+
+    _resetUserScopedProviders(ref);
+  } catch (error, stackTrace) {
+    DebugLogger.error(
+      'user-scoped-provider-cleanup-failed',
+      scope: 'startup',
+      error: error,
+      stackTrace: stackTrace,
+    );
+  }
+}
+
+/// Drops every keepAlive provider holding the previous Open WebUI account's
+/// data or selections. Direct and Hermes state survives: a local chat or
+/// model does not belong to any account.
+void _resetUserScopedProviders(Ref ref) {
+  try {
+    final active = ref.read(activeConversationProvider);
+    final preserveLocalConversation =
+        active != null && !conversationUsesOpenWebUiStorage(active);
+    final selectedModel = ref.read(selectedModelProvider);
+    final preserveLocalModel =
+        selectedModel != null &&
+        (isLocallyMintedDirectModel(selectedModel) ||
+            isHermesModel(selectedModel));
     ref.invalidate(conversationsProvider);
-    ref.invalidate(activeConversationProvider);
+    if (!preserveLocalConversation) {
+      ref.invalidate(activeConversationProvider);
+    }
     ref.invalidate(foldersProvider);
     ref.invalidate(modelsProvider);
-    ref.invalidate(selectedModelProvider);
+    if (!preserveLocalModel) {
+      ref.invalidate(selectedModelProvider);
+    }
     ref.invalidate(currentUserProvider);
     ref.invalidate(userSettingsProvider);
     ref.invalidate(rawUserSettingsProvider);
@@ -95,12 +257,51 @@ Future<void> _cleanupUserScopedProvidersAfterSignOut(Ref ref) async {
     ref.invalidate(selectedToolIdsProvider);
     ref.invalidate(selectedTerminalIdProvider);
     ref.invalidate(selectedFilterIdsProvider);
+    ref.invalidate(contextAttachmentsProvider);
+    ref.read(knowledgeCacheProvider.notifier).clearAllCaches();
     ref.invalidate(knowledgeBasesProvider);
+    ref.invalidate(channelsListProvider);
+    ref.invalidate(activeChannelProvider);
+    ref.invalidate(channelMessagesProvider);
+    ref.invalidate(threadMessagesProvider);
+    ref.invalidate(channelTypingUsersProvider);
+    ref.invalidate(channelSocketHandlerProvider);
     ref.invalidate(availableVoicesProvider);
     ref.invalidate(imageModelsProvider);
     ref.invalidate(defaultModelProvider);
     ref.invalidate(backendConfigProvider);
     ref.invalidate(socketServiceManagerProvider);
+    // Clear posted notifications and drop the listener's dedup memory so a
+    // notification can't deep-link into the previous session/server.
+    unawaited(
+      ref.read(localNotificationServiceProvider).cancelAll().catchError((
+        Object e,
+        StackTrace st,
+      ) {
+        DebugLogger.error(
+          'failed to clear notifications on sign-out',
+          scope: 'notifications/system',
+          error: e,
+          stackTrace: st,
+        );
+      }),
+    );
+    ref.invalidate(notificationRouterProvider);
+    ref.invalidate(notificationSocketListenerProvider);
+    // Selections that name the previous account's folders, prompts, notes or
+    // chats.
+    ref.invalidate(pendingFolderIdProvider);
+    ref.invalidate(folderDraftModelNoticeProvider);
+    ref.invalidate(folderDraftComparisonProvider);
+    ref.invalidate(folderDraftComparisonNoticeProvider);
+    ref.invalidate(isManualModelSelectionProvider);
+    ref.invalidate(searchQueryProvider);
+    ref.invalidate(activePromptCommandProvider);
+    ref.invalidate(activeNoteProvider);
+    ref.invalidate(conversationSelectionProvider);
+    // A selection still loading no longer owns the reset selection state, so
+    // it would never clear the loading flag it set.
+    ref.invalidate(isLoadingConversationProvider);
   } catch (error, stackTrace) {
     DebugLogger.error(
       'user-scoped-provider-cleanup-failed',
@@ -496,6 +697,10 @@ void _scheduleConversationWarmup(
     if (delay > Duration.zero) {
       await Future.delayed(delay);
     }
+    // Warmup shares the UI isolate with frame production; starting it while
+    // the user is mid-fling turns a buttery 120 Hz scroll bimodal. Nothing
+    // here is urgent on a sub-second scale.
+    await InteractionActivity.instance.whenIdle;
     try {
       final outcome = await _runConversationWarmup(
         ref,
@@ -531,8 +736,19 @@ Future<void> _initializeBackgroundStreaming(Ref ref) async {
           error: error,
           data: {'type': errorType, 'streams': streamIds.length},
         );
-        // Clear any streaming state in chat providers for failed streams
-        // The UI will show the partially completed message
+        unawaited(
+          ref
+              .read(chatMessagesProvider.notifier)
+              .reconcileBackgroundServiceFailure(streamIds)
+              .catchError((Object recoveryError, StackTrace stackTrace) {
+                DebugLogger.error(
+                  'background-service-reconciliation-failed',
+                  scope: 'startup',
+                  error: recoveryError,
+                  stackTrace: stackTrace,
+                );
+              }),
+        );
       },
       timeLimitApproachingCallback: (remainingMinutes) {
         if (!ref.mounted) return;
@@ -586,8 +802,7 @@ Future<void> _initializeBackgroundStreaming(Ref ref) async {
         'background-refresh-disabled',
         scope: 'startup',
         data: {
-          'message':
-              'Background App Refresh is disabled. Background streaming may be limited.',
+          'message': 'Background App Refresh is disabled. Background streaming may be limited.',
         },
       );
     }
@@ -604,8 +819,7 @@ Future<void> _initializeBackgroundStreaming(Ref ref) async {
         'notification-permission-denied',
         scope: 'startup',
         data: {
-          'message':
-              'Notification permission denied. Background streaming notifications will not be shown.',
+          'message': 'Notification permission denied. Background streaming notifications will not be shown.',
         },
       );
     }
@@ -625,6 +839,7 @@ class AppStartupFlow extends _$AppStartupFlow {
   bool _started = false;
   ProviderSubscription<SocketService?>? _socketSubscription;
   ProviderSubscription<void>? _defaultModelAutoSelectionSubscription;
+  ProviderSubscription<void>? _directCompletionRelaySubscription;
   Timer? _defaultModelPreloadTimer;
   final _postAuthStartupRunner = _QueuedLatestRunner();
   final _startupTaskQueue = _FrameBudgetedStartupQueue();
@@ -650,11 +865,32 @@ class AppStartupFlow extends _$AppStartupFlow {
     );
   }
 
+  void _keepDirectCompletionRelayAlive() {
+    if (!_hasAuthenticatedSession()) return;
+    _directCompletionRelaySubscription ??= ref.listen<void>(
+      openWebUiDirectCompletionSocketRelayProvider,
+      (previous, value) {},
+      fireImmediately: true,
+    );
+  }
+
+  void _stopDirectCompletionRelay() {
+    _directCompletionRelaySubscription?.close();
+    _directCompletionRelaySubscription = null;
+    // This relay is an always-alive provider so closing its only listener does
+    // not by itself run the Socket.IO handler's teardown. Explicitly revoke
+    // the cached provider state at the auth boundary.
+    if (ref.mounted) {
+      ref.invalidate(openWebUiDirectCompletionSocketRelayProvider);
+    }
+  }
+
   void _disposeStartupResources() {
     _socketSubscription?.close();
     _socketSubscription = null;
     _defaultModelAutoSelectionSubscription?.close();
     _defaultModelAutoSelectionSubscription = null;
+    _stopDirectCompletionRelay();
     _cancelDefaultModelPreload();
     _startupTaskQueue.dispose();
   }
@@ -695,6 +931,9 @@ class AppStartupFlow extends _$AppStartupFlow {
       if (!_hasAuthenticatedSession()) {
         return;
       }
+      if (keepDefaultModelAutoSelectionAlive) {
+        _keepDefaultModelAutoSelectionAlive();
+      }
       try {
         await ref.read(defaultModelProvider.future);
       } catch (e) {
@@ -703,10 +942,6 @@ class AppStartupFlow extends _$AppStartupFlow {
           scope: 'startup',
           data: {'error': e},
         );
-      } finally {
-        if (_hasAuthenticatedSession() && keepDefaultModelAutoSelectionAlive) {
-          _keepDefaultModelAutoSelectionAlive();
-        }
       }
     });
   }
@@ -778,16 +1013,11 @@ class AppStartupFlow extends _$AppStartupFlow {
   void _scheduleStartupProviderKeepAlives() {
     _scheduleDeferredKeepAlive(
       Duration.zero,
-      authApiIntegrationProvider,
-      label: 'auth-api-integration',
-    );
-    _scheduleDeferredKeepAlive(
-      const Duration(milliseconds: 16),
       apiTokenUpdaterProvider,
       label: 'api-token-updater',
     );
     _scheduleDeferredKeepAlive(
-      const Duration(milliseconds: 32),
+      const Duration(milliseconds: 16),
       silentLoginCoordinatorProvider,
       label: 'silent-login',
     );
@@ -815,11 +1045,6 @@ class AppStartupFlow extends _$AppStartupFlow {
 
   void _scheduleStartupTasks() {
     _scheduleStartupProviderKeepAlives();
-    _scheduleAfterDelay(
-      const Duration(milliseconds: 120),
-      () => ref.read(backgroundModelLoadProvider),
-      label: 'background-model-load',
-    );
     _scheduleDeferredKeepAlive(
       const Duration(milliseconds: 48),
       foregroundRefreshProvider,
@@ -949,14 +1174,28 @@ class AppStartupFlow extends _$AppStartupFlow {
 
     _ensureSocketAttached();
     _applyCurrentAuthTokenToApi(api);
-    // Start FCM push + register this device for email notifications (a no-op if
-    // Firebase isn't configured). Fire-and-forget; never blocks startup.
-    unawaited(_startPushMessaging());
     _warmApiConnection(api);
     // Activate the active-chats sync (global chat:active handler + initial bulk
     // fetch) so the sidebar generating spinner is correct app-wide, including
     // for generations started by other sessions. keepAlive keeps it running.
     ref.read(activeChatsSyncProvider);
+    // Re-read permissions and models when the server says this account's
+    // access changed (Open WebUI 0.12 `access:updated`).
+    ref.read(socketAccessRefreshProvider);
+    // Match Open WebUI's layout-scoped direct-completion RPC handler. It must
+    // be listening before a completion POST can ask this client to contact the
+    // saved provider and relay its stream through the server.
+    _keepDirectCompletionRelayAlive();
+    // Activate the notification listener (global chat/channel handlers feeding
+    // the NotificationRouter). The router gates on the master toggle, so this is
+    // safe to run unconditionally. Then drain any cold-launch notification tap.
+    ref.read(notificationSocketListenerProvider);
+    unawaited(
+      ref.read(notificationSocketListenerProvider.notifier).handleLaunchTap(),
+    );
+    // Email push: register this device for the account (a no-op without a
+    // Firebase config); sign-out and account switches are handled inside.
+    unawaited(ref.read(emailPushServiceProvider).start());
     _scheduleDefaultModelPreload(
       keepDefaultModelAutoSelectionAlive: keepDefaultModelAutoSelectionAlive,
     );
@@ -968,32 +1207,11 @@ class AppStartupFlow extends _$AppStartupFlow {
   /// Warm the API client's connection pool as soon as we're authenticated, so
   /// the first chat completion doesn't race a cold TLS/HTTP handshake and
   /// transiently fail (which would otherwise queue a retry). Fire-and-forget on
-  /// the SAME Dio the completion uses; `checkHealth()` swallows its own errors.
+  /// the SAME Dio the completion uses; `warmConnectionPool()` swallows its own
+  /// errors. (`checkHealth()` now probes with a request-scoped client it
+  /// force-closes, which leaves the completion pool cold.)
   void _warmApiConnection(ApiService api) {
-    unawaited(api.checkHealth());
-  }
-
-  /// Start FCM + register this device for email-pipeline push (no-op unless
-  /// Firebase is configured). Idempotent; safe to call on every auth pass.
-  Future<void> _startPushMessaging() async {
-    try {
-      final svc = ref.read(pushMessagingServiceProvider);
-      await svc.initializeAndStart();
-      await svc.registerToken();
-    } catch (error) {
-      DebugLogger.warning(
-        'push start failed',
-        scope: 'push',
-        data: {'error': error.toString()},
-      );
-    }
-  }
-
-  /// Drop this device's push registration on logout (best-effort).
-  Future<void> _unregisterPushMessaging() async {
-    try {
-      await ref.read(pushMessagingServiceProvider).unregisterToken();
-    } catch (_) {/* best-effort */}
+    unawaited(api.warmConnectionPool());
   }
 
   void _requestPostAuthenticationStartup({
@@ -1029,9 +1247,9 @@ class AppStartupFlow extends _$AppStartupFlow {
       if (next == AuthNavigationState.authenticated) {
         _requestPostAuthenticationStartup(apiWaitTimeout: apiWaitTimeout);
       } else {
+        _stopDirectCompletionRelay();
         _clearQueuedAuthenticatedStartupWork();
         _resetConversationWarmup(ref);
-        unawaited(_unregisterPushMessaging());
       }
     });
 
@@ -1076,6 +1294,7 @@ class AppStartupFlow extends _$AppStartupFlow {
 
   void _activate({Duration apiWaitTimeout = const Duration(seconds: 1)}) {
     ref.onDispose(_disposeStartupResources);
+    _keepAlive(imageAttachmentCacheLifecycleProvider);
     _scheduleStartupTasks();
 
     // If the session is already authenticated before startup flow attaches,
@@ -1165,6 +1384,35 @@ final foregroundRefreshProvider = Provider<void>((ref) {
   ref.onDispose(() => WidgetsBinding.instance.removeObserver(observer));
 });
 
+/// Re-fetches server config that is otherwise only loaded at cold start
+/// (model capabilities and tools), so an admin change on the server — a
+/// capability flag, a newly added tool — shows on reopen without a restart.
+/// Both keep their current value until fresh data arrives, and
+/// `Models.refresh()` also reconciles the selected model. Each refresh fails
+/// on its own: a missing session or an offline server only skips it.
+Future<void> _refreshServerCatalogOnResume(Ref ref) async {
+  try {
+    await ref.read(modelsProvider.notifier).refresh();
+  } catch (error, stackTrace) {
+    DebugLogger.error(
+      'resume-models-refresh-failed',
+      scope: 'startup/resume',
+      error: error,
+      stackTrace: stackTrace,
+    );
+  }
+  try {
+    await ref.read(toolsListProvider.notifier).refresh();
+  } catch (error, stackTrace) {
+    DebugLogger.error(
+      'resume-tools-refresh-failed',
+      scope: 'startup/resume',
+      error: error,
+      stackTrace: stackTrace,
+    );
+  }
+}
+
 class _ForegroundRefreshObserver extends WidgetsBindingObserver {
   final Ref _ref;
   _ForegroundRefreshObserver(this._ref);
@@ -1176,15 +1424,11 @@ class _ForegroundRefreshObserver extends WidgetsBindingObserver {
       Future.microtask(() {
         try {
           refreshConversationsCache(_ref);
+          _ref.invalidate(channelMessagesProvider);
+          _ref.invalidate(threadMessagesProvider);
           _resetConversationWarmup(_ref);
           unawaited(_refreshActiveConversationOnResume(_ref));
-          // Re-fetch server config that is otherwise only loaded at cold start
-          // (model capabilities + tools), so OWUI-admin changes — a capability
-          // flag, a newly added tool — show on reopen without a full restart.
-          // Both keep their current value until fresh data arrives, and
-          // Models.refresh() also reconciles the selected model.
-          unawaited(_ref.read(modelsProvider.notifier).refresh());
-          unawaited(_ref.read(toolsListProvider.notifier).refresh());
+          unawaited(_refreshServerCatalogOnResume(_ref));
         } catch (_) {}
         // Resume already kicked off a forced conversations refresh above; only
         // finish the warmup work that should run alongside it.
@@ -1229,11 +1473,14 @@ Future<void> _refreshActiveConversationOnResume(Ref ref) async {
     final active = ref.read(activeConversationProvider);
     if (active == null ||
         isTemporaryChat(active.id) ||
+        isDirectLocalConversation(active) ||
+        isNativeHermesConversation(active) ||
         ref.read(shouldProtectLocalStreamingStateProvider)) {
       return;
     }
 
     conversationId = active.id;
+    final owner = captureOpenWebUiCompletionOwner(ref, chatId: conversationId);
     // Pull through the sync engine: persists via upsertServerChat under the
     // chat lock, then returns the assembled conversation (CDT-RFC-001
     // Phase 1). Falls back to a direct fetch when the engine is
@@ -1243,6 +1490,9 @@ Future<void> _refreshActiveConversationOnResume(Ref ref) async {
       return;
     }
     if (!ref.mounted) {
+      return;
+    }
+    if (activeOpenWebUiChatIdForMutation(ref, owner) != conversationId) {
       return;
     }
 

@@ -1,70 +1,43 @@
 import 'dart:async';
 import 'dart:io' show Directory, File, Platform;
 
+import 'package:conduit_core/conduit_core.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter_tts/flutter_tts.dart';
-import 'package:just_audio/just_audio.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
-import '../../../core/models/backend_config.dart';
-import '../../../core/services/api_service.dart';
+import 'package:conduit_core/models/backend_config.dart';
+
+import 'package:conduit_core/features/chat/server_speech/server_speech.dart';
+
 import '../../../core/services/background_streaming_handler.dart';
-import '../../../shared/widgets/markdown/markdown_preprocessor.dart';
+
+import 'package:conduit_core/utils/debug_logger.dart';
+
+import 'package:conduit_markdown/conduit_markdown.dart';
+import 'package:conduit_markdown/conduit_markdown.dart' as speech;
+
+import 'package:conduit_core/voice/voice_events.dart';
+
+import 'native_tts_service.dart';
+
+export 'package:conduit_core/voice/voice_events.dart'
+    show
+        TtsCancelled,
+        TtsChunkStarted,
+        TtsCompleted,
+        TtsError,
+        TtsEvent,
+        TtsPaused,
+        TtsResumed,
+        TtsStarted,
+        TtsWordProgress;
 
 // =============================================================================
-// TTS Events
+// TTS Events live in conduit_core (voice/voice_events.dart), so the core
+// voice-mode controller can read them; re-exported above.
 // =============================================================================
-
-/// Base class for all TTS events.
-sealed class TtsEvent {
-  const TtsEvent();
-}
-
-/// Emitted when TTS playback starts.
-class TtsStarted extends TtsEvent {
-  const TtsStarted();
-}
-
-/// Emitted when a new chunk starts playing.
-class TtsChunkStarted extends TtsEvent {
-  const TtsChunkStarted(this.chunkIndex);
-  final int chunkIndex;
-}
-
-/// Emitted for word-level progress (device TTS only).
-class TtsWordProgress extends TtsEvent {
-  const TtsWordProgress(this.start, this.end);
-  final int start;
-  final int end;
-}
-
-/// Emitted when all chunks have finished playing.
-class TtsCompleted extends TtsEvent {
-  const TtsCompleted();
-}
-
-/// Emitted when playback is cancelled.
-class TtsCancelled extends TtsEvent {
-  const TtsCancelled();
-}
-
-/// Emitted when playback is paused.
-class TtsPaused extends TtsEvent {
-  const TtsPaused();
-}
-
-/// Emitted when playback resumes from pause.
-class TtsResumed extends TtsEvent {
-  const TtsResumed();
-}
-
-/// Emitted when an error occurs.
-class TtsError extends TtsEvent {
-  const TtsError(this.message);
-  final String message;
-}
 
 // =============================================================================
 // Playback Session
@@ -76,6 +49,7 @@ class TtsPlaybackSession {
     required this.id,
     required this.chunks,
     required this.useServerTts,
+    this.serverSpeech,
   });
 
   /// Unique session identifier.
@@ -86,11 +60,30 @@ class TtsPlaybackSession {
 
   /// Whether to use server TTS (true) or device TTS (false).
   final bool useServerTts;
+
+  /// The server that speaks it, chosen when it started: text is only ever
+  /// spoken by the chat it came from.
+  final ServerSpeechProvider? serverSpeech;
+}
+
+@visibleForTesting
+StreamingChunkAdvance advanceStreamingChunksForTesting({
+  required List<String> chunks,
+  required int fedChunkCount,
+  required String spokenText,
+  required bool finalized,
+}) {
+  return advanceStreamingChunks(
+    chunks: chunks,
+    fedChunkCount: fedChunkCount,
+    spokenText: spokenText,
+    finalized: finalized,
+  );
 }
 
 @visibleForTesting
 bool isServerTtsPlaybackCompleteForTesting({
-  required ProcessingState processingState,
+  required AudioProcessingState processingState,
   required int currentIndex,
   required int lastChunkIndex,
   required int lastEnqueuedIndex,
@@ -104,12 +97,12 @@ bool isServerTtsPlaybackCompleteForTesting({
 }
 
 bool _isServerTtsPlaybackComplete({
-  required ProcessingState processingState,
+  required AudioProcessingState processingState,
   required int currentIndex,
   required int lastChunkIndex,
   required int lastEnqueuedIndex,
 }) {
-  return processingState == ProcessingState.completed &&
+  return processingState == AudioProcessingState.completed &&
       currentIndex >= lastChunkIndex &&
       lastEnqueuedIndex >= lastChunkIndex;
 }
@@ -165,7 +158,7 @@ class TtsConfig {
 
 /// Single global manager for all TTS operations.
 ///
-/// This manager owns the FlutterTts and AudioPlayer instances and ensures
+/// This manager owns native device TTS and the host audio player, and ensures
 /// only one playback session is active at a time. Events are emitted via
 /// a stream that consumers can listen to.
 class TtsManager {
@@ -173,26 +166,24 @@ class TtsManager {
   static const Duration _serverInitialLookaheadTimeout = Duration(
     milliseconds: 220,
   );
-  static const String splitOnPunctuation = 'punctuation';
-  static const String splitOnParagraphs = 'paragraphs';
-  static const String splitOnNone = 'none';
-  static const int _mergeMinWords = 4;
-  static const int _mergeMinChars = 50;
+  static const String splitOnPunctuation = speechSplitOnPunctuation;
+  static const String splitOnParagraphs = speechSplitOnParagraphs;
+  static const String splitOnNone = speechSplitOnNone;
   static const double _serverPlaybackRate = 1.0;
 
   TtsManager._();
   static final instance = TtsManager._();
 
-  // FlutterTts instance (lazy initialized)
-  FlutterTts? _tts;
   bool _ttsInitialized = false;
-  bool _handlersSet = false;
   Completer<void>? _initCompleter;
+  NativeTtsService _nativeTts = NativeTtsService();
+  StreamSubscription<NativeTtsEvent>? _nativeTtsSub;
+  bool _nativeTtsAvailable = false;
 
-  // AudioPlayer for server TTS (using just_audio)
-  final AudioPlayer _player = AudioPlayer();
+  // Server TTS playback goes through the host's audio port.
+  final AudioPlaybackPort _player = AudioPlaybackPort.hostFactory();
   bool _playerConfigured = false;
-  StreamSubscription<PlayerState>? _playerStateSub;
+  StreamSubscription<AudioPlaybackState>? _playerStateSub;
   StreamSubscription<int?>? _playerIndexSub;
 
   /// Flag to suppress spurious TtsPaused events during chunk transitions.
@@ -200,13 +191,14 @@ class TtsManager {
   /// events should not be emitted to listeners.
   bool _isTransitioningChunks = false;
 
-  // API service for server TTS (must be set before using server TTS)
-  ApiService? _apiService;
+  // The chat backend's speech, for server TTS (null when it has none)
+  ServerSpeechProvider? _serverSpeech;
 
   // Configuration
   TtsConfig _config = const TtsConfig();
   bool _deviceEngineAvailable = false;
   bool _voiceConfigured = false;
+  bool _voiceCallActive = false;
 
   // Session management
   int _sessionCounter = 0;
@@ -226,6 +218,19 @@ class TtsManager {
   bool _isStreamingSession = false;
   bool _streamingFinalized = false;
   int _streamingFedChunkCount = 0;
+  String _streamingSpokenText = '';
+  Future<void> _streamingFeedSerial = Future<void>.value();
+
+  /// Feeds queued or running on [_streamingFeedSerial].
+  ///
+  /// `finishStreaming` marks the response finalized before its own feed reaches
+  /// the chain, so finalized alone does not mean every sentence has been
+  /// appended. Playback finishing a chunk in that window would otherwise end
+  /// the session and the queued feed would drop the rest of the answer.
+  ///
+  /// Counts feeds of the session playing now. A feed that outlives its session
+  /// is left out of both ends, or the next session would wait on it.
+  int _streamingFeedsPending = 0;
   bool _deviceWaitingForStreamingChunk = false;
   int _serverLastFetchScheduledIndex = -1;
   final Set<int> _serverFetchingIndices = <int>{};
@@ -245,7 +250,11 @@ class TtsManager {
   bool get deviceAvailable => _deviceEngineAvailable;
 
   /// Whether server TTS is available.
-  bool get serverAvailable => _apiService != null;
+  bool get serverAvailable => _serverSpeech?.canSynthesize == true;
+
+  /// Whether the user picks the server voice in Audio settings; see
+  /// [ServerSpeechProvider.offersVoiceChoice].
+  bool get serverOffersVoiceChoice => _serverSpeech?.offersVoiceChoice == true;
 
   /// Whether any TTS is available.
   bool get isAvailable => _deviceEngineAvailable || serverAvailable;
@@ -256,23 +265,41 @@ class TtsManager {
   /// Current configuration.
   TtsConfig get config => _config;
 
-  /// Sets the API service for server TTS.
-  void setApiService(ApiService? api) {
-    _apiService = api;
+  /// Sets the backend that synthesizes server TTS, or null for none.
+  void setServerSpeech(ServerSpeechProvider? speech) {
+    _serverSpeech = speech;
+  }
+
+  /// Swaps the device engine binding so tests can drive device playback
+  /// without a platform channel. Pass null to restore the real engine.
+  @visibleForTesting
+  Future<void> debugSetNativeTtsService(NativeTtsService? service) async {
+    await _nativeTtsSub?.cancel();
+    _nativeTtsSub = null;
+    _nativeTts = service ?? NativeTtsService();
+    _ttsInitialized = false;
+    _initCompleter = null;
+    _nativeTtsAvailable = false;
+    _deviceEngineAvailable = false;
+    _voiceConfigured = false;
+  }
+
+  /// Marks playback as belonging to a voice call.
+  ///
+  /// Device TTS then speaks on the voice-communication stream instead of the
+  /// media stream, which is what makes it follow the call route and keep
+  /// playing while the app is in the background. Read-aloud outside a call must
+  /// stay on the media stream or it lands on the earpiece at call volume.
+  void setVoiceCallActive(bool active) {
+    _voiceCallActive = active;
   }
 
   /// Updates the TTS configuration.
   Future<void> updateConfig(TtsConfig config) async {
+    final voiceChanged = config.voice != _config.voice;
     _config = config;
-
-    if (_tts != null && _ttsInitialized) {
-      await _tts!.setVolume(config.volume);
-      await _tts!.setSpeechRate(config.speechRate);
-      await _tts!.setPitch(config.pitch);
-
-      if (config.voice != null) {
-        await _setVoiceByName(config.voice);
-      }
+    if (voiceChanged) {
+      _voiceConfigured = false;
     }
 
     if (_playerConfigured) {
@@ -298,13 +325,13 @@ class TtsManager {
       _config = config;
     }
 
-    // Initialize FlutterTts
+    // Initialize native device TTS.
     await _ensureTtsInitialized();
 
-    // Configure AudioPlayer for all platforms (using just_audio)
+    // Configure the host audio player for all platforms.
     if (!_playerConfigured) {
-      _playerStateSub = _player.playerStateStream.listen((state) {
-        if (state.processingState == ProcessingState.completed) {
+      _playerStateSub = _player.stateChanges.listen((state) {
+        if (state.processingState == AudioProcessingState.completed) {
           _onServerAudioComplete();
         }
         if (state.playing) {
@@ -314,7 +341,7 @@ class TtsManager {
           _isTransitioningChunks = false;
           _emitEvent(const TtsStarted());
         } else if (!state.playing &&
-            state.processingState == ProcessingState.ready &&
+            state.processingState == AudioProcessingState.ready &&
             !_isTransitioningChunks) {
           // Only emit pause when actually paused, ready, and NOT transitioning
           // between chunks. During chunk transitions, the player briefly enters
@@ -322,7 +349,7 @@ class TtsManager {
           _emitEvent(const TtsPaused());
         }
       });
-      _playerIndexSub = _player.currentIndexStream.listen((index) {
+      _playerIndexSub = _player.currentIndexChanges.listen((index) {
         final session = _activeSession;
         if (session == null || !session.useServerTts || index == null) {
           return;
@@ -373,6 +400,7 @@ class TtsManager {
       id: _sessionCounter,
       chunks: chunks,
       useServerTts: shouldUseServer,
+      serverSpeech: shouldUseServer ? _serverSpeech : null,
     );
     _activeSession = session;
 
@@ -385,9 +413,17 @@ class TtsManager {
       }
       return session;
     } catch (e) {
-      _emitEvent(TtsError(e.toString()));
-
-      // Try fallback to device TTS if server fails
+      // Try fallback to device TTS if server fails. Only emit a terminal
+      // error when no fallback is possible or the fallback fails too, so a
+      // successful fallback keeps the controller's active message (#709).
+      DebugLogger.warning(
+        'tts-playback-start-failed',
+        scope: 'tts/manager',
+        data: {
+          'server': shouldUseServer,
+          'errorType': e.runtimeType.toString(),
+        },
+      );
       if (shouldUseServer && _deviceEngineAvailable) {
         try {
           // Create a new session with useServerTts: false so device TTS
@@ -403,6 +439,8 @@ class TtsManager {
         } catch (e2) {
           _emitEvent(TtsError(e2.toString()));
         }
+      } else {
+        _emitEvent(TtsError(e.toString()));
       }
 
       _activeSession = null;
@@ -421,11 +459,15 @@ class TtsManager {
       id: _sessionCounter,
       chunks: <String>[],
       useServerTts: shouldUseServer,
+      serverSpeech: shouldUseServer ? _serverSpeech : null,
     );
     _activeSession = session;
     _isStreamingSession = true;
     _streamingFinalized = false;
     _streamingFedChunkCount = 0;
+    _streamingSpokenText = '';
+    _streamingFeedSerial = Future<void>.value();
+    _streamingFeedsPending = 0;
     _deviceWaitingForStreamingChunk = false;
     _serverLastFetchScheduledIndex = -1;
     _serverFetchingIndices.clear();
@@ -434,9 +476,9 @@ class TtsManager {
     if (shouldUseServer) {
       await _startServerBackgroundLease(session.id);
       await _player.stop();
-      await _player.clearAudioSources();
+      await _player.clearClips();
     } else {
-      if (!_deviceEngineAvailable || _tts == null) {
+      if (!_deviceEngineAvailable) {
         throw StateError('Device TTS is not available');
       }
       if (!_voiceConfigured) {
@@ -476,7 +518,8 @@ class TtsManager {
       final producerDone =
           _serverLastEnqueuedIndex >= session.chunks.length - 1 &&
           _serverFetchingIndices.isEmpty;
-      final playerDone = _player.processingState == ProcessingState.completed;
+      final playerDone =
+          _player.processingState == AudioProcessingState.completed;
       if (producerDone && playerDone) {
         _onServerAudioComplete();
       }
@@ -502,7 +545,7 @@ class TtsManager {
       if (session.useServerTts) {
         await _player.pause();
       } else {
-        await _tts?.pause();
+        await _nativeTts.pause();
       }
     } catch (e) {
       _emitEvent(TtsError(e.toString()));
@@ -519,7 +562,7 @@ class TtsManager {
         await _player.play();
         _emitEvent(const TtsResumed());
       } else {
-        // Device TTS resume is handled by the native handler
+        await _nativeTts.resume();
       }
     } catch (e) {
       _emitEvent(TtsError(e.toString()));
@@ -537,7 +580,7 @@ class TtsManager {
       if (session.useServerTts) {
         await _player.stop();
       } else {
-        await _tts?.stop();
+        await _nativeTts.stop();
       }
       _resetPlaybackState();
       _emitEvent(const TtsCancelled());
@@ -558,7 +601,15 @@ class TtsManager {
     // Reset playback state
     _resetPlaybackState();
     _activeSession = null;
-    _sessionCounter = 0;
+    // _sessionCounter is deliberately left where it is. A feed queued on the
+    // previous chain can still be waiting its turn here, and it only checks the
+    // active session's id, so handing that id back out would let it append its
+    // old text to the next session. The id also names the server chunk temp dir
+    // and the background lease, which the same stale work tears down.
+
+    // Whatever needed the call route is over; read-aloud belongs on the media
+    // stream.
+    _voiceCallActive = false;
 
     // Reset server audio buffer
     _serverAudioBuffer.clear();
@@ -571,6 +622,8 @@ class TtsManager {
   /// Disposes the manager and releases resources.
   Future<void> dispose() async {
     await stop();
+    await _nativeTtsSub?.cancel();
+    _nativeTtsSub = null;
     await _playerStateSub?.cancel();
     await _playerIndexSub?.cancel();
     await _player.dispose();
@@ -585,127 +638,56 @@ class TtsManager {
   }
 
   /// Mirrors OpenWebUI's `extractSentences`.
-  List<String> extractSentences(String text) {
-    final codeBlocks = <String>[];
-    var processed = text;
-    var codeBlockIndex = 0;
-
-    final codeBlockRegex = RegExp(r'```[\s\S]*?```', multiLine: true);
-    processed = processed.replaceAllMapped(codeBlockRegex, (match) {
-      final placeholder = '\u0000$codeBlockIndex\u0000';
-      codeBlocks.add(match.group(0)!);
-      codeBlockIndex++;
-      return placeholder;
-    });
-
-    final sentences = processed.split(RegExp(r'(?<=[.!?])\s+|\n+')).toList();
-
-    return sentences
-        .map((sentence) {
-          return sentence.replaceAllMapped(RegExp(r'\u0000(\d+)\u0000'), (m) {
-            final idx = int.parse(m.group(1)!);
-            return idx < codeBlocks.length ? codeBlocks[idx] : '';
-          });
-        })
-        .map(ConduitMarkdownPreprocessor.cleanText)
-        .where((s) => s.isNotEmpty)
-        .toList();
-  }
+  List<String> extractSentences(String text) => speech.extractSentences(text);
 
   /// Mirrors OpenWebUI's `extractParagraphsForAudio`.
-  List<String> extractParagraphsForAudio(String text) {
-    final codeBlocks = <String>[];
-    var processed = text;
-    var codeBlockIndex = 0;
-
-    final codeBlockRegex = RegExp(r'```[\s\S]*?```', multiLine: true);
-    processed = processed.replaceAllMapped(codeBlockRegex, (match) {
-      final placeholder = '\u0000$codeBlockIndex\u0000';
-      codeBlocks.add(match.group(0)!);
-      codeBlockIndex++;
-      return placeholder;
-    });
-
-    final paragraphs = processed
-        .split(RegExp(r'\n+'))
-        .map((paragraph) {
-          return paragraph.replaceAllMapped(RegExp(r'\u0000(\d+)\u0000'), (m) {
-            final idx = int.parse(m.group(1)!);
-            return idx < codeBlocks.length ? codeBlocks[idx] : '';
-          });
-        })
-        .map(ConduitMarkdownPreprocessor.cleanText)
-        .where((s) => s.isNotEmpty)
-        .toList();
-
-    return paragraphs;
-  }
+  List<String> extractParagraphsForAudio(String text) =>
+      speech.extractParagraphsForAudio(text);
 
   /// Mirrors OpenWebUI's `extractSentencesForAudio`.
-  List<String> extractSentencesForAudio(String text) {
-    final sentences = extractSentences(text);
-
-    final mergedChunks = <String>[];
-    for (final sentence in sentences) {
-      if (mergedChunks.isEmpty) {
-        mergedChunks.add(sentence);
-      } else {
-        final lastIndex = mergedChunks.length - 1;
-        final previousText = mergedChunks[lastIndex];
-        final wordCount = previousText.split(RegExp(r'\s+')).length;
-        final charCount = previousText.length;
-
-        if (wordCount < _mergeMinWords || charCount < _mergeMinChars) {
-          mergedChunks[lastIndex] = '$previousText $sentence';
-        } else {
-          mergedChunks.add(sentence);
-        }
-      }
-    }
-
-    return mergedChunks;
-  }
+  List<String> extractSentencesForAudio(String text) =>
+      speech.extractSentencesForAudio(text);
 
   /// Mirrors OpenWebUI's `getMessageContentParts`.
   List<String> getMessageContentParts(
     String content, {
     String splitOn = splitOnPunctuation,
-  }) {
-    final sanitizedContent = content.replaceAll(
-      RegExp(r'<details[^>]*>[\s\S]*?<\/details>', caseSensitive: false),
-      '',
-    );
-
-    switch (splitOn) {
-      case splitOnParagraphs:
-        return extractParagraphsForAudio(sanitizedContent);
-      case splitOnNone:
-        final cleaned = ConduitMarkdownPreprocessor.cleanText(sanitizedContent);
-        return cleaned.isEmpty ? const [] : [cleaned];
-      case splitOnPunctuation:
-      default:
-        return extractSentencesForAudio(sanitizedContent);
-    }
-  }
+  }) => speech.getMessageContentParts(content, splitOn: splitOn);
 
   /// Gets available voices from the device TTS engine.
   Future<List<Map<String, dynamic>>> getDeviceVoices() async {
     await _ensureTtsInitialized();
-    if (_tts == null) return [];
+    final voices = await _nativeTts.getVoices();
+    final engine = !kIsWeb && Platform.isIOS ? 'AVSpeech' : 'AndroidTTS';
+    return _mergeDeviceVoices([
+      voices.map((voice) => {...voice, 'engine': engine}).toList(),
+    ]);
+  }
 
-    try {
-      final voicesRaw = await _tts!.getVoices;
-      if (voicesRaw is! List) return [];
-
-      return voicesRaw
-          .whereType<Map>()
-          .map((e) => _normalizeVoiceEntry(e))
-          .where((e) => e.isNotEmpty)
-          .toList();
-    } catch (e) {
-      _emitEvent(TtsError(e.toString()));
-      return [];
+  List<Map<String, dynamic>> _mergeDeviceVoices(
+    List<List<Map<String, dynamic>>> groups,
+  ) {
+    final merged = <String, Map<String, dynamic>>{};
+    for (final group in groups) {
+      for (final voice in group) {
+        final key = _voiceDedupeKey(voice);
+        if (key == null || merged.containsKey(key)) {
+          continue;
+        }
+        merged[key] = voice;
+      }
     }
+    return merged.values.toList(growable: false);
+  }
+
+  String? _voiceDedupeKey(Map<String, dynamic> voice) {
+    for (final key in const ['identifier', 'id', 'voiceIdentifier', 'name']) {
+      final value = voice[key]?.toString().trim();
+      if (value != null && value.isNotEmpty) {
+        return value.toLowerCase();
+      }
+    }
+    return null;
   }
 
   String _normalizeSplitOn(String? splitOn) {
@@ -723,7 +705,8 @@ class TtsManager {
   Future<({Uint8List bytes, String mimeType})> synthesizeChunk(
     String text,
   ) async {
-    if (_apiService == null) {
+    final speech = _serverSpeech;
+    if (speech == null || !speech.canSynthesize) {
       throw StateError('Server TTS is not available');
     }
     if (text.trim().isEmpty) {
@@ -731,29 +714,64 @@ class TtsManager {
     }
 
     final voice = await _resolveServerVoice();
-    final result = await _apiService!.generateSpeech(text: text, voice: voice);
-    return (bytes: result.bytes, mimeType: result.mimeType);
+    return speech.synthesize(text, preferredVoice: voice);
   }
 
+  /// Chains feeds so a second one cannot append its chunks in between the ones
+  /// an earlier feed is still handing to playback.
+  ///
+  /// Streamed text arrives faster than a chunk takes to reach the player, so
+  /// two feeds do overlap. Without the chain the later feed's sentences can
+  /// land first and the answer is spoken out of order.
   Future<void> _enqueueStreamingText(
+    TtsPlaybackSession session,
+    String accumulatedText, {
+    required bool finalized,
+  }) {
+    _streamingFeedsPending++;
+    final queued = _streamingFeedSerial
+        .then(
+          (_) => _feedStreamingChunks(
+            session,
+            accumulatedText,
+            finalized: finalized,
+          ),
+        )
+        .whenComplete(() {
+          // A feed already inside the platform speak call when the next session
+          // starts outlives its own session. The counter was zeroed with that
+          // session, so decrementing here would take the new session's own feed
+          // off the count and end it early.
+          if (_activeSession?.id != session.id) {
+            return;
+          }
+          _streamingFeedsPending--;
+        });
+    _streamingFeedSerial = queued.catchError((Object _) {});
+    return queued;
+  }
+
+  Future<void> _feedStreamingChunks(
     TtsPlaybackSession session,
     String accumulatedText, {
     required bool finalized,
   }) async {
     if (_activeSession?.id != session.id) return;
 
-    final chunks = splitTextForSpeech(accumulatedText);
-    final speakableCount = finalized
-        ? chunks.length
-        : (chunks.length <= 1 ? 0 : chunks.length - 1);
+    final advance = advanceStreamingChunks(
+      chunks: splitTextForSpeech(accumulatedText),
+      fedChunkCount: _streamingFedChunkCount,
+      spokenText: _streamingSpokenText,
+      finalized: finalized,
+    );
+    // Move the cursor before awaiting: a concurrent feed must not re-enqueue
+    // the chunks this call is still handing to playback.
+    _streamingFedChunkCount = advance.fedChunkCount;
+    _streamingSpokenText = advance.spokenText;
 
-    while (_streamingFedChunkCount < speakableCount) {
-      final chunk = chunks[_streamingFedChunkCount].trim();
-      _streamingFedChunkCount++;
-      if (chunk.isEmpty) {
-        continue;
-      }
+    for (final chunk in advance.chunks) {
       await _appendStreamingChunk(session, chunk);
+      if (_activeSession?.id != session.id) return;
     }
   }
 
@@ -774,9 +792,10 @@ class TtsManager {
     if (_currentChunkIndex < 0) {
       _currentChunkIndex = 0;
       _emitEvent(const TtsChunkStarted(0));
-      final result = await _tts!.speak(chunk);
-      if (result is int && result != 1) {
-        _emitEvent(TtsError('TTS engine returned error code $result'));
+      try {
+        await _speakDeviceChunk(chunk);
+      } catch (error) {
+        _failDevicePlayback(session, error);
       }
       return;
     }
@@ -800,6 +819,7 @@ class TtsManager {
     unawaited(() async {
       try {
         final chunk = await _fetchServerAudioWithRetry(
+          session.serverSpeech,
           session.chunks[index],
           voice,
         );
@@ -807,13 +827,20 @@ class TtsManager {
         _setBufferedServerChunk(index, chunk);
         await _enqueueBufferedServerChunks(session);
       } catch (error) {
-        _emitEvent(TtsError(error.toString()));
+        // A fetch for a session that is over has nobody to report to, and the
+        // listeners are all watching whatever is playing now.
+        if (_activeSession?.id == session.id) {
+          _emitEvent(TtsError(error.toString()));
+        }
       } finally {
-        _serverFetchingIndices.remove(index);
-        if (_streamingFinalized &&
-            _serverFetchingIndices.isEmpty &&
-            _activeSession?.id == session.id) {
-          _onServerAudioComplete();
+        // The set was emptied when this session ended, so a fetch that outlived
+        // it would take the next session's marker for the same index instead of
+        // its own.
+        if (_activeSession?.id == session.id) {
+          _serverFetchingIndices.remove(index);
+          if (_streamingFinalized && _serverFetchingIndices.isEmpty) {
+            _onServerAudioComplete();
+          }
         }
       }
     }());
@@ -826,7 +853,6 @@ class TtsManager {
   Future<void> _ensureTtsInitialized() async {
     if (_ttsInitialized) return;
 
-    // Prevent concurrent initialization
     if (_initCompleter != null) {
       await _initCompleter!.future;
       return;
@@ -835,20 +861,6 @@ class TtsManager {
     _initCompleter = Completer<void>();
 
     try {
-      final tts = FlutterTts();
-      _tts = tts;
-
-      // Wait for native TTS to be fully initialized before setting handlers.
-      // The flutter_tts plugin has a bug where setting handlers during onInit
-      // causes ConcurrentModificationException.
-      await Future<void>.delayed(const Duration(milliseconds: 500));
-
-      if (!_handlersSet) {
-        _setupTtsHandlers(tts);
-        _handlersSet = true;
-      }
-
-      // Configure device engine
       await _configureDeviceEngine();
 
       _ttsInitialized = true;
@@ -860,80 +872,50 @@ class TtsManager {
     }
   }
 
-  void _setupTtsHandlers(FlutterTts tts) {
-    tts.setStartHandler(() {
-      if (_activeSession != null && !_activeSession!.useServerTts) {
+  Future<void> _configureDeviceEngine() async {
+    _deviceEngineAvailable = false;
+    _nativeTtsAvailable = await _nativeTts.isAvailable();
+    if (_nativeTtsAvailable && _nativeTtsSub == null) {
+      _nativeTtsSub = _nativeTts.events.listen(
+        _handleNativeTtsEvent,
+        onError: (Object error) {
+          _emitEvent(TtsError(error.toString()));
+        },
+      );
+    }
+
+    _deviceEngineAvailable = _nativeTtsAvailable;
+  }
+
+  void _handleNativeTtsEvent(NativeTtsEvent event) {
+    final session = _activeSession;
+    if (session == null || session.useServerTts) {
+      return;
+    }
+
+    switch (event.type) {
+      case 'start':
         _emitEvent(const TtsStarted());
-      }
-    });
-
-    tts.setCompletionHandler(() {
-      _onDeviceChunkComplete();
-    });
-
-    tts.setCancelHandler(() {
-      if (_activeSession != null && !_activeSession!.useServerTts) {
+      case 'complete':
+        _onDeviceChunkComplete();
+      case 'cancel':
         _activeSession = null;
         _resetPlaybackState();
         _emitEvent(const TtsCancelled());
-      }
-    });
-
-    tts.setPauseHandler(() {
-      if (_activeSession != null && !_activeSession!.useServerTts) {
+      case 'pause':
         _emitEvent(const TtsPaused());
-      }
-    });
-
-    tts.setContinueHandler(() {
-      if (_activeSession != null && !_activeSession!.useServerTts) {
+      case 'continue':
         _emitEvent(const TtsResumed());
-      }
-    });
-
-    tts.setErrorHandler((msg) {
-      _emitEvent(TtsError(msg.toString()));
-    });
-
-    try {
-      tts.setProgressHandler((String text, int start, int end, String word) {
-        if (_activeSession != null && !_activeSession!.useServerTts) {
+      case 'progress':
+        final start = event.start;
+        final end = event.end;
+        if (start != null && end != null) {
           _emitEvent(TtsWordProgress(start, end));
         }
-      });
-    } catch (_) {
-      // Some platforms may not support progress handler
-    }
-  }
-
-  Future<void> _configureDeviceEngine() async {
-    if (_tts == null) return;
-
-    _deviceEngineAvailable = false;
-    try {
-      // Set default engine on Android
-      if (!kIsWeb && Platform.isAndroid) {
-        try {
-          final engine = await _tts!.getDefaultEngine;
-          if (engine is String && engine.isNotEmpty) {
-            await _tts!.setEngine(engine);
-          }
-        } catch (_) {}
-      }
-
-      await _tts!.awaitSpeakCompletion(true);
-      await _tts!.setVolume(_config.volume);
-      await _tts!.setSpeechRate(_config.speechRate);
-      await _tts!.setPitch(_config.pitch);
-
-      if (!kIsWeb && Platform.isIOS) {
-        await _tts!.setSharedInstance(true);
-      }
-
-      _deviceEngineAvailable = true;
-    } catch (e) {
-      _deviceEngineAvailable = false;
-      _emitEvent(TtsError(e.toString()));
+      case 'error':
+        _activeSession = null;
+        _resetPlaybackState();
+        _emitEvent(TtsError(event.message ?? 'Native TTS failed'));
     }
   }
 
@@ -942,7 +924,7 @@ class TtsManager {
   // ===========================================================================
 
   Future<void> _startDevicePlayback(TtsPlaybackSession session) async {
-    if (!_deviceEngineAvailable || _tts == null) {
+    if (!_deviceEngineAvailable) {
       throw StateError('Device TTS is not available');
     }
 
@@ -955,10 +937,7 @@ class TtsManager {
 
     // Speak first chunk
     _emitEvent(const TtsChunkStarted(0));
-    final result = await _tts!.speak(session.chunks.first);
-    if (result is int && result != 1) {
-      throw StateError('TTS engine returned error code $result');
-    }
+    await _speakDeviceChunk(session.chunks.first);
   }
 
   void _onDeviceChunkComplete() {
@@ -969,7 +948,8 @@ class TtsManager {
 
     // Check if there are more chunks
     if (nextIndex >= session.chunks.length) {
-      if (_isStreamingSession && !_streamingFinalized) {
+      if (_isStreamingSession &&
+          (!_streamingFinalized || _streamingFeedsPending > 0)) {
         _deviceWaitingForStreamingChunk = true;
         return;
       }
@@ -983,11 +963,31 @@ class TtsManager {
     _currentChunkIndex = nextIndex;
     _emitEvent(TtsChunkStarted(nextIndex));
 
-    _tts?.speak(session.chunks[nextIndex]).then((result) {
-      if (result is int && result != 1) {
-        _emitEvent(TtsError('TTS engine returned error code $result'));
-      }
+    _speakDeviceChunk(session.chunks[nextIndex]).catchError((Object error) {
+      _failDevicePlayback(session, error);
     });
+  }
+
+  Future<void> _speakDeviceChunk(String chunk) async {
+    final started = await _nativeTts.speak(
+      text: chunk,
+      voiceIdentifier: _config.voice,
+      rate: _config.speechRate,
+      pitch: _config.pitch,
+      volume: _config.volume,
+      voiceCall: _voiceCallActive,
+    );
+    if (!started) {
+      throw StateError('Native TTS failed to start');
+    }
+  }
+
+  void _failDevicePlayback(TtsPlaybackSession session, Object error) {
+    if (_activeSession?.id == session.id) {
+      _activeSession = null;
+      _resetPlaybackState();
+    }
+    _emitEvent(TtsError(error.toString()));
   }
 
   // ===========================================================================
@@ -995,7 +995,7 @@ class TtsManager {
   // ===========================================================================
 
   Future<void> _startServerPlayback(TtsPlaybackSession session) async {
-    if (_apiService == null) {
+    if (!serverAvailable) {
       throw StateError('Server TTS is not available');
     }
 
@@ -1010,6 +1010,7 @@ class TtsManager {
 
     // Fetch and play first chunk
     final firstChunk = await _fetchServerAudioWithRetry(
+      session.serverSpeech,
       session.chunks.first,
       voice,
     );
@@ -1017,7 +1018,7 @@ class TtsManager {
 
     _setBufferedServerChunk(0, firstChunk);
     _serverLastEnqueuedIndex = 0;
-    final initialSources = <AudioSource>[
+    final initialSources = <AudioClip>[
       await _audioSourceForServerChunk(session.id, 0, firstChunk),
     ];
 
@@ -1028,6 +1029,7 @@ class TtsManager {
     if (session.chunks.length > 1) {
       try {
         final secondChunk = await _fetchServerAudioWithRetry(
+          session.serverSpeech,
           session.chunks[1],
           voice,
         ).timeout(_serverInitialLookaheadTimeout);
@@ -1051,7 +1053,7 @@ class TtsManager {
     // Flag will be cleared by state listener when playing=true is received.
     // This prevents race condition where flag is cleared before state fires.
     try {
-      await _player.setAudioSources(
+      await _player.setClips(
         initialSources,
         initialIndex: 0,
         initialPosition: Duration.zero,
@@ -1088,6 +1090,7 @@ class TtsManager {
 
         try {
           final chunk = await _fetchServerAudioWithRetry(
+            session.serverSpeech,
             session.chunks[i],
             voice,
           );
@@ -1110,19 +1113,22 @@ class TtsManager {
   }
 
   Future<_AudioChunk> _fetchServerAudio(
+    ServerSpeechProvider? speech,
     String text,
     String? voice, {
     double? speed,
   }) async {
-    final result = await _apiService!.generateSpeech(
-      text: text,
-      voice: voice,
+    if (speech == null) throw StateError('Server TTS is not available');
+    final result = await speech.synthesize(
+      text,
+      preferredVoice: voice,
       speed: speed,
     );
     return _AudioChunk(bytes: result.bytes, mimeType: result.mimeType);
   }
 
   Future<_AudioChunk> _fetchServerAudioWithRetry(
+    ServerSpeechProvider? speech,
     String text,
     String? voice,
   ) async {
@@ -1136,7 +1142,7 @@ class TtsManager {
 
     for (var attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
-        return await _fetchServerAudio(requestText, requestVoice);
+        return await _fetchServerAudio(speech, requestText, requestVoice);
       } catch (error) {
         lastError = error;
 
@@ -1182,7 +1188,9 @@ class TtsManager {
       lastEnqueuedIndex: _serverLastEnqueuedIndex,
     )) {
       if (_isStreamingSession &&
-          (!_streamingFinalized || _serverFetchingIndices.isNotEmpty)) {
+          (!_streamingFinalized ||
+              _serverFetchingIndices.isNotEmpty ||
+              _streamingFeedsPending > 0)) {
         _serverWaitingForNext = true;
         return;
       }
@@ -1232,6 +1240,7 @@ class TtsManager {
       }
 
       final recovered = await _fetchServerAudioWithRetry(
+        session.serverSpeech,
         session.chunks[index],
         voice,
       );
@@ -1278,7 +1287,7 @@ class TtsManager {
                 _serverLastEnqueuedIndex < 0) {
               _isTransitioningChunks = true;
               try {
-                await _player.setAudioSources(
+                await _player.setClips(
                   [source],
                   initialIndex: 0,
                   initialPosition: Duration.zero,
@@ -1289,7 +1298,7 @@ class TtsManager {
                 rethrow;
               }
             } else {
-              await _player.addAudioSource(source);
+              await _player.addClip(source);
             }
             _serverLastEnqueuedIndex = nextIndex;
           }
@@ -1307,7 +1316,7 @@ class TtsManager {
   }
 
   Future<void> _resumeServerQueueFromCompleted(int currentIndex) async {
-    if (_player.processingState != ProcessingState.completed) {
+    if (_player.processingState != AudioProcessingState.completed) {
       return;
     }
     final nextIndex = currentIndex + 1;
@@ -1318,7 +1327,7 @@ class TtsManager {
     await _player.play();
   }
 
-  Future<AudioSource> _audioSourceForServerChunk(
+  Future<AudioClip> _audioSourceForServerChunk(
     int sessionId,
     int index,
     _AudioChunk chunk,
@@ -1331,7 +1340,7 @@ class TtsManager {
     final file = File(p.join(dir.path, 'chunk_$index.$extension'));
     await file.writeAsBytes(chunk.bytes, flush: true);
     _serverTempFiles.add(file);
-    return AudioSource.uri(file.uri, tag: index);
+    return AudioClip(uri: file.uri, tag: index);
   }
 
   String _audioExtensionForMimeType(String mimeType) {
@@ -1407,13 +1416,13 @@ class TtsManager {
   // ===========================================================================
 
   bool _shouldUseServer() {
-    if (_config.preferServer && _apiService != null) {
+    if (_config.preferServer && serverAvailable) {
       return true;
     }
     if (_deviceEngineAvailable) {
       return false;
     }
-    return _apiService != null;
+    return serverAvailable;
   }
 
   void _resetPlaybackState() {
@@ -1428,6 +1437,9 @@ class TtsManager {
     _isStreamingSession = false;
     _streamingFinalized = false;
     _streamingFedChunkCount = 0;
+    _streamingSpokenText = '';
+    _streamingFeedSerial = Future<void>.value();
+    _streamingFeedsPending = 0;
     _deviceWaitingForStreamingChunk = false;
     _serverLastFetchScheduledIndex = -1;
     _serverFetchingIndices.clear();
@@ -1462,78 +1474,9 @@ class TtsManager {
     }
   }
 
-  Future<void> _setVoiceByName(String? voiceName) async {
-    if (_tts == null || voiceName == null) return;
-    if (kIsWeb || (!Platform.isIOS && !Platform.isAndroid)) return;
-
-    try {
-      final voicesRaw = await _tts!.getVoices;
-      if (voicesRaw is! List) return;
-
-      for (final entry in voicesRaw) {
-        if (entry is Map) {
-          final normalized = _normalizeVoiceEntry(entry);
-          final name = normalized['name'] as String?;
-          if (name == voiceName) {
-            await _tts!.setVoice(_voiceCommandFrom(normalized));
-            _voiceConfigured = true;
-            return;
-          }
-        }
-      }
-    } catch (e) {
-      _emitEvent(TtsError(e.toString()));
-    }
-  }
-
   Future<void> _configurePreferredVoice() async {
-    if (_voiceConfigured || _tts == null) return;
-    if (kIsWeb || (!Platform.isIOS && !Platform.isAndroid)) {
-      _voiceConfigured = true;
-      return;
-    }
-
-    try {
-      // Try to use configured voice
-      if (_config.voice != null) {
-        await _setVoiceByName(_config.voice);
-        if (_voiceConfigured) return;
-      }
-
-      // Fall back to system default
-      _voiceConfigured = true;
-    } catch (e) {
-      _emitEvent(TtsError(e.toString()));
-      _voiceConfigured = true;
-    }
-  }
-
-  Map<String, dynamic> _normalizeVoiceEntry(Map<dynamic, dynamic> entry) {
-    final normalized = <String, dynamic>{};
-    entry.forEach((key, value) {
-      if (key != null) {
-        normalized[key.toString()] = value;
-      }
-    });
-    return normalized;
-  }
-
-  Map<String, String> _voiceCommandFrom(Map<String, dynamic> voice) {
-    final command = <String, String>{};
-    for (final key in [
-      'name',
-      'locale',
-      'identifier',
-      'id',
-      'voiceIdentifier',
-      'engine',
-    ]) {
-      final value = voice[key];
-      if (value != null) {
-        command[key] = value.toString();
-      }
-    }
-    return command;
+    if (_voiceConfigured) return;
+    _voiceConfigured = true;
   }
 }
 

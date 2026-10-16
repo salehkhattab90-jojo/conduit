@@ -2,11 +2,14 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:jovial_svg/jovial_svg.dart';
 
-typedef JovialSvgImageErrorBuilder =
-    Widget Function(BuildContext context, Object error, StackTrace? stackTrace);
+typedef JovialSvgImageErrorBuilder = Widget Function(
+  BuildContext context,
+  Object error,
+  StackTrace? stackTrace,
+);
 
 /// Loads and renders SVG content with `jovial_svg`.
 ///
@@ -85,6 +88,7 @@ class JovialSvgImage extends StatefulWidget {
     String url, {
     Key? key,
     Map<String, String>? headers,
+    Object? cacheIdentity,
     BoxFit fit = BoxFit.contain,
     Alignment alignment = Alignment.center,
     double? width,
@@ -96,7 +100,7 @@ class JovialSvgImage extends StatefulWidget {
     final normalizedHeaders = _normalizeHeaders(headers);
     return JovialSvgImage._(
       key: key,
-      sourceKey: _NetworkSvgSourceKey(url, normalizedHeaders),
+      sourceKey: _NetworkSvgSourceKey(url, normalizedHeaders, cacheIdentity),
       loader: () => ScalableImage.fromSvgHttpUrl(
         Uri.parse(url),
         httpHeaders: normalizedHeaders,
@@ -291,16 +295,18 @@ Map<String, String>? _normalizeHeaders(Map<String, String>? headers) {
 
 @immutable
 class _NetworkSvgSourceKey {
-  const _NetworkSvgSourceKey(this.url, this.headers);
+  const _NetworkSvgSourceKey(this.url, this.headers, this.cacheIdentity);
 
   final String url;
   final Map<String, String>? headers;
+  final Object? cacheIdentity;
 
   @override
   bool operator ==(Object other) {
     return other is _NetworkSvgSourceKey &&
         other.url == url &&
-        mapEquals(other.headers, headers);
+        mapEquals(other.headers, headers) &&
+        other.cacheIdentity == cacheIdentity;
   }
 
   @override
@@ -309,6 +315,7 @@ class _NetworkSvgSourceKey {
         headers?.entries ?? const <MapEntry<String, String>>[];
     return Object.hash(
       url,
+      cacheIdentity,
       Object.hashAll(
         headerEntries.map((entry) => Object.hash(entry.key, entry.value)),
       ),

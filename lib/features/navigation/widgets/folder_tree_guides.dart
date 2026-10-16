@@ -1,95 +1,12 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
-import 'package:conduit/core/models/folder.dart';
+import 'package:conduit_core/utils/folder_tree_guides.dart';
 import 'package:conduit/shared/theme/theme_extensions.dart';
 
-String? _normalizeFolderParentId(String? parentId) {
-  if (parentId == null || parentId.isEmpty) {
-    return null;
-  }
-  return parentId;
-}
-
-/// One folder row plus metadata needed to draw hierarchy guides (sidebar,
-/// move targets, etc.).
-class FolderTreeListEntry {
-  /// Creates a folder row descriptor for tree-aligned lists.
-  const FolderTreeListEntry({
-    required this.folder,
-    required this.ancestorHasMoreSiblings,
-    required this.hasMoreSiblings,
-  });
-
-  /// The folder for this row.
-  final Folder folder;
-
-  /// Per ancestor depth: whether that ancestor level still has more siblings
-  /// below this row (used for vertical rails).
-  final List<bool> ancestorHasMoreSiblings;
-
-  /// Whether this folder has more sibling folders after it under the same
-  /// parent.
-  final bool hasMoreSiblings;
-}
-
-/// Depth-first folder rows in tree order for bottom sheets and pickers.
-///
-/// [omitFolderId] skips one folder row (e.g. current chat folder) but keeps
-/// descendants so nesting guides stay consistent.
-List<FolderTreeListEntry> folderTreeEntriesForTargets({
-  required List<Folder> folders,
-  String? omitFolderId,
-}) {
-  final foldersById = <String, Folder>{
-    for (final folder in folders) folder.id: folder,
-  };
-  final childFoldersByParentId = <String?, List<Folder>>{};
-  for (final folder in folders) {
-    final parentId = _normalizeFolderParentId(folder.parentId);
-    final resolvedParentId =
-        parentId != null && foldersById.containsKey(parentId) ? parentId : null;
-    childFoldersByParentId
-        .putIfAbsent(resolvedParentId, () => <Folder>[])
-        .add(folder);
-  }
-  for (final childFolders in childFoldersByParentId.values) {
-    childFolders.sort(
-      (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
-    );
-  }
-
-  final rootFolders = childFoldersByParentId[null] ?? const <Folder>[];
-  final result = <FolderTreeListEntry>[];
-
-  void visit(
-    Folder folder,
-    List<bool> ancestorHasMoreSiblings,
-    bool hasMoreSiblings,
-  ) {
-    final omit = omitFolderId != null && folder.id == omitFolderId;
-    if (!omit) {
-      result.add(
-        FolderTreeListEntry(
-          folder: folder,
-          ancestorHasMoreSiblings: ancestorHasMoreSiblings,
-          hasMoreSiblings: hasMoreSiblings,
-        ),
-      );
-    }
-
-    final children = childFoldersByParentId[folder.id] ?? const <Folder>[];
-    final nextAncestor = [...ancestorHasMoreSiblings, hasMoreSiblings];
-    for (var index = 0; index < children.length; index++) {
-      visit(children[index], nextAncestor, index < children.length - 1);
-    }
-  }
-
-  for (var index = 0; index < rootFolders.length; index++) {
-    visit(rootFolders[index], const <bool>[], index < rootFolders.length - 1);
-  }
-
-  return result;
-}
+// The tree ordering and the guide geometry live in conduit_core, where they
+// are tested without Flutter.
+export 'package:conduit_core/utils/folder_tree_guides.dart'
+    show FolderTreeListEntry, folderTreeEntriesForTargets;
 
 /// Draws folder-tree connector lines to the left of [child], matching the
 /// chats drawer hierarchy styling.
@@ -101,10 +18,11 @@ class FolderTreeHierarchyNode extends StatelessWidget {
     required this.showBranch,
     required this.hasMoreSiblings,
     required this.child,
+    this.guideInset = 0,
   });
 
   /// Horizontal space per nesting level for guide lines.
-  static const double segmentWidth = 15;
+  static const double segmentWidth = folderTreeSegmentWidth;
 
   /// See [FolderTreeListEntry.ancestorHasMoreSiblings].
   final List<bool> ancestorHasMoreSiblings;
@@ -118,6 +36,9 @@ class FolderTreeHierarchyNode extends StatelessWidget {
   /// Content placed to the right of the guide column (folder tile, etc.).
   final Widget child;
 
+  /// Extra leading inset for the painted guides, without moving [child].
+  final double guideInset;
+
   @override
   Widget build(BuildContext context) {
     if (!showBranch && ancestorHasMoreSiblings.every((value) => !value)) {
@@ -125,8 +46,10 @@ class FolderTreeHierarchyNode extends StatelessWidget {
     }
 
     final sidebarTheme = context.sidebarTheme;
-    final guideSegments = ancestorHasMoreSiblings.length + (showBranch ? 1 : 0);
-    final guideWidth = guideSegments * segmentWidth;
+    final guideWidth = folderTreeGuideWidth(
+      ancestorCount: ancestorHasMoreSiblings.length,
+      showBranch: showBranch,
+    );
     final lineColor = Color.alphaBlend(
       sidebarTheme.foreground.withValues(alpha: 0.30),
       sidebarTheme.background,
@@ -139,7 +62,7 @@ class FolderTreeHierarchyNode extends StatelessWidget {
           child: child,
         ),
         Positioned(
-          left: 0,
+          left: guideInset,
           top: 0,
           bottom: 0,
           width: guideWidth,
@@ -176,38 +99,22 @@ class _FolderTreeHierarchyPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
       ..color = lineColor
-      ..strokeWidth = 1.25
+      ..strokeWidth = folderTreeGuideStrokeWidth
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.square
       ..strokeJoin = StrokeJoin.miter
       ..isAntiAlias = true;
 
-    final centerY = size.height / 2;
-    final seg = FolderTreeHierarchyNode.segmentWidth;
-
-    for (var index = 0; index < ancestorHasMoreSiblings.length; index++) {
-      if (index == 0 || !ancestorHasMoreSiblings[index]) {
-        continue;
-      }
-
-      final x = (index * seg) + (seg / 2);
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
-    }
-
-    if (!showBranch) {
-      return;
-    }
-
-    final branchX = (ancestorHasMoreSiblings.length * seg) + (seg / 2);
-    final jointY = centerY;
-
-    canvas.drawLine(Offset(branchX, 0), Offset(branchX, jointY), paint);
-    canvas.drawLine(Offset(branchX, jointY), Offset(size.width, jointY), paint);
-
-    if (hasMoreSiblings) {
+    for (final line in folderTreeHierarchyLines(
+      ancestorHasMoreSiblings: ancestorHasMoreSiblings,
+      showBranch: showBranch,
+      hasMoreSiblings: hasMoreSiblings,
+      width: size.width,
+      height: size.height,
+    )) {
       canvas.drawLine(
-        Offset(branchX, jointY),
-        Offset(branchX, size.height),
+        Offset(line.x1, line.y1),
+        Offset(line.x2, line.y2),
         paint,
       );
     }
@@ -228,10 +135,14 @@ class FolderTreeIntergroupGap extends StatelessWidget {
   const FolderTreeIntergroupGap({
     super.key,
     required this.ancestorHasMoreSiblings,
+    this.guideInset = 0,
   });
 
   /// Same ancestry flags as the rows below this gap.
   final List<bool> ancestorHasMoreSiblings;
+
+  /// Extra leading inset for the painted guides.
+  final double guideInset;
 
   @override
   Widget build(BuildContext context) {
@@ -244,10 +155,13 @@ class FolderTreeIntergroupGap extends StatelessWidget {
     return SizedBox(
       height: Spacing.sm,
       width: double.infinity,
-      child: CustomPaint(
-        painter: _FolderTreeIntergroupGapPainter(
-          ancestorHasMoreSiblings: ancestorHasMoreSiblings,
-          lineColor: lineColor,
+      child: Padding(
+        padding: EdgeInsets.only(left: guideInset),
+        child: CustomPaint(
+          painter: _FolderTreeIntergroupGapPainter(
+            ancestorHasMoreSiblings: ancestorHasMoreSiblings,
+            lineColor: lineColor,
+          ),
         ),
       ),
     );
@@ -267,32 +181,21 @@ class _FolderTreeIntergroupGapPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
       ..color = lineColor
-      ..strokeWidth = 1.25
+      ..strokeWidth = folderTreeGuideStrokeWidth
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.square
       ..isAntiAlias = true;
 
-    final seg = FolderTreeHierarchyNode.segmentWidth;
-    final list = ancestorHasMoreSiblings;
-
-    for (var index = 1; index < list.length; index++) {
-      if (!list[index]) {
-        continue;
-      }
-      final x = (index * seg) + (seg / 2);
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
+    for (final line in folderTreeIntergroupGapLines(
+      ancestorHasMoreSiblings: ancestorHasMoreSiblings,
+      height: size.height,
+    )) {
+      canvas.drawLine(
+        Offset(line.x1, line.y1),
+        Offset(line.x2, line.y2),
+        paint,
+      );
     }
-
-    if (list.isEmpty) {
-      return;
-    }
-
-    final branchSpineX = (list.length * seg) + (seg / 2);
-    canvas.drawLine(
-      Offset(branchSpineX, 0),
-      Offset(branchSpineX, size.height),
-      paint,
-    );
   }
 
   @override

@@ -1,16 +1,27 @@
-import 'package:adaptive_platform_ui/adaptive_platform_ui.dart';
-import 'package:flutter/material.dart';
+import 'package:conduit/shared/widgets/platform_ui/platform_ui.dart';
+import 'package:material_ui/material_ui.dart';
+
 import '../../../shared/theme/theme_extensions.dart';
-import 'package:flutter/cupertino.dart';
+import '../../../shared/utils/locale_display_formatters.dart';
+
+import 'package:cupertino_ui/cupertino_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+
 import 'dart:async';
 import 'dart:io' show File, Platform;
+
 import 'package:conduit/l10n/app_localizations.dart';
+
 import '../services/file_attachment_service.dart';
-import '../../../core/services/share_receiver_service.dart';
+import '../../../platform/share_receiver_service.dart';
 import '../../../core/services/media_upload_controller.dart';
-import '../../../core/utils/debug_logger.dart';
+import '../../../shared/services/raster_media_policy.dart';
+
+import 'package:conduit_core/utils/debug_logger.dart';
+
 import '../../../shared/widgets/conduit_loading.dart';
+import '../../../shared/widgets/horizontal_gesture_ownership.dart';
+import '../../../shared/widgets/horizontal_overflow_fade.dart';
 
 const Set<String> _previewableImageExtensions = <String>{
   '.jpg',
@@ -20,6 +31,13 @@ const Set<String> _previewableImageExtensions = <String>{
   '.webp',
   '.bmp',
 };
+
+const double _fileAttachmentCardWidth = 140;
+const double _fileAttachmentPreviewAspectRatio = 4 / 3;
+const double _fileAttachmentPreviewWidth =
+    _fileAttachmentCardWidth - (Spacing.sm * 2);
+const double _fileAttachmentPreviewHeight =
+    _fileAttachmentPreviewWidth / _fileAttachmentPreviewAspectRatio;
 
 class FileAttachmentWidget extends ConsumerWidget {
   const FileAttachmentWidget({super.key});
@@ -51,21 +69,25 @@ class FileAttachmentWidget extends ConsumerWidget {
             ),
           ),
           const SizedBox(height: Spacing.sm),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: [
-                for (var index = 0; index < placeholderCount; index++)
-                  const Padding(
-                    padding: EdgeInsets.only(right: Spacing.sm),
-                    child: _FileAttachmentSkeletonCard(),
-                  ),
-                for (final fileState in attachedFiles)
-                  Padding(
-                    padding: const EdgeInsets.only(right: Spacing.sm),
-                    child: _FileAttachmentCard(fileState: fileState),
-                  ),
-              ],
+          HorizontalOverflowFade(
+            child: HorizontalScrollGestureBoundary(
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    for (var index = 0; index < placeholderCount; index++)
+                      const Padding(
+                        padding: EdgeInsets.only(right: Spacing.sm),
+                        child: _FileAttachmentSkeletonCard(),
+                      ),
+                    for (final fileState in attachedFiles)
+                      Padding(
+                        padding: const EdgeInsets.only(right: Spacing.sm),
+                        child: _FileAttachmentCard(fileState: fileState),
+                      ),
+                  ],
+                ),
+              ),
             ),
           ),
         ],
@@ -85,7 +107,7 @@ class _FileAttachmentCard extends ConsumerWidget {
     final Widget removeButton = _buildRemoveButton(context, ref);
 
     return Container(
-      width: 140,
+      width: _fileAttachmentCardWidth,
       padding: const EdgeInsets.all(Spacing.sm),
       decoration: BoxDecoration(
         color: context.conduitTheme.cardBackground,
@@ -122,7 +144,7 @@ class _FileAttachmentCard extends ConsumerWidget {
           ),
           const SizedBox(height: Spacing.xs),
           Text(
-            fileState.formattedSize,
+            LocaleDisplayFormatters.bytes(context, fileState.fileSize),
             style: AppTypography.labelSmallStyle.copyWith(
               color: context.conduitTheme.textSecondary.withValues(alpha: 0.6),
             ),
@@ -187,9 +209,8 @@ class _FileAttachmentCard extends ConsumerWidget {
   }
 
   Widget _buildRemoveButton(BuildContext context, WidgetRef ref) {
-    final String tooltip = MaterialLocalizations.of(
-      context,
-    ).deleteButtonTooltip;
+    final String tooltip = MaterialLocalizations.of(context)
+        .deleteButtonTooltip;
     return AdaptiveTooltip(
       message: tooltip,
       child: Semantics(
@@ -224,25 +245,24 @@ class _FileAttachmentCard extends ConsumerWidget {
   }
 
   void _removeAttachment(WidgetRef ref) {
-    ref.read(attachedFilesProvider.notifier).removeFile(fileState.file.path);
-    if (!fileState.isRemote) {
-      // Controller cancels any in-flight upload AND performs the share-staging
-      // cleanup the legacy task_queue did on attachment removal.
-      unawaited(
-        ref
-            .read(mediaUploadControllerProvider)
-            .cancelUploadsForFile(fileState.file.path)
-            .catchError((Object error, StackTrace stackTrace) {
-              DebugLogger.error(
-                'cancel-upload-failed',
-                scope: 'chat/attachment',
-                error: error,
-                stackTrace: stackTrace,
-                data: {'path': fileState.file.path},
-              );
-            }),
-      );
-    }
+    // Controller removes the UI state synchronously, then retires any local
+    // queue/staging owner behind its durable and same-path generation fences.
+    unawaited(
+      ref
+          .read(mediaUploadControllerProvider)
+          .removeAttachment(fileState.file.path)
+          .catchError((Object error, StackTrace stackTrace) {
+            DebugLogger.error(
+              'cancel-upload-failed',
+              scope: 'chat/attachment',
+              stackTrace: stackTrace,
+              data: {
+                'fileName': fileState.fileName,
+                'errorType': error.runtimeType.toString(),
+              },
+            );
+          }),
+    );
   }
 
   Widget _buildProgressBar(BuildContext context) {
@@ -287,8 +307,14 @@ class _FileAttachmentCard extends ConsumerWidget {
 
   Widget _buildImagePreview(BuildContext context, Widget removeButton) {
     final File file = fileState.file;
-    final Widget basePreview = Image.file(
-      file,
+    final decodeTarget = RasterMediaPolicy.forBox(
+      context,
+      profile: RasterDecodeProfile.thumbnail,
+      logicalWidth: _fileAttachmentPreviewWidth,
+      logicalHeight: _fileAttachmentPreviewHeight,
+    );
+    final Widget basePreview = Image(
+      image: RasterMediaPolicy.resizeProvider(FileImage(file), decodeTarget),
       fit: BoxFit.cover,
       filterQuality: FilterQuality.medium,
       errorBuilder: (context, error, stackTrace) =>
@@ -306,7 +332,7 @@ class _FileAttachmentCard extends ConsumerWidget {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(AppBorderRadius.xs),
         child: AspectRatio(
-          aspectRatio: 4 / 3,
+          aspectRatio: _fileAttachmentPreviewAspectRatio,
           child: Stack(
             children: [
               Positioned.fill(child: basePreview),
@@ -363,7 +389,7 @@ class _FileAttachmentSkeletonCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 140,
+      width: _fileAttachmentCardWidth,
       padding: const EdgeInsets.all(Spacing.sm),
       decoration: BoxDecoration(
         color: context.conduitTheme.cardBackground,
@@ -377,7 +403,7 @@ class _FileAttachmentSkeletonCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           AspectRatio(
-            aspectRatio: 4 / 3,
+            aspectRatio: _fileAttachmentPreviewAspectRatio,
             child: ConduitLoading.skeleton(
               borderRadius: BorderRadius.circular(AppBorderRadius.xs),
             ),

@@ -1,18 +1,23 @@
 import 'dart:async';
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
-import '../../../core/models/socket_health.dart';
-import '../../../core/services/socket_service.dart';
+import 'package:conduit_core/models/socket_health.dart';
+import 'package:conduit_core/services/socket_service.dart';
+
 import '../../../l10n/app_localizations.dart';
 import '../../../shared/theme/theme_extensions.dart';
-import '../../../shared/widgets/conduit_components.dart';
+import '../../../shared/utils/locale_display_formatters.dart';
+import '../../../shared/widgets/utility_components.dart';
 
 /// Widget that displays socket connection health with real-time updates.
 class SocketHealthCard extends StatefulWidget {
-  const SocketHealthCard({super.key, required this.socketService});
+  const SocketHealthCard({super.key, required this.socketService, this.title});
 
   final SocketService socketService;
+
+  /// Section title rendered above the card, matching other settings sections.
+  final String? title;
 
   @override
   State<SocketHealthCard> createState() => SocketHealthCardState();
@@ -59,8 +64,8 @@ class SocketHealthCardState extends State<SocketHealthCard> {
     final health = _health;
 
     if (health == null) {
-      return ConduitCard(
-        padding: const EdgeInsets.all(Spacing.md),
+      return InsetGroupedSection(
+        title: widget.title,
         child: Row(
           children: [
             Icon(
@@ -71,7 +76,7 @@ class SocketHealthCardState extends State<SocketHealthCard> {
             const SizedBox(width: Spacing.md),
             Text(
               l10n.socketNotConnected,
-              style: theme.bodyMedium?.copyWith(color: theme.textSecondary),
+              style: theme.bodySmall?.copyWith(color: theme.textSecondary),
             ),
           ],
         ),
@@ -81,8 +86,8 @@ class SocketHealthCardState extends State<SocketHealthCard> {
     final statusColor = health.isConnected ? theme.success : theme.error;
     final qualityColor = _getQualityColor(theme, health.quality);
 
-    return ConduitCard(
-      padding: const EdgeInsets.all(Spacing.md),
+    return InsetGroupedSection(
+      title: widget.title,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -116,7 +121,7 @@ class SocketHealthCardState extends State<SocketHealthCard> {
                           ? l10n.socketConnected
                           : l10n.socketDisconnected,
                       style: theme.bodyMedium?.copyWith(
-                        color: theme.sidebarForeground,
+                        color: theme.textPrimary,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
@@ -124,7 +129,7 @@ class SocketHealthCardState extends State<SocketHealthCard> {
                     Text(
                       _getTransportLabel(l10n, health.transport),
                       style: theme.bodySmall?.copyWith(
-                        color: theme.sidebarForeground.withValues(alpha: 0.75),
+                        color: theme.textSecondary,
                       ),
                     ),
                   ],
@@ -197,9 +202,7 @@ class SocketHealthCardState extends State<SocketHealthCard> {
                     l10n.socketLastHeartbeat(
                       _formatLastHeartbeat(l10n, health.lastHeartbeat!),
                     ),
-                    style: theme.bodySmall?.copyWith(
-                      color: theme.sidebarForeground.withValues(alpha: 0.6),
-                    ),
+                    style: theme.bodySmall?.copyWith(color: theme.textTertiary),
                   ),
                 ],
               ),
@@ -252,18 +255,11 @@ class SocketHealthCardState extends State<SocketHealthCard> {
   }
 
   String _formatLastHeartbeat(AppLocalizations l10n, DateTime lastHeartbeat) {
-    final now = DateTime.now();
-    final diff = now.difference(lastHeartbeat);
-
-    if (diff.inSeconds < 5) {
-      return l10n.timeJustNow;
-    } else if (diff.inSeconds < 60) {
-      return l10n.timeSecondsAgo(diff.inSeconds);
-    } else if (diff.inMinutes < 60) {
-      return l10n.timeMinutesAgo(diff.inMinutes);
-    } else {
-      return l10n.timeHoursAgo(diff.inHours);
-    }
+    return LocaleDisplayFormatters.relativeTime(
+      l10n,
+      lastHeartbeat,
+      fallbackToDate: false,
+    );
   }
 }
 
@@ -289,12 +285,10 @@ class MetricTile extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(Spacing.sm),
       decoration: BoxDecoration(
-        color: theme.cardBackground.withValues(alpha: 0.5),
+        // Nested inside the grouped surface, so it reads as a quiet inset fill
+        // rather than a second card stacked on the first.
+        color: theme.surfaceBackground.withValues(alpha: 0.5),
         borderRadius: BorderRadius.circular(AppBorderRadius.small),
-        border: Border.all(
-          color: theme.cardBorder.withValues(alpha: 0.3),
-          width: BorderWidth.thin,
-        ),
       ),
       child: Row(
         children: [

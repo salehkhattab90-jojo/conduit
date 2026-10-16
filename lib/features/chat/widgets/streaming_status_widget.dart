@@ -1,10 +1,12 @@
 import 'dart:io' show Platform;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 
-import '../../../core/models/chat_message.dart';
+import 'package:conduit_core/models/chat_message.dart';
 import '../../../core/services/native_sheet_bridge.dart';
+import '../../../shared/services/raster_media_policy.dart';
+import '../../../l10n/app_localizations.dart';
 import '../../../shared/theme/theme_extensions.dart';
 import '../../../shared/utils/external_link_launcher.dart';
 import '../../../shared/widgets/themed_sheets.dart';
@@ -20,7 +22,14 @@ List<ChatStatusUpdate> filterVisibleStatusUpdates(
   if (isStreaming) {
     return visible;
   }
-  return visible.where((u) => u.done != false).toList(growable: false);
+  final settled = visible.where((u) => u.done != false).toList(growable: false);
+  if (settled.isEmpty && visible.isNotEmpty) {
+    // A turn whose only status updates never reported done would drop the
+    // whole status row at settle — a visible layout jump — and lose the best
+    // description of what the turn did. Keep the last update instead.
+    return [visible.last];
+  }
+  return settled;
 }
 
 /// A minimal, unobtrusive streaming status widget inspired by OpenWebUI.
@@ -50,11 +59,18 @@ class _StreamingStatusWidgetState extends State<StreamingStatusWidget> {
     if (displayUpdates.isEmpty) return const SizedBox.shrink();
 
     final current = displayUpdates.last;
-    final isPending = current.done != true && widget.isStreaming;
+    final hermesTools = displayUpdates.where(_isHermesToolUpdate).toList();
+    final groupedHermesTitle = hermesTools.length > 1
+        ? _buildHermesToolGroupTitle(context, hermesTools, widget.isStreaming)
+        : null;
+    final isPending = groupedHermesTitle != null
+        ? hermesTools.any((update) => update.done != true) && widget.isStreaming
+        : current.done != true && widget.isStreaming;
     final hasDetails =
         displayUpdates.length > 1 ||
         _collectQueries(current).isNotEmpty ||
-        _collectLinks(current).isNotEmpty;
+        _collectLinks(current).isNotEmpty ||
+        _collectDetailItems(current).isNotEmpty;
 
     return GestureDetector(
       onTap: hasDetails
@@ -69,6 +85,7 @@ class _StreamingStatusWidgetState extends State<StreamingStatusWidget> {
         padding: const EdgeInsets.only(bottom: Spacing.xs),
         child: _MinimalStatusRow(
           update: current,
+          title: groupedHermesTitle,
           isPending: isPending,
           hasDetails: hasDetails,
         ),
@@ -83,7 +100,10 @@ class _StreamingStatusWidgetState extends State<StreamingStatusWidget> {
   }) async {
     final theme = context.conduitTheme;
     final current = updates.last;
-    final title = _resolveStatusDescription(current);
+    final hermesTools = updates.where(_isHermesToolUpdate).toList();
+    final title = hermesTools.length > 1
+        ? _buildHermesToolGroupTitle(context, hermesTools, isStreaming)
+        : _resolveStatusDescription(current);
 
     if (Platform.isIOS) {
       final items = <NativeSheetItemConfig>[
@@ -95,6 +115,31 @@ class _StreamingStatusWidgetState extends State<StreamingStatusWidget> {
             isStreaming: isStreaming,
           ),
       ];
+      final detailSheets = <NativeSheetDetailConfig>[
+        for (var index = 0; index < updates.length; index++)
+          if (_collectDetailItems(updates[index]).isNotEmpty)
+            NativeSheetDetailConfig(
+              id: 'status-update-$index',
+              title: _resolveStatusDescription(updates[index]),
+              items: [
+                for (
+                  var itemIndex = 0;
+                  itemIndex < _collectDetailItems(updates[index]).length;
+                  itemIndex++
+                )
+                  NativeSheetItemConfig(
+                    id: 'status-update-$index-detail-$itemIndex',
+                    title: _collectDetailItems(
+                      updates[index],
+                    )[itemIndex].title!,
+                    value: _collectDetailItems(
+                      updates[index],
+                    )[itemIndex].snippet!,
+                    kind: NativeSheetItemKind.readOnlyText,
+                  ),
+              ],
+            ),
+      ];
       try {
         await NativeSheetBridge.instance.presentSheet(
           root: NativeSheetDetailConfig(
@@ -102,6 +147,7 @@ class _StreamingStatusWidgetState extends State<StreamingStatusWidget> {
             title: title,
             items: items,
           ),
+          detailSheets: detailSheets,
           rethrowErrors: true,
         );
         return;
@@ -247,17 +293,18 @@ class _MinimalStatusRow extends StatelessWidget {
     required this.update,
     required this.isPending,
     required this.hasDetails,
+    this.title,
   });
 
   final ChatStatusUpdate update;
+  final String? title;
   final bool isPending;
   final bool hasDetails;
 
   @override
   Widget build(BuildContext context) {
-    final description = _resolveStatusDescription(update);
     return AssistantDetailHeader(
-      title: description,
+      title: title ?? _resolveStatusDescription(update),
       showShimmer: isPending,
       showChevron: hasDetails,
     );
@@ -289,6 +336,7 @@ class _MinimalHistoryTimeline extends StatelessWidget {
       final description = _resolveStatusDescription(update);
       final queries = _collectQueries(update);
       final links = _collectLinks(update);
+      final detailItems = _collectDetailItems(update);
 
       return Stack(
         children: [
@@ -314,6 +362,19 @@ class _MinimalHistoryTimeline extends StatelessWidget {
                 if (links.isNotEmpty) ...[
                   const SizedBox(height: Spacing.xs),
                   _MinimalSourceLinks(links: links),
+                ],
+                if (detailItems.isNotEmpty) ...[
+                  const SizedBox(height: Spacing.xs),
+                  for (final detail in detailItems)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: Spacing.xs),
+                      child: SelectableText(
+                        '${detail.title}: ${detail.snippet}',
+                        style: AppTypography.bodySmallStyle.copyWith(
+                          color: theme.textSecondary,
+                        ),
+                      ),
+                    ),
                 ],
               ],
             ),
@@ -439,35 +500,39 @@ class _MinimalQueryChips extends StatelessWidget {
         final query = entry.value;
         return GestureDetector(
           onTap: () => _launchSearch(query),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-            decoration: BoxDecoration(
-              color: theme.surfaceContainer.withValues(alpha: 0.6),
-              borderRadius: BorderRadius.circular(4),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  Icons.search_rounded,
-                  size: 11,
-                  color: theme.textSecondary,
-                ),
-                const SizedBox(width: 3),
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 150),
-                  child: Text(
-                    query,
-                    style: AppTypography.labelMediumStyle.copyWith(
-                      color: theme.textSecondary,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+          child: _statusItemEntrance(
+            context,
+            index: index,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+              decoration: BoxDecoration(
+                color: theme.surfaceContainer.withValues(alpha: 0.6),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.search_rounded,
+                    size: 11,
+                    color: theme.textSecondary,
                   ),
-                ),
-              ],
+                  const SizedBox(width: 3),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 150),
+                    child: Text(
+                      query,
+                      style: AppTypography.labelMediumStyle.copyWith(
+                        color: theme.textSecondary,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ).animate().fadeIn(duration: 150.ms, delay: (30 * index).ms),
+          ),
         );
       }).toList(),
     );
@@ -490,6 +555,12 @@ class _MinimalSourceLinks extends StatelessWidget {
     final theme = context.conduitTheme;
     final displayLinks = links.take(4).toList();
     final remaining = links.length - 4;
+    final faviconTarget = RasterMediaPolicy.forBox(
+      context,
+      profile: RasterDecodeProfile.avatar,
+      logicalWidth: 12,
+      logicalHeight: 12,
+    );
 
     return Wrap(
       spacing: 4,
@@ -502,54 +573,65 @@ class _MinimalSourceLinks extends StatelessWidget {
 
           return GestureDetector(
             onTap: () => launchExternalLink(link.url, scope: 'status'),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-              decoration: BoxDecoration(
-                color: theme.surfaceContainer.withValues(alpha: 0.6),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(2),
-                    child: Image.network(
-                      'https://www.google.com/s2/favicons?sz=16&domain=$domain',
-                      width: 12,
-                      height: 12,
-                      errorBuilder: (context, error, stackTrace) => Icon(
-                        Icons.public_rounded,
-                        size: 12,
-                        color: theme.textSecondary,
+            child: _statusItemEntrance(
+              context,
+              index: index,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                decoration: BoxDecoration(
+                  color: theme.surfaceContainer.withValues(alpha: 0.6),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(2),
+                      child: Image(
+                        image: RasterMediaPolicy.resizeProvider(
+                          NetworkImage(
+                            'https://www.google.com/s2/favicons'
+                            '?sz=16&domain=$domain',
+                          ),
+                          faviconTarget,
+                        ),
+                        width: 12,
+                        height: 12,
+                        errorBuilder: (context, error, stackTrace) => Icon(
+                          Icons.public_rounded,
+                          size: 12,
+                          color: theme.textSecondary,
+                        ),
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 4),
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 100),
-                    child: Text(
-                      link.title ?? domain,
-                      style: AppTypography.labelMediumStyle.copyWith(
-                        color: theme.textSecondary,
+                    const SizedBox(width: 4),
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 100),
+                      child: Text(
+                        link.title ?? domain,
+                        style: AppTypography.labelMediumStyle.copyWith(
+                          color: theme.textSecondary,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ).animate().fadeIn(duration: 150.ms, delay: (30 * index).ms),
+            ),
           );
         }),
         if (remaining > 0)
-          Text(
-            '+$remaining',
-            style: AppTypography.labelMediumStyle.copyWith(
-              color: theme.textSecondary,
+          _statusItemEntrance(
+            context,
+            index: displayLinks.length,
+            child: Text(
+              '+$remaining',
+              style: AppTypography.labelMediumStyle.copyWith(
+                color: theme.textSecondary,
+              ),
             ),
-          ).animate().fadeIn(
-            duration: 150.ms,
-            delay: (30 * displayLinks.length).ms,
           ),
       ],
     );
@@ -562,6 +644,17 @@ class _MinimalSourceLinks extends StatelessWidget {
     if (host.startsWith('www.')) host = host.substring(4);
     return host;
   }
+}
+
+Widget _statusItemEntrance(
+  BuildContext context, {
+  required int index,
+  required Widget child,
+}) {
+  if (context.reduceMotion) {
+    return child;
+  }
+  return child.animate().fadeIn(duration: 150.ms, delay: (30 * index).ms);
 }
 
 // Helper classes and functions
@@ -587,6 +680,13 @@ List<String> _collectQueries(ChatStatusUpdate update) {
   return merged;
 }
 
+List<ChatStatusItem> _collectDetailItems(ChatStatusUpdate update) => update
+    .items
+    .where((item) => item.presentation == ChatStatusItemPresentation.detail)
+    .where((item) => item.title?.isNotEmpty == true && item.snippet != null)
+    .take(4)
+    .toList(growable: false);
+
 List<_LinkData> _collectLinks(ChatStatusUpdate update) {
   final links = <_LinkData>[];
 
@@ -604,6 +704,38 @@ List<_LinkData> _collectLinks(ChatStatusUpdate update) {
   }
 
   return links;
+}
+
+bool _isHermesToolUpdate(ChatStatusUpdate update) =>
+    update.action?.startsWith('hermes_tool_') ?? false;
+
+String _buildHermesToolGroupTitle(
+  BuildContext context,
+  List<ChatStatusUpdate> updates,
+  bool isStreaming,
+) {
+  final counts = <String, int>{};
+  for (final update in updates) {
+    final action = update.action!;
+    final actionName = action.substring('hermes_tool_'.length);
+    final description = update.description?.trim();
+    final name = actionName.startsWith('opaque')
+        ? description?.split(RegExp(r'\s(?:·|failed)')).first.trim() ??
+              AppLocalizations.of(context)!.markdownDetailsGroupUnnamedTool
+        : actionName;
+    counts[name] = (counts[name] ?? 0) + 1;
+  }
+
+  final summary = counts.entries
+      .map(
+        (entry) =>
+            entry.value > 1 ? '${entry.key} (${entry.value})' : entry.key,
+      )
+      .join(', ');
+  final l10n = AppLocalizations.of(context)!;
+  return isStreaming && updates.any((update) => update.done != true)
+      ? l10n.markdownDetailsGroupPendingTitle(summary)
+      : l10n.markdownDetailsGroupCompleteTitle(summary);
 }
 
 String _resolveStatusDescription(ChatStatusUpdate update) {

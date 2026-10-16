@@ -1,21 +1,37 @@
+import 'package:conduit/features/workspace/providers/workspace_capabilities_provider.dart';
+
+import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:conduit/l10n/app_localizations.dart';
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:conduit/core/services/haptic_service.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:intl/intl.dart';
 
-import '../../../core/models/note.dart';
-import '../../../core/services/navigation_service.dart';
+import 'package:conduit_core/features/auth/providers/unified_auth_providers.dart';
+import 'package:conduit_core/features/notes/utils/note_access.dart';
+import 'package:conduit_core/models/note.dart';
+
+import '../../../shared/services/navigation_service.dart';
+
+import 'package:conduit_core/utils/debug_logger.dart';
+
 import '../../../shared/theme/theme_extensions.dart';
 import '../../../shared/utils/platform_scroll_physics.dart';
+import '../../../shared/utils/locale_display_formatters.dart';
 import '../../../shared/utils/conversation_context_menu.dart';
 import '../../../shared/utils/ui_utils.dart';
-import '../../../shared/widgets/responsive_drawer_layout.dart';
-import '../../navigation/providers/sidebar_providers.dart';
-import '../../navigation/widgets/drawer_section_notifiers.dart';
+import '../../../shared/widgets/conduit_components.dart';
+import '../../../shared/widgets/sidebar_layout_contract.dart';
+import '../../navigation/providers/sidebar_search_providers.dart';
+import '../../navigation/providers/sidebar_tab_scroll_registry.dart';
+
+import 'package:conduit_core/features/navigation/models/sidebar_navigation_model.dart';
+import 'package:conduit_core/features/navigation/providers/drawer_section_notifiers.dart';
+
+import '../../navigation/widgets/conversation_tile.dart';
+import '../../navigation/utils/sidebar_create_action.dart';
 import '../providers/notes_providers.dart';
 import '../utils/note_context_actions.dart';
 
@@ -38,10 +54,20 @@ class NotesListTab extends ConsumerStatefulWidget {
 }
 
 class _NotesListTabState extends ConsumerState<NotesListTab>
-    with AutomaticKeepAliveClientMixin {
+    with
+        AutomaticKeepAliveClientMixin,
+        SidebarTabScrollRegistration<NotesListTab> {
   static final _noteRoutePattern = RegExp(r'^/notes/(.+)$');
 
   String? _activeNoteId;
+  bool _isRefreshingEmptyState = false;
+  final ScrollController _scrollController = ScrollController();
+
+  @override
+  SidebarTabId get sidebarTabId => SidebarTabId.notes;
+
+  @override
+  ScrollController get sidebarScrollController => _scrollController;
 
   @override
   bool get wantKeepAlive => true;
@@ -60,6 +86,7 @@ class _NotesListTabState extends ConsumerState<NotesListTab>
     NavigationService.router.routeInformationProvider.removeListener(
       _onRouteChanged,
     );
+    _scrollController.dispose();
     super.dispose();
   }
 
@@ -78,16 +105,93 @@ class _NotesListTabState extends ConsumerState<NotesListTab>
 
   Future<void> _onNoteTap(Note note) async {
     NavigationService.router.go('/notes/${note.id}');
-    final isTablet = MediaQuery.of(context).size.shortestSide >= 600;
-    if (!isTablet) {
-      ResponsiveDrawerLayout.of(context)?.close();
-    }
+    closeSidebarDrawerIfOverlay(context);
   }
 
   Future<void> _deleteNote(Note note) =>
       confirmAndDeleteNote(context, ref, note);
 
   Future<void> _togglePin(Note note) => toggleNotePin(context, ref, note);
+
+  Future<void> _refreshNotes({bool includeHaptic = false}) async {
+    if (includeHaptic) {
+      ConduitHaptics.lightImpact();
+    }
+    await ref.read(notesListProvider.notifier).refresh();
+  }
+
+  Future<void> _refreshEmptyStateNotes() async {
+    if (_isRefreshingEmptyState) return;
+    setState(() => _isRefreshingEmptyState = true);
+    try {
+      await _refreshNotes();
+    } catch (error, stackTrace) {
+      DebugLogger.error(
+        'empty-state-refresh-failed',
+        scope: 'notes/sidebar',
+        error: error,
+        stackTrace: stackTrace,
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isRefreshingEmptyState = false);
+      }
+    }
+  }
+
+  Widget _buildEmptyState(String message) {
+    final theme = context.conduitTheme;
+    final refreshLabel = MaterialLocalizations.of(context)
+        .refreshIndicatorSemanticLabel;
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(Spacing.lg),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              message,
+              style: AppTypography.sidebarSupportingStyle.copyWith(
+                color: theme.textSecondary,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: Spacing.md),
+            ConduitButton(
+              text: message == AppLocalizations.of(context)!.noNotesYet
+                  ? AppLocalizations.of(context)!.createNote
+                  : refreshLabel,
+              icon: message == AppLocalizations.of(context)!.noNotesYet
+                  ? (Platform.isIOS ? CupertinoIcons.add : Icons.add)
+                  : (Platform.isIOS ? CupertinoIcons.refresh : Icons.refresh),
+              onPressed: message == AppLocalizations.of(context)!.noNotesYet
+                  ? () => unawaited(noteSidebarCreateAction.run(context, ref))
+                  : () => unawaited(_refreshEmptyStateNotes()),
+              isSecondary: true,
+              isCompact: true,
+              isLoading: _isRefreshingEmptyState,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildNoteTile(Note note) {
+    final accountId = ref.watch(
+      currentUserProvider2.select((user) => user?.id),
+    );
+    return _NoteListTile(
+      note: note,
+      selected: note.id == _activeNoteId,
+      onTap: () => _onNoteTap(note),
+      actions: _buildNoteActions(note),
+      ownerName: noteSharedOwner(note, accountId: accountId)?.name?.trim(),
+      readOnly:
+          noteWriteAccess(note, accountId: accountId) ==
+          NoteWriteAccess.denied,
+    );
+  }
 
   List<ConduitContextMenuAction> _buildNoteActions(Note note) {
     return buildNoteContextMenuActions(
@@ -107,7 +211,10 @@ class _NotesListTabState extends ConsumerState<NotesListTab>
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: () => ref.read(notesShowPinnedProvider.notifier).toggle(),
+        onTap: () {
+          ConduitHaptics.selectionClick();
+          ref.read(notesShowPinnedProvider.notifier).toggle();
+        },
         child: Row(
           children: [
             Icon(
@@ -137,7 +244,10 @@ class _NotesListTabState extends ConsumerState<NotesListTab>
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: () => ref.read(notesShowRecentProvider.notifier).toggle(),
+        onTap: () {
+          ConduitHaptics.selectionClick();
+          ref.read(notesShowRecentProvider.notifier).toggle();
+        },
         child: Row(
           children: [
             Icon(
@@ -182,12 +292,7 @@ class _NotesListTabState extends ConsumerState<NotesListTab>
         final pinnedEnd = cursor + pinnedNotes.length;
         if (index < pinnedEnd) {
           final note = pinnedNotes[index - cursor];
-          return _NoteListTile(
-            note: note,
-            selected: note.id == _activeNoteId,
-            onTap: () => _onNoteTap(note),
-            actions: _buildNoteActions(note),
-          );
+          return _buildNoteTile(note);
         }
         cursor = pinnedEnd;
       }
@@ -209,12 +314,7 @@ class _NotesListTabState extends ConsumerState<NotesListTab>
         final recentEnd = cursor + otherNotes.length;
         if (index < recentEnd) {
           final note = otherNotes[index - cursor];
-          return _NoteListTile(
-            note: note,
-            selected: note.id == _activeNoteId,
-            onTap: () => _onNoteTap(note),
-            actions: _buildNoteActions(note),
-          );
+          return _buildNoteTile(note);
         }
       }
     }
@@ -226,7 +326,9 @@ class _NotesListTabState extends ConsumerState<NotesListTab>
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    final theme = context.conduitTheme;
+    // The Share action depends on this; watching rebuilds the menu when the
+    // account's permissions arrive or change.
+    ref.watch(workspaceCapabilitiesProvider);
     final l10n = AppLocalizations.of(context)!;
     final searchController = ref.watch(sidebarSearchFieldControllerProvider);
 
@@ -241,13 +343,8 @@ class _NotesListTabState extends ConsumerState<NotesListTab>
         return notes.when(
           data: (noteList) {
             if (noteList.isEmpty) {
-              return Center(
-                child: Text(
-                  query.isEmpty ? l10n.noNotesYet : l10n.noNotesFound,
-                  style: AppTypography.sidebarSupportingStyle.copyWith(
-                    color: theme.textSecondary,
-                  ),
-                ),
+              return _buildEmptyState(
+                query.isEmpty ? l10n.noNotesYet : l10n.noNotesFound,
               );
             }
             final pinnedNotes = noteList
@@ -279,34 +376,44 @@ class _NotesListTabState extends ConsumerState<NotesListTab>
               }
             }
 
-            return RefreshIndicator.adaptive(
-              edgeOffset: sidebarRefreshIndicatorEdgeOffset(context),
-              onRefresh: () async {
-                ConduitHaptics.lightImpact();
-                await ref.read(notesListProvider.notifier).refresh();
-              },
-              child: ListView.builder(
-                padding: EdgeInsets.only(
-                  top: sidebarTabContentTopPadding(context),
-                  bottom: sidebarTabContentBottomPadding(context),
-                ),
-                physics: platformAlwaysScrollablePhysics(context),
-                itemCount: itemCount,
-                itemBuilder: (context, index) {
-                  return _buildNotesListItem(
-                    index: index,
-                    l10n: l10n,
-                    pinnedNotes: pinnedNotes,
-                    otherNotes: otherNotes,
-                    hasPinnedSection: hasPinnedSection,
-                    hasRecentSection: hasRecentSection,
-                    needsSectionGap: needsSectionGap,
-                    showPinned: showPinned,
-                    showRecent: showRecent,
-                  );
-                },
+            final list = ListView.builder(
+              controller: _scrollController,
+              primary: false,
+              padding: EdgeInsets.only(
+                top: sidebarTabContentTopPadding(context),
+                bottom: sidebarTabContentBottomPadding(context),
               ),
+              physics: platformAlwaysScrollablePhysics(context),
+              itemCount: itemCount,
+              itemBuilder: (context, index) {
+                return _buildNotesListItem(
+                  index: index,
+                  l10n: l10n,
+                  pinnedNotes: pinnedNotes,
+                  otherNotes: otherNotes,
+                  hasPinnedSection: hasPinnedSection,
+                  hasRecentSection: hasRecentSection,
+                  needsSectionGap: needsSectionGap,
+                  showPinned: showPinned,
+                  showRecent: showRecent,
+                );
+              },
             );
+            final refreshable = RefreshIndicator.adaptive(
+              edgeOffset: sidebarRefreshIndicatorEdgeOffset(context),
+              onRefresh: () => _refreshNotes(includeHaptic: true),
+              child: list,
+            );
+            final primary = PrimaryScrollController(
+              controller: _scrollController,
+              child: refreshable,
+            );
+            return context.usesCupertinoChrome
+                ? CupertinoScrollbar(
+                    controller: _scrollController,
+                    child: primary,
+                  )
+                : Scrollbar(controller: _scrollController, child: primary);
           },
           loading: () => const Center(child: CircularProgressIndicator()),
           error: (err, _) => Center(child: Text(l10n.failedToLoadNotes)),
@@ -322,6 +429,8 @@ class _NoteListTile extends StatelessWidget {
     required this.selected,
     required this.onTap,
     required this.actions,
+    this.ownerName,
+    this.readOnly = false,
   });
 
   final Note note;
@@ -329,98 +438,73 @@ class _NoteListTile extends StatelessWidget {
   final VoidCallback onTap;
   final List<ConduitContextMenuAction> actions;
 
+  /// Who shared the note, when it is someone else's.
+  final String? ownerName;
+
+  /// The account may read but not change the note.
+  final bool readOnly;
+
   @override
   Widget build(BuildContext context) {
     final theme = context.conduitTheme;
     final l10n = AppLocalizations.of(context)!;
     final title = note.title.isEmpty ? l10n.untitled : note.title;
-    final preview = note.listPreviewMarkdown.replaceAll('\n', ' ').trim();
-    final timeAgo = _formatTime(note.updatedDateTime);
-
-    final background = selected
-        ? Color.alphaBlend(
-            theme.buttonPrimary.withValues(alpha: 0.1),
-            theme.surfaceContainer,
-          )
-        : theme.surfaceContainer;
+    final timeAgo = LocaleDisplayFormatters.compactRelativeTime(
+      context,
+      note.updatedDateTime,
+    );
 
     return ConduitContextMenu(
       actions: actions,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-        child: Container(
-          decoration: BoxDecoration(
-            color: background,
-            borderRadius: BorderRadius.circular(AppBorderRadius.md),
-          ),
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: onTap,
-            child: Padding(
-              padding: const EdgeInsets.all(14),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: AppTypography.sidebarTitleStyle.copyWith(
-                            color: theme.textPrimary,
-                            fontWeight: selected
-                                ? FontWeight.w700
-                                : FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                      if (note.isPinned) ...[
-                        Icon(
-                          UiUtils.pinIcon,
-                          size: 14,
-                          color: theme.buttonPrimary,
-                        ),
-                        const SizedBox(width: 6),
-                      ],
-                      const SizedBox(width: 8),
-                      Text(
-                        timeAgo,
-                        style: AppTypography.sidebarSupportingStyle.copyWith(
-                          color: theme.textSecondary,
-                        ),
-                      ),
-                    ],
-                  ),
-                  if (preview.isNotEmpty) ...[
-                    const SizedBox(height: 6),
-                    Text(
-                      preview,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: AppTypography.sidebarSupportingStyle.copyWith(
-                        color: theme.textSecondary,
-                        height: 1.4,
-                      ),
-                    ),
-                  ],
-                ],
+      previewBuilder: buildConversationTileContextPreview,
+      child: ChatStyleSidebarTile(
+        key: ValueKey<String>('note-sidebar-row-${note.id}'),
+        selected: selected,
+        onTap: onTap,
+        semanticLabel: [
+          title,
+          if (ownerName case final owner?) l10n.sharedFolderOwner(owner),
+          if (readOnly) l10n.readOnly,
+          if (note.isPinned) l10n.pinned,
+          timeAgo,
+        ].join('. '),
+        tintKey: ValueKey<String>('note-sidebar-selected-${note.id}'),
+        pressedKey: ValueKey<String>('note-sidebar-pressed-${note.id}'),
+        child: SidebarListTileContent(
+          title: title,
+          subtitle: ownerName == null
+              ? null
+              : l10n.sharedFolderOwner(ownerName!),
+          selected: selected,
+          titleFontWeight: FontWeight.w400,
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (readOnly) ...[
+                Icon(
+                  Platform.isIOS ? CupertinoIcons.lock : Icons.lock_outline,
+                  key: ValueKey<String>('note-sidebar-read-only-${note.id}'),
+                  size: IconSize.xs,
+                  color: theme.textSecondary.withValues(alpha: Alpha.secondary),
+                ),
+                const SizedBox(width: Spacing.xs),
+              ],
+              if (note.isPinned) ...[
+                Icon(UiUtils.pinIcon, size: 14, color: theme.buttonPrimary),
+                const SizedBox(width: 6),
+              ],
+              Text(
+                timeAgo,
+                key: ValueKey<String>('note-sidebar-last-edited-${note.id}'),
+                maxLines: 1,
+                style: AppTypography.bodySmallStyle.copyWith(
+                  color: theme.textSecondary.withValues(alpha: Alpha.secondary),
+                ),
               ),
-            ),
+            ],
           ),
         ),
       ),
     );
-  }
-
-  String _formatTime(DateTime? dt) {
-    if (dt == null) return '';
-    final now = DateTime.now();
-    final diff = now.difference(dt);
-    if (diff.inMinutes < 60) return '${diff.inMinutes}m';
-    if (diff.inHours < 24) return '${diff.inHours}h';
-    if (diff.inDays < 7) return '${diff.inDays}d';
-    return DateFormat('MMM d').format(dt);
   }
 }

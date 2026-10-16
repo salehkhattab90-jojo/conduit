@@ -4,22 +4,24 @@ import 'dart:isolate';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:riverpod/riverpod.dart';
 import 'package:html_unescape/html_unescape.dart';
 import 'package:markdown/markdown.dart' as md;
 
-import '../../../core/services/performance_profiler.dart';
-import '../../../core/services/worker_manager.dart';
-import '../../../core/utils/citation_parser.dart';
-import '../../../core/utils/embed_utils.dart';
+import 'package:conduit_core/services/performance_profiler.dart';
+import 'package:conduit_core/services/worker_manager.dart';
+import 'package:conduit_markdown/conduit_markdown.dart';
+
 import 'compiled_markdown_document.dart';
-import 'markdown_preprocessor.dart';
-import 'renderer/details_block_syntax.dart';
+
+import 'package:conduit_core/utils/streaming_markdown_preparation.dart';
+
 import 'renderer/latex_preprocessor.dart';
-import 'renderer/mention_inline_syntax.dart';
 
 const int markdownSynchronousCompileThreshold = 384;
 const int markdownSynchronousPrepareThreshold = 768;
+const Duration markdownWorkerIdleTimeout = Duration(seconds: 30);
+const int _markdownPrewarmPrepareBatchSize = 8;
 const Set<String> _groupableCompiledDetailTypes = {'tool_calls'};
 final _detailsAttributeUnescape = HtmlUnescape();
 
@@ -28,13 +30,22 @@ enum MarkdownPrepareExecutionPath {
   webSynchronous,
   asyncBackend,
   fallbackSync,
+  memoized,
 }
 
 final _compiledMarkdownCache = _CompiledMarkdownCache();
+var _compiledMarkdownCacheEpoch = 0;
 
-void debugResetCompiledMarkdownCache() => _compiledMarkdownCache.clear();
+void _evictCompiledMarkdownCache() {
+  _compiledMarkdownCacheEpoch += 1;
+  _compiledMarkdownCache.clear();
+}
+
+void debugResetCompiledMarkdownCache() => _evictCompiledMarkdownCache();
 
 int debugCompiledMarkdownCacheSize() => _compiledMarkdownCache.length;
+
+int debugCompiledMarkdownCacheCapacity() => _CompiledMarkdownCache._maxEntries;
 
 List<String> debugCompiledMarkdownCacheKeys() => _compiledMarkdownCache.keys;
 
@@ -46,35 +57,11 @@ final markdownCompileServiceProvider = Provider<MarkdownCompileService>((ref) {
   return service;
 });
 
-String prepareMarkdownContent(String content, {required bool streaming}) {
-  final normalized = ConduitMarkdownPreprocessor.normalize(content);
-  final prepared = streaming
-      ? stripTrailingIncompleteToolCallDetails(normalized)
-      : normalized;
-  return prepared;
-}
+String prepareMarkdownContent(String content, {required bool streaming}) =>
+    prepareMarkdownContentCanonical(content, streaming: streaming);
 
-String stripTrailingIncompleteToolCallDetails(String input) {
-  if (input.isEmpty || !input.contains('<details')) {
-    return input;
-  }
-
-  final matches = RegExp(
-    r'<details\b[^>]*type="tool_calls"[^>]*>',
-    caseSensitive: false,
-  ).allMatches(input).toList(growable: false);
-  if (matches.isEmpty) {
-    return input;
-  }
-
-  final lastOpen = matches.last;
-  final trailing = input.substring(lastOpen.start).toLowerCase();
-  if (trailing.contains('</details>')) {
-    return input;
-  }
-
-  return input.substring(0, lastOpen.start).trimRight();
-}
+String stripTrailingIncompleteToolCallDetails(String input) =>
+    stripTrailingIncompleteToolCallDetailsCanonical(input);
 
 CompiledMarkdownDocument compilePreparedMarkdownSync(String preparedContent) {
   final cached = _compiledMarkdownCache.read(preparedContent);
@@ -88,27 +75,107 @@ CompiledMarkdownDocument compilePreparedMarkdownSync(String preparedContent) {
 class MarkdownCompileService {
   MarkdownCompileService({
     required WorkerManager workerManager,
+    this.workerIdleTimeout = markdownWorkerIdleTimeout,
     @visibleForTesting this.debugOnPrepareExecution,
     @visibleForTesting this.debugPrepareContentOverride,
+    @visibleForTesting this.debugOnPreparationPatch,
+    @visibleForTesting this.debugCompilePreparedOverride,
+    @visibleForTesting this.debugCompilePreparedBatchOverride,
   }) : _workerManager = workerManager,
        _backend = _MarkdownCompilerBackend(),
        _prepareBackend = _MarkdownPrepareBackend();
 
   final WorkerManager _workerManager;
+  final Duration workerIdleTimeout;
   final _MarkdownCompilerBackend _backend;
   final _MarkdownPrepareBackend _prepareBackend;
+  final StreamingMarkdownPreparationEngine _fallbackPrepareEngine =
+      StreamingMarkdownPreparationEngine();
+  static const int _settledPreparedMemoMaxEntries = 128;
+  static const int _settledPreparedMemoMaxEntryLength = 65536;
+  final LinkedHashMap<String, String> _settledPreparedMemo =
+      LinkedHashMap<String, String>();
   final Map<String, Future<CompiledMarkdownDocument>> _inFlight =
       <String, Future<CompiledMarkdownDocument>>{};
+  final Map<String, int> _inFlightCacheEpochs = <String, int>{};
   @visibleForTesting
   final void Function(MarkdownPrepareExecutionPath path)?
   debugOnPrepareExecution;
   @visibleForTesting
   final Future<String> Function(String content, bool streaming)?
   debugPrepareContentOverride;
+  @visibleForTesting
+  final void Function(MarkdownPreparationPatch patch)? debugOnPreparationPatch;
+  @visibleForTesting
+  final Future<CompiledMarkdownDocument> Function(String preparedContent)?
+  debugCompilePreparedOverride;
+  @visibleForTesting
+  final Future<List<CompiledMarkdownDocument>> Function(
+    List<String> preparedContents,
+  )?
+  debugCompilePreparedBatchOverride;
   bool _disposed = false;
+  Timer? _workerIdleTimer;
+
+  @visibleForTesting
+  bool get debugCompilerWorkerRunning => _backend.isRunning;
+
+  @visibleForTesting
+  bool get debugPrepareWorkerRunning => _prepareBackend.isRunning;
+
+  void _scheduleWorkerRetirement() {
+    _workerIdleTimer?.cancel();
+    _workerIdleTimer = null;
+    if (_disposed || kIsWeb || workerIdleTimeout <= Duration.zero) {
+      return;
+    }
+    _workerIdleTimer = Timer(workerIdleTimeout, retireIdleWorkers);
+  }
+
+  /// Releases isolate heaps after a quiet period. A backend refuses retirement
+  /// while a request or startup is active, in which case its completion will
+  /// schedule the next idle check.
+  void retireIdleWorkers({bool clearCompiledCache = false}) {
+    if (clearCompiledCache) {
+      _evictCompiledMarkdownCache();
+    }
+    _workerIdleTimer?.cancel();
+    _workerIdleTimer = null;
+    _backend.retireIfIdle();
+    _prepareBackend.retireIfIdle();
+  }
+
+  void handleMemoryPressure() {
+    _settledPreparedMemo.clear();
+    retireIdleWorkers(clearCompiledCache: true);
+  }
 
   CompiledMarkdownDocument? peekPrepared(String preparedContent) =>
       _compiledMarkdownCache.read(preparedContent);
+
+  /// Cached prepared output for settled raw [content], or null.
+  ///
+  /// Settled preparation is deterministic per raw input, so remounting a row
+  /// can skip the full-string normalization passes entirely and go straight
+  /// to the compiled-document cache.
+  String? peekSettledPrepared(String content) {
+    final prepared = _settledPreparedMemo.remove(content);
+    if (prepared == null) return null;
+    _settledPreparedMemo[content] = prepared;
+    return prepared;
+  }
+
+  void memoizeSettledPrepared(String content, String preparedContent) {
+    if (content.isEmpty ||
+        content.length > _settledPreparedMemoMaxEntryLength) {
+      return;
+    }
+    _settledPreparedMemo.remove(content);
+    _settledPreparedMemo[content] = preparedContent;
+    while (_settledPreparedMemo.length > _settledPreparedMemoMaxEntries) {
+      _settledPreparedMemo.remove(_settledPreparedMemo.keys.first);
+    }
+  }
 
   bool shouldCompileSynchronously(
     String preparedContent, {
@@ -134,24 +201,42 @@ class MarkdownCompileService {
       return '';
     }
 
+    if (!streaming) {
+      final memoized = peekSettledPrepared(content);
+      if (memoized != null) {
+        debugOnPrepareExecution?.call(MarkdownPrepareExecutionPath.memoized);
+        return memoized;
+      }
+    }
+
     if (allowSynchronous &&
         shouldPrepareSynchronously(content, widgetTest: widgetTest)) {
       debugOnPrepareExecution?.call(MarkdownPrepareExecutionPath.synchronous);
-      return prepareMarkdownContent(content, streaming: streaming);
+      final prepared = prepareMarkdownContent(content, streaming: streaming);
+      if (!streaming) memoizeSettledPrepared(content, prepared);
+      return prepared;
     }
 
     if (kIsWeb) {
       debugOnPrepareExecution?.call(
         MarkdownPrepareExecutionPath.webSynchronous,
       );
-      return prepareMarkdownContent(content, streaming: streaming);
+      final prepared = prepareMarkdownContent(content, streaming: streaming);
+      if (!streaming) memoizeSettledPrepared(content, prepared);
+      return prepared;
     }
 
+    final profileEnabled = PerformanceProfiler.isEnabled;
     final taskKey = PerformanceProfiler.instance.startTask(
       'markdown_prepare',
       scope: 'markdown',
       key: 'markdown_prepare:${content.hashCode}:${content.length}:$streaming',
-      data: {'length': content.length, 'streaming': streaming},
+      data: {
+        'mode': 'full',
+        'inputCharacters': content.length,
+        if (profileEnabled) 'inputUtf8Bytes': utf8.encode(content).length,
+        'streaming': streaming,
+      },
     );
 
     try {
@@ -159,35 +244,144 @@ class MarkdownCompileService {
           await debugPrepareContentOverride?.call(content, streaming) ??
           await _prepareBackend.prepareContent(content, streaming: streaming);
       debugOnPrepareExecution?.call(MarkdownPrepareExecutionPath.asyncBackend);
+      if (!streaming) memoizeSettledPrepared(content, prepared);
       PerformanceProfiler.instance.finishTask(
         taskKey,
         data: {
           'status': 'ok',
+          'mode': 'full',
           'streaming': streaming,
-          'preparedLength': prepared.length,
+          'outputCharacters': prepared.length,
+          if (profileEnabled) 'outputUtf8Bytes': utf8.encode(prepared).length,
         },
       );
       return prepared;
     } catch (error) {
       final fallback = prepareMarkdownContent(content, streaming: streaming);
+      if (!streaming) memoizeSettledPrepared(content, fallback);
       debugOnPrepareExecution?.call(MarkdownPrepareExecutionPath.fallbackSync);
       PerformanceProfiler.instance.finishTask(
         taskKey,
         data: {
           'status': 'fallback_sync',
+          'mode': 'fallback_sync',
           'streaming': streaming,
-          'preparedLength': fallback.length,
+          'outputCharacters': fallback.length,
+          if (profileEnabled) 'outputUtf8Bytes': utf8.encode(fallback).length,
           'error': error.toString(),
         },
       );
       return fallback;
+    } finally {
+      _scheduleWorkerRetirement();
     }
+  }
+
+  Future<MarkdownPreparationPatch> prepareStreamingContent(
+    MarkdownPreparationRequest request, {
+    bool allowSynchronous = false,
+    bool widgetTest = false,
+  }) async {
+    final shouldRunSynchronously =
+        allowSynchronous &&
+        shouldPrepareSynchronously(request.content, widgetTest: widgetTest);
+    if (shouldRunSynchronously || kIsWeb) {
+      final patch = _fallbackPrepareEngine.prepare(request);
+      debugOnPrepareExecution?.call(
+        kIsWeb
+            ? MarkdownPrepareExecutionPath.webSynchronous
+            : MarkdownPrepareExecutionPath.synchronous,
+      );
+      debugOnPreparationPatch?.call(patch);
+      return patch;
+    }
+
+    final taskKey = PerformanceProfiler.instance.startTask(
+      'markdown_prepare',
+      scope: 'markdown',
+      key: 'markdown_prepare:${request.sessionId}:${request.revision}',
+      data: {
+        'session': request.sessionId,
+        'revision': request.revision,
+        'baseRevision': request.expectedBaseRevision,
+        'inputCharacters': request.content.length,
+        if (request.collectMetrics)
+          'inputUtf8Bytes': utf8.encode(request.content).length,
+        'streaming': request.streaming,
+      },
+    );
+
+    try {
+      final patch = await _prepareBackend.prepareStreamingContent(request);
+      debugOnPrepareExecution?.call(MarkdownPrepareExecutionPath.asyncBackend);
+      debugOnPreparationPatch?.call(patch);
+      _finishPreparationTask(taskKey, patch, status: 'ok');
+      return patch;
+    } catch (error) {
+      final patch = _fallbackPrepareEngine.prepare(request);
+      debugOnPrepareExecution?.call(MarkdownPrepareExecutionPath.fallbackSync);
+      debugOnPreparationPatch?.call(patch);
+      _finishPreparationTask(
+        taskKey,
+        patch,
+        status: 'fallback_sync',
+        error: error,
+      );
+      return patch;
+    } finally {
+      _scheduleWorkerRetirement();
+    }
+  }
+
+  Future<void> releaseStreamingPreparationSession(String sessionId) async {
+    _fallbackPrepareEngine.release(sessionId);
+    if (kIsWeb) return;
+    try {
+      await _prepareBackend.releaseSession(sessionId);
+    } catch (_) {
+      // The isolate may already have exited; its session state is gone with it.
+    } finally {
+      _scheduleWorkerRetirement();
+    }
+  }
+
+  void _finishPreparationTask(
+    String taskKey,
+    MarkdownPreparationPatch patch, {
+    required String status,
+    Object? error,
+  }) {
+    final metrics = patch.metrics;
+    PerformanceProfiler.instance.finishTask(
+      taskKey,
+      data: {
+        'status': status,
+        'mode': patch.mode.name,
+        'revision': patch.revision,
+        'baseRevision': patch.baseRevision,
+        'callCount': metrics.callCount,
+        'inputCharacters': metrics.inputCharacters,
+        'inputUtf8Bytes': metrics.inputUtf8Bytes,
+        'processedCharacters': metrics.processedCharacters,
+        'processedUtf8Bytes': metrics.processedUtf8Bytes,
+        'retainedRawCharacters': metrics.retainedRawCharacters,
+        'retainedPreparedCharacters': metrics.retainedPreparedCharacters,
+        'replacementCharacters': metrics.replacementCharacters,
+        'replacementUtf8Bytes': metrics.replacementUtf8Bytes,
+        'outputCharacters': metrics.outputCharacters,
+        'outputUtf8Bytes': metrics.outputUtf8Bytes,
+        if (patch.fallbackReason != null)
+          'fallbackReason': patch.fallbackReason!,
+        if (error != null) 'error': error.toString(),
+      },
+    );
   }
 
   Future<CompiledMarkdownDocument> compilePrepared(
     String preparedContent, {
     bool allowSynchronous = false,
     bool widgetTest = false,
+    bool cacheResult = true,
   }) {
     if (preparedContent.trim().isEmpty) {
       return SynchronousFuture(const CompiledMarkdownDocument.empty());
@@ -205,17 +399,32 @@ class MarkdownCompileService {
 
     if (allowSynchronous &&
         shouldCompileSynchronously(preparedContent, widgetTest: widgetTest)) {
-      return SynchronousFuture(compilePreparedSynchronously(preparedContent));
+      final document = cacheResult
+          ? compilePreparedSynchronously(preparedContent)
+          : _compilePreparedMarkdownDocument(preparedContent);
+      return SynchronousFuture(document);
     }
 
     if (kIsWeb) {
-      return SynchronousFuture(compilePreparedSynchronously(preparedContent));
+      final document = cacheResult
+          ? compilePreparedSynchronously(preparedContent)
+          : _compilePreparedMarkdownDocument(preparedContent);
+      return SynchronousFuture(document);
     }
 
     final inFlight = _inFlight[preparedContent];
     if (inFlight != null) {
-      return inFlight;
+      if (!cacheResult) return inFlight;
+      final inFlightCacheEpoch = _inFlightCacheEpochs[preparedContent];
+      return inFlight.then(
+        (document) =>
+            !_disposed && inFlightCacheEpoch == _compiledMarkdownCacheEpoch
+            ? _compiledMarkdownCache.write(preparedContent, document)
+            : document,
+      );
     }
+
+    final cacheEpoch = _compiledMarkdownCacheEpoch;
 
     final taskKey = PerformanceProfiler.instance.startTask(
       'markdown_compile',
@@ -223,9 +432,12 @@ class MarkdownCompileService {
       key: 'markdown:${preparedContent.hashCode}:${preparedContent.length}',
       data: {'length': preparedContent.length},
     );
-    final future = _backend
-        .compilePrepared(preparedContent)
-        .then(CompiledMarkdownDocument.fromMap)
+    final primaryCompile =
+        debugCompilePreparedOverride?.call(preparedContent) ??
+        _backend
+            .compilePrepared(preparedContent)
+            .then(CompiledMarkdownDocument.fromMap);
+    final future = primaryCompile
         .catchError((Object error, StackTrace stackTrace) async {
           try {
             final workerResult = await _workerManager
@@ -241,7 +453,7 @@ class MarkdownCompileService {
             );
             return CompiledMarkdownDocument.fromMap(workerResult);
           } catch (_) {
-            final fallback = compilePreparedSynchronously(preparedContent);
+            final fallback = _compilePreparedMarkdownDocument(preparedContent);
             PerformanceProfiler.instance.finishTask(
               taskKey,
               data: {
@@ -257,10 +469,10 @@ class MarkdownCompileService {
           if (_disposed) {
             return document;
           }
-          final cachedDocument = _compiledMarkdownCache.write(
-            preparedContent,
-            document,
-          );
+          final cachedDocument =
+              cacheResult && cacheEpoch == _compiledMarkdownCacheEpoch
+              ? _compiledMarkdownCache.write(preparedContent, document)
+              : document;
           PerformanceProfiler.instance.finishTask(
             taskKey,
             data: {
@@ -273,9 +485,12 @@ class MarkdownCompileService {
         })
         .whenComplete(() {
           _inFlight.remove(preparedContent);
+          _inFlightCacheEpochs.remove(preparedContent);
+          _scheduleWorkerRetirement();
         });
 
     _inFlight[preparedContent] = future;
+    _inFlightCacheEpochs[preparedContent] = cacheEpoch;
     return future;
   }
 
@@ -283,6 +498,7 @@ class MarkdownCompileService {
     Iterable<String> preparedContents, {
     bool allowSynchronous = false,
     bool widgetTest = false,
+    bool cacheResults = true,
   }) async {
     final contents = preparedContents.toList(growable: false);
     if (contents.isEmpty) {
@@ -316,18 +532,31 @@ class MarkdownCompileService {
 
       if (allowSynchronous &&
           shouldCompileSynchronously(preparedContent, widgetTest: widgetTest)) {
-        resolved[index] = compilePreparedSynchronously(preparedContent);
+        resolved[index] = cacheResults
+            ? compilePreparedSynchronously(preparedContent)
+            : _compilePreparedMarkdownDocument(preparedContent);
         continue;
       }
 
       if (kIsWeb) {
-        resolved[index] = compilePreparedSynchronously(preparedContent);
+        resolved[index] = cacheResults
+            ? compilePreparedSynchronously(preparedContent)
+            : _compilePreparedMarkdownDocument(preparedContent);
         continue;
       }
 
       final inFlight = _inFlight[preparedContent];
       if (inFlight != null) {
-        pendingByContent[preparedContent] = inFlight;
+        final inFlightCacheEpoch = _inFlightCacheEpochs[preparedContent];
+        pendingByContent[preparedContent] = cacheResults
+            ? inFlight.then(
+                (document) =>
+                    !_disposed &&
+                        inFlightCacheEpoch == _compiledMarkdownCacheEpoch
+                    ? _compiledMarkdownCache.write(preparedContent, document)
+                    : document,
+              )
+            : inFlight;
         continue;
       }
 
@@ -336,7 +565,10 @@ class MarkdownCompileService {
 
     if (asyncMisses.isNotEmpty) {
       pendingByContent.addAll(
-        _startBatchCompile(asyncMisses.toList(growable: false)),
+        _startBatchCompile(
+          asyncMisses.toList(growable: false),
+          cacheResults: cacheResults,
+        ),
       );
     }
 
@@ -387,27 +619,92 @@ class MarkdownCompileService {
     unawaited(compilePreparedBatch(pendingContents));
   }
 
+  /// Normalizes raw Markdown before prewarming without running long, multi-pass
+  /// preprocessing on the UI isolate.
+  Future<void> prewarmContents(
+    Iterable<String> contents, {
+    required bool streaming,
+    bool widgetTest = false,
+  }) async {
+    if (_disposed) {
+      return;
+    }
+    final seenContents = <String>{};
+    final pendingBatch = <String>[];
+
+    Future<void> prepareAndSubmitBatch() async {
+      final batch = List<String>.unmodifiable(pendingBatch);
+      pendingBatch.clear();
+      final preparedBatch = await Future.wait<String>(
+        batch.map(
+          (content) => prepareContent(
+            content,
+            streaming: streaming,
+            // Production prewarming must never spend even the "small input"
+            // normalization budget on the UI isolate. Widget tests opt into
+            // the synchronous path because they lack native worker isolates.
+            allowSynchronous: widgetTest,
+            widgetTest: widgetTest,
+          ),
+        ),
+      );
+      if (_disposed) return;
+      // Submit and release one bounded preparation batch at a time so a long
+      // transcript cannot retain every normalized slice simultaneously.
+      await compilePreparedBatch(
+        preparedBatch,
+        allowSynchronous: widgetTest,
+        widgetTest: widgetTest,
+      );
+      // Even a test/backend implementation that completes synchronously must
+      // yield between admission batches. This keeps trimming and hashing a
+      // large transcript from monopolizing the UI isolate before the first
+      // background preparation result arrives.
+      await Future<void>.delayed(Duration.zero);
+    }
+
+    for (final content in contents) {
+      if (_disposed) return;
+      if (content.trim().isEmpty || !seenContents.add(content)) continue;
+      pendingBatch.add(content);
+      if (pendingBatch.length == _markdownPrewarmPrepareBatchSize) {
+        await prepareAndSubmitBatch();
+      }
+    }
+    if (pendingBatch.isNotEmpty) {
+      await prepareAndSubmitBatch();
+    }
+  }
+
   void dispose() {
     _disposed = true;
+    _workerIdleTimer?.cancel();
+    _workerIdleTimer = null;
     _inFlight.clear();
+    _inFlightCacheEpochs.clear();
     _backend.dispose();
     _prepareBackend.dispose();
   }
 
   Map<String, Future<CompiledMarkdownDocument>> _startBatchCompile(
-    List<String> preparedContents,
-  ) {
+    List<String> preparedContents, {
+    required bool cacheResults,
+  }) {
     if (preparedContents.isEmpty) {
       return const <String, Future<CompiledMarkdownDocument>>{};
     }
     if (preparedContents.length == 1) {
       final preparedContent = preparedContents.single;
       return <String, Future<CompiledMarkdownDocument>>{
-        preparedContent: compilePrepared(preparedContent),
+        preparedContent: compilePrepared(
+          preparedContent,
+          cacheResult: cacheResults,
+        ),
       };
     }
 
     final requestContents = List<String>.unmodifiable(preparedContents);
+    final cacheEpoch = _compiledMarkdownCacheEpoch;
     final requestIndexByContent = <String, int>{
       for (var index = 0; index < requestContents.length; index += 1)
         requestContents[index]: index,
@@ -424,7 +721,12 @@ class MarkdownCompileService {
       data: {'count': requestContents.length, 'totalLength': totalLength},
     );
 
-    final sharedFuture = _compilePreparedBatchAsync(requestContents, taskKey);
+    final sharedFuture = _compilePreparedBatchAsync(
+      requestContents,
+      taskKey,
+      cacheResults: cacheResults,
+      cacheEpoch: cacheEpoch,
+    );
     final entryFutures = <String, Future<CompiledMarkdownDocument>>{};
     for (final preparedContent in requestContents) {
       final documentIndex = requestIndexByContent[preparedContent]!;
@@ -434,9 +736,11 @@ class MarkdownCompileService {
           .whenComplete(() {
             if (_inFlight[preparedContent] == entryFuture) {
               _inFlight.remove(preparedContent);
+              _inFlightCacheEpochs.remove(preparedContent);
             }
           });
       _inFlight[preparedContent] = entryFuture;
+      _inFlightCacheEpochs[preparedContent] = cacheEpoch;
       entryFutures[preparedContent] = entryFuture;
     }
     return entryFutures;
@@ -444,16 +748,23 @@ class MarkdownCompileService {
 
   Future<List<CompiledMarkdownDocument>> _compilePreparedBatchAsync(
     List<String> preparedContents,
-    String taskKey,
-  ) async {
+    String taskKey, {
+    required bool cacheResults,
+    required int cacheEpoch,
+  }) async {
     try {
-      final resultMaps = await _backend.compilePreparedBatch(preparedContents);
-      final documents = _documentsFromBatchMaps(resultMaps);
+      final documents =
+          await debugCompilePreparedBatchOverride?.call(preparedContents) ??
+          _documentsFromBatchMaps(
+            await _backend.compilePreparedBatch(preparedContents),
+          );
       return _cacheCompiledBatchDocuments(
         preparedContents,
         documents,
         taskKey: taskKey,
         status: 'ok',
+        cacheResults: cacheResults,
+        cacheEpoch: cacheEpoch,
       );
     } catch (error) {
       try {
@@ -480,25 +791,25 @@ class MarkdownCompileService {
           documents,
           taskKey: taskKey,
           status: 'fallback_worker',
+          cacheResults: cacheResults,
+          cacheEpoch: cacheEpoch,
         );
       } catch (_) {
         final documents = preparedContents
-            .map(compilePreparedSynchronously)
+            .map(_compilePreparedMarkdownDocument)
             .toList(growable: false);
-        PerformanceProfiler.instance.finishTask(
-          taskKey,
-          data: {
-            'status': 'fallback_sync',
-            'error': error.toString(),
-            'count': documents.length,
-            'totalWeight': documents.fold<int>(
-              0,
-              (sum, document) => sum + document.estimatedWeight,
-            ),
-          },
+        return _cacheCompiledBatchDocuments(
+          preparedContents,
+          documents,
+          taskKey: taskKey,
+          status: 'fallback_sync',
+          cacheResults: cacheResults,
+          cacheEpoch: cacheEpoch,
+          error: error,
         );
-        return documents;
       }
+    } finally {
+      _scheduleWorkerRetirement();
     }
   }
 
@@ -507,6 +818,9 @@ class MarkdownCompileService {
     List<CompiledMarkdownDocument> documents, {
     required String taskKey,
     required String status,
+    required bool cacheResults,
+    required int cacheEpoch,
+    Object? error,
   }) {
     if (preparedContents.length != documents.length) {
       throw StateError(
@@ -521,7 +835,12 @@ class MarkdownCompileService {
     final cachedDocuments = <CompiledMarkdownDocument>[];
     for (var index = 0; index < preparedContents.length; index += 1) {
       cachedDocuments.add(
-        _compiledMarkdownCache.write(preparedContents[index], documents[index]),
+        cacheResults && cacheEpoch == _compiledMarkdownCacheEpoch
+            ? _compiledMarkdownCache.write(
+                preparedContents[index],
+                documents[index],
+              )
+            : documents[index],
       );
     }
     PerformanceProfiler.instance.finishTask(
@@ -533,6 +852,7 @@ class MarkdownCompileService {
           0,
           (sum, document) => sum + document.estimatedWeight,
         ),
+        if (error != null) 'error': error.toString(),
       },
     );
     return List<CompiledMarkdownDocument>.unmodifiable(cachedDocuments);
@@ -568,75 +888,6 @@ List<CompiledMarkdownDocument> _documentsFromBatchMaps(
   return maps.map(CompiledMarkdownDocument.fromMap).toList(growable: false);
 }
 
-/// Matches any `<details …>` open tag or `</details>` close tag. Used to
-/// depth-balance masked regions so a *nested* `<details>` inside a details body
-/// does not close the outer region early (which would re-expose the outer tail
-/// to LaTeX extraction). The `[^>]*` guard is safe because attribute values
-/// escape `>` (Conduit's `_escapeHtmlAttr` and OWUI's `html.escape`), the same
-/// assumption `DetailsBlockSyntax` already relies on.
-final _detailsTagPattern = RegExp(r'</?details\b[^>]*>', caseSensitive: false);
-final _detailsOpenPattern = RegExp(r'<details\b', caseSensitive: false);
-
-/// Runs LaTeX extraction on the content *outside* `<details>` regions only.
-///
-/// `LatexPreprocessor.extract` rewrites `$$…$$`/`$…$` spans into
-/// `\n\n<placeholder>\n\n`. A tool call serializes its whole payload into a
-/// single-line `<details …>` tag; when that payload carries `$$` math (any
-/// technical document), the inserted newlines split the opening tag across
-/// lines and `DetailsBlockSyntax` can no longer parse it, leaking raw HTML.
-/// Masking the details regions (and any unclosed trailing block while streaming)
-/// keeps them intact. Math *inside* a details body is unaffected — the body is
-/// compiled by its own pass with a fresh preprocessor.
-@visibleForTesting
-String extractLatexOutsideDetails(LatexPreprocessor pre, String content) {
-  if (!content.contains('<details')) {
-    return pre.extract(content);
-  }
-  final buffer = StringBuffer();
-  var emitted = 0; // index up to which output has been written
-  var depth = 0; // open-details nesting depth
-  var regionStart = -1; // start of the current outermost masked region
-  for (final match in _detailsTagPattern.allMatches(content)) {
-    final isClose = content.codeUnitAt(match.start + 1) == 0x2F; // '/'
-    if (!isClose) {
-      if (depth == 0) {
-        // Entering an outermost region: LaTeX-extract the text before it.
-        buffer.write(pre.extract(content.substring(emitted, match.start)));
-        emitted = match.start;
-        regionStart = match.start;
-      }
-      depth += 1;
-    } else if (depth > 0) {
-      depth -= 1;
-      if (depth == 0) {
-        // Closing the outermost region: emit it (open tag → close) verbatim.
-        buffer.write(content.substring(regionStart, match.end));
-        emitted = match.end;
-      }
-    }
-    // A stray `</details>` at depth 0 is left in the outside run (treated as
-    // text and LaTeX-extracted with the rest — harmless).
-  }
-  if (depth > 0) {
-    // An unclosed region whose *opening tag was complete* (streaming: body still
-    // arriving) — pass it through verbatim so it is never shredded mid-stream.
-    buffer.write(content.substring(regionStart));
-    return buffer.toString();
-  }
-  // depth == 0: any remaining `<details` must be a still-incomplete opening tag
-  // (a complete one would have incremented depth above). Pass from it verbatim;
-  // LaTeX-extract only the prose before it.
-  final rest = content.substring(emitted);
-  final partialOpen = _detailsOpenPattern.firstMatch(rest);
-  if (partialOpen != null) {
-    buffer.write(pre.extract(rest.substring(0, partialOpen.start)));
-    buffer.write(rest.substring(partialOpen.start));
-  } else {
-    buffer.write(pre.extract(rest));
-  }
-  return buffer.toString();
-}
-
 CompiledMarkdownDocument _compilePreparedMarkdownDocument(
   String preparedContent,
 ) {
@@ -645,15 +896,17 @@ CompiledMarkdownDocument _compilePreparedMarkdownDocument(
   }
 
   final latexPreprocessor = LatexPreprocessor();
-  final preprocessed = extractLatexOutsideDetails(
+  final preprocessed = _extractLatexOutsideDetailsTags(
     latexPreprocessor,
     preparedContent,
   );
 
   final document = md.Document(
-    extensionSet: md.ExtensionSet.gitHubWeb,
+    // gitHubWeb with linear-time handling of long unbroken runs; the run guard
+    // must stay the first inline syntax.
+    extensionSet: conduitGitHubWebExtensionSet,
     blockSyntaxes: const [DetailsBlockSyntax()],
-    inlineSyntaxes: [MentionInlineSyntax()],
+    inlineSyntaxes: [LongAlphanumericRunSyntax(), MentionInlineSyntax()],
     encodeHtml: false,
   );
   final nodes = document.parse(preprocessed);
@@ -676,6 +929,34 @@ CompiledMarkdownDocument _compilePreparedMarkdownDocument(
     nodes: compiledNodes,
     blockLatexExpressions: latexPreprocessor.blockExpressions,
     inlineLatexExpressions: latexPreprocessor.inlineExpressions,
+  );
+}
+
+/// A whole `<details ...>` opening tag on one line. The preprocessor has
+/// already joined multi-line tags and escaped `<`/`>` inside quoted values.
+final _detailsOpeningTagForLatex = RegExp(
+  r'<details\b[^>\n]*>',
+  caseSensitive: false,
+);
+
+/// Extracts LaTeX everywhere except inside `<details>` opening tags.
+///
+/// Tool-call attributes carry JSON-encoded arguments and results. Their
+/// escaped text often looks like LaTeX delimiters (`\[`...`\]`, `$$`), and
+/// block extraction wraps its placeholder in blank lines, which split the
+/// opening tag so the details parser rendered the whole tool call as a raw
+/// wall (issue #677). Attributes are data, never math.
+String _extractLatexOutsideDetailsTags(
+  LatexPreprocessor latexPreprocessor,
+  String content,
+) {
+  if (!_detailsOpeningTagForLatex.hasMatch(content)) {
+    return latexPreprocessor.extract(content);
+  }
+  return content.splitMapJoin(
+    _detailsOpeningTagForLatex,
+    onMatch: (match) => match[0]!,
+    onNonMatch: latexPreprocessor.extract,
   );
 }
 
@@ -772,6 +1053,7 @@ List<CompiledMarkdownInlineSegment> _compileInlineSegments(
         CompiledMarkdownLatexSegment(
           tex: latexSegment.content,
           isBlock: latexSegment.isBlock,
+          placeholderLength: latexSegment.placeholderLength,
         ),
       );
       continue;
@@ -1021,9 +1303,16 @@ CompiledMarkdownDetailsData _buildCompiledDetailsData({
   final type = attributes['type']?.trim() ?? '';
   final name = attributes['name']?.trim() ?? '';
   final done = attributes['done'];
-  final isDone = done == 'true';
-  final isPending = done != null && done != 'true';
-  final durationSeconds = int.tryParse(attributes['duration'] ?? '0') ?? 0;
+  final status = attributes['status'];
+  final terminalTool =
+      type == 'tool_calls' &&
+      (status == 'failed' || status == 'incomplete' || status == 'rejected');
+  final isDone = done == 'true' || terminalTool;
+  final isPending =
+      !isDone && (done != null || (type == 'tool_calls' && status != null));
+  final rawDuration = attributes['duration']?.trim() ?? '';
+  final durationSeconds =
+      int.tryParse(rawDuration.isEmpty ? '0' : rawDuration) ?? 0;
 
   return CompiledMarkdownDetailsData(
     summaryText: summaryText,
@@ -1033,9 +1322,11 @@ CompiledMarkdownDetailsData _buildCompiledDetailsData({
     kind: _detailsKindForType(type),
     type: type,
     name: name,
+    status: attributes['status'],
     isDone: isDone,
     isPending: isPending,
     durationSeconds: durationSeconds,
+    hasDuration: rawDuration.isNotEmpty,
     toolCallData: type == 'tool_calls'
         ? _compileToolCallData(attributes)
         : null,
@@ -1080,18 +1371,22 @@ CompiledMarkdownToolCallData _compileToolCallData(
       ? ''
       : _formatDetailJsonString(argumentsText);
 
-  final resultCode = parsedResult is Map || parsedResult is List
+  final resultPartsText = _toolResultPartsText(
+    parsedResult,
+    structuredOpenWebUi: attributes.containsKey('status'),
+  );
+  final resultCode =
+      resultPartsText == null && (parsedResult is Map || parsedResult is List)
       ? const JsonEncoder.withIndent('  ').convert(parsedResult)
       : '';
   final resultDisplayText = resultText.isEmpty || resultCode.isNotEmpty
       ? ''
-      : _stringifyDetailValue(parsedResult);
+      : resultPartsText ?? _stringifyDetailValue(parsedResult);
 
-  // Structured preview embeds ({type:'preview', url,…}) belong to the
-  // message-level delivery card, never to inline tool-detail rendering —
-  // flattening them here would render their URL as garbage text.
+  // Preview objects belong to the message's document card; their URL is not
+  // markup to render inline.
   final embeds = normalizeEmbedList(rawEmbeds)
-      .where((e) => !isPreviewEmbed(e))
+      .where((embed) => !isPreviewEmbed(embed))
       .map(extractEmbedSource)
       .whereType<String>()
       .where((value) => value.isNotEmpty)
@@ -1106,9 +1401,77 @@ CompiledMarkdownToolCallData _compileToolCallData(
     argumentsCode: argumentsCode,
     resultCode: resultCode,
     resultDisplayText: resultDisplayText,
+    isError:
+        attributes['status'] == 'failed' ||
+        _isToolResultError(resultPartsText ?? parsedResult),
     embedSources: embeds,
     imageUrls: imageUrls,
   );
+}
+
+// Matches ToolCallDisplay.svelte's result-error detection after attribute decoding.
+bool _isToolResultError(Object? result) {
+  if (result is String) {
+    final text = result.trim().toLowerCase();
+    if (text.startsWith('error:') ||
+        text.startsWith('exception:') ||
+        text.startsWith('traceback') ||
+        text.startsWith('http error!')) {
+      return true;
+    }
+    result = _parseDetailJsonString(result);
+  }
+  if (result is! Map) return false;
+  bool hasValue(Object? value) =>
+      value is String ? value.trim().isNotEmpty : value is Map || value is List;
+  if (hasValue(result['error'])) return true;
+  final status = result['status']?.toString().trim().toLowerCase();
+  if (status == 'error' || status == 'failed') return true;
+  return (result['success'] == false || result['ok'] == false) &&
+      hasValue(result['message']);
+}
+
+const Set<String> _toolResultTextPartTypes = {
+  'input_text',
+  'output_text',
+  'text',
+};
+
+/// The text of a tool result that is a list of content parts, as Open WebUI's
+/// `getToolResultText` shows a `function_call_output`: image parts are
+/// skipped and the other parts' text is concatenated with nothing between.
+/// Null for any other shape, which keeps its JSON view.
+String? _toolResultPartsText(
+  Object? result, {
+  required bool structuredOpenWebUi,
+}) {
+  if (result is! List) return null;
+  if (result.isEmpty) return structuredOpenWebUi ? '' : null;
+  final text = StringBuffer();
+  var hasTextPart = false;
+  for (final part in result) {
+    if (part is! Map) {
+      if (structuredOpenWebUi) continue;
+      return null;
+    }
+    final type = part['type'];
+    if (type == 'input_image') continue;
+    if (!structuredOpenWebUi &&
+        !part.containsKey('text') &&
+        !_toolResultTextPartTypes.contains(type)) {
+      return null;
+    }
+    final value = part['text'];
+    if (value is String) {
+      text.write(value);
+    } else if (value is num || value is bool) {
+      text.write(value.toString());
+    } else if (value != null) {
+      return null;
+    }
+    hasTextPart = true;
+  }
+  return hasTextPart || structuredOpenWebUi ? text.toString() : null;
 }
 
 String _decodeDetailAttribute(String? input) {
@@ -1513,6 +1876,19 @@ class _MarkdownCompilerBackend {
       _exitPort != null ||
       _sendPort != null;
 
+  bool get isRunning => _hasActiveIsolateState;
+
+  bool retireIfIdle() {
+    if (_disposed ||
+        _startupFuture != null ||
+        _pendingSingle.isNotEmpty ||
+        _pendingBatch.isNotEmpty) {
+      return false;
+    }
+    _resetIsolateState(killIsolate: true);
+    return true;
+  }
+
   void _resetIsolateState({required bool killIsolate}) {
     _receivePort?.close();
     _receivePort = null;
@@ -1548,6 +1924,9 @@ class _MarkdownPrepareBackend {
   Future<SendPort>? _startupFuture;
   final Map<int, Completer<String>> _pendingPrepared =
       <int, Completer<String>>{};
+  final Map<int, Completer<MarkdownPreparationPatch>> _pendingStreaming =
+      <int, Completer<MarkdownPreparationPatch>>{};
+  final Map<int, Completer<bool>> _pendingRelease = <int, Completer<bool>>{};
   int _requestCounter = 0;
   bool _disposed = false;
 
@@ -1564,9 +1943,46 @@ class _MarkdownPrepareBackend {
     final completer = Completer<String>();
     _pendingPrepared[requestId] = completer;
     sendPort.send(<String, Object?>{
+      'op': 'prepareFull',
       'id': requestId,
       'content': content,
       'streaming': streaming,
+    });
+    return completer.future;
+  }
+
+  Future<MarkdownPreparationPatch> prepareStreamingContent(
+    MarkdownPreparationRequest request,
+  ) async {
+    final sendPort = await _ensureStarted();
+    if (_disposed) {
+      throw StateError('Markdown prepare backend disposed');
+    }
+
+    final requestId = ++_requestCounter;
+    final completer = Completer<MarkdownPreparationPatch>();
+    _pendingStreaming[requestId] = completer;
+    sendPort.send(<String, Object?>{
+      'op': 'prepareStreaming',
+      'id': requestId,
+      'request': request.toMap(),
+    });
+    return completer.future;
+  }
+
+  Future<bool> releaseSession(String sessionId) async {
+    final sendPort = await _ensureStarted();
+    if (_disposed) {
+      throw StateError('Markdown prepare backend disposed');
+    }
+
+    final requestId = ++_requestCounter;
+    final completer = Completer<bool>();
+    _pendingRelease[requestId] = completer;
+    sendPort.send(<String, Object?>{
+      'op': 'release',
+      'id': requestId,
+      'sessionId': sessionId,
     });
     return completer.future;
   }
@@ -1672,6 +2088,20 @@ class _MarkdownPrepareBackend {
       }
       return;
     }
+    if (result is Map<Object?, Object?>) {
+      final completer = _pendingStreaming.remove(requestId);
+      if (completer != null && !completer.isCompleted) {
+        completer.complete(MarkdownPreparationPatch.fromMap(result));
+      }
+      return;
+    }
+    if (result is bool) {
+      final completer = _pendingRelease.remove(requestId);
+      if (completer != null && !completer.isCompleted) {
+        completer.complete(result);
+      }
+      return;
+    }
 
     final invalidResponseError = StateError(
       'Invalid markdown prepare response: $message',
@@ -1684,9 +2114,17 @@ class _MarkdownPrepareBackend {
     Object error,
     StackTrace stackTrace,
   ) {
-    final completer = _pendingPrepared.remove(requestId);
-    if (completer != null && !completer.isCompleted) {
-      completer.completeError(error, stackTrace);
+    final preparedCompleter = _pendingPrepared.remove(requestId);
+    if (preparedCompleter != null && !preparedCompleter.isCompleted) {
+      preparedCompleter.completeError(error, stackTrace);
+    }
+    final streamingCompleter = _pendingStreaming.remove(requestId);
+    if (streamingCompleter != null && !streamingCompleter.isCompleted) {
+      streamingCompleter.completeError(error, stackTrace);
+    }
+    final releaseCompleter = _pendingRelease.remove(requestId);
+    if (releaseCompleter != null && !releaseCompleter.isCompleted) {
+      releaseCompleter.completeError(error, stackTrace);
     }
   }
 
@@ -1705,8 +2143,18 @@ class _MarkdownPrepareBackend {
     final pendingPrepared = List<Completer<String>>.from(
       _pendingPrepared.values,
     );
+    final pendingStreaming = List<Completer<MarkdownPreparationPatch>>.from(
+      _pendingStreaming.values,
+    );
+    final pendingRelease = List<Completer<bool>>.from(_pendingRelease.values);
     _pendingPrepared.clear();
-    for (final completer in pendingPrepared) {
+    _pendingStreaming.clear();
+    _pendingRelease.clear();
+    for (final completer in <Completer<Object?>>[
+      ...pendingPrepared,
+      ...pendingStreaming,
+      ...pendingRelease,
+    ]) {
       if (!completer.isCompleted) {
         completer.completeError(error, stackTrace);
       }
@@ -1719,6 +2167,20 @@ class _MarkdownPrepareBackend {
       _errorPort != null ||
       _exitPort != null ||
       _sendPort != null;
+
+  bool get isRunning => _hasActiveIsolateState;
+
+  bool retireIfIdle() {
+    if (_disposed ||
+        _startupFuture != null ||
+        _pendingPrepared.isNotEmpty ||
+        _pendingStreaming.isNotEmpty ||
+        _pendingRelease.isNotEmpty) {
+      return false;
+    }
+    _resetIsolateState(killIsolate: true);
+    return true;
+  }
 
   void _resetIsolateState({required bool killIsolate}) {
     _receivePort?.close();
@@ -1791,6 +2253,7 @@ void _markdownCompilerIsolateMain(SendPort mainSendPort) {
 @pragma('vm:entry-point')
 void _markdownPrepareIsolateMain(SendPort mainSendPort) {
   final receivePort = ReceivePort();
+  final streamingEngine = StreamingMarkdownPreparationEngine();
   mainSendPort.send(receivePort.sendPort);
 
   receivePort.listen((dynamic message) {
@@ -1803,10 +2266,37 @@ void _markdownPrepareIsolateMain(SendPort mainSendPort) {
       return;
     }
     try {
-      final content = (typed['content'] ?? '') as String;
-      final streaming = typed['streaming'] == true;
-      final result = prepareMarkdownContent(content, streaming: streaming);
-      mainSendPort.send(<String, Object?>{'id': requestId, 'result': result});
+      final operation = (typed['op'] ?? 'prepareFull').toString();
+      switch (operation) {
+        case 'prepareStreaming':
+          final rawRequest = typed['request'];
+          if (rawRequest is! Map<Object?, Object?>) {
+            throw StateError('Missing streaming preparation request');
+          }
+          final request = MarkdownPreparationRequest.fromMap(rawRequest);
+          final result = streamingEngine.prepare(request).toMap();
+          mainSendPort.send(<String, Object?>{
+            'id': requestId,
+            'result': result,
+          });
+        case 'release':
+          final sessionId = (typed['sessionId'] ?? '').toString();
+          final released = streamingEngine.release(sessionId);
+          mainSendPort.send(<String, Object?>{
+            'id': requestId,
+            'result': released,
+          });
+        case 'prepareFull':
+          final content = (typed['content'] ?? '') as String;
+          final streaming = typed['streaming'] == true;
+          final result = prepareMarkdownContent(content, streaming: streaming);
+          mainSendPort.send(<String, Object?>{
+            'id': requestId,
+            'result': result,
+          });
+        default:
+          throw StateError('Unknown markdown prepare operation: $operation');
+      }
     } catch (error, stackTrace) {
       mainSendPort.send(<String, Object?>{
         'id': requestId,
@@ -1818,7 +2308,12 @@ void _markdownPrepareIsolateMain(SendPort mainSendPort) {
 }
 
 class _CompiledMarkdownCache {
-  static const int _maxWeight = 512000;
+  // Sized to cover a loaded transcript window rather than one screenful: a
+  // fling back through history that outruns the cache re-runs a synchronous
+  // compile per evicted row. Weight approximates characters + node counts, so
+  // 4 MB of budget is a few MB of real heap — released on memory pressure.
+  static const int _maxEntries = 256;
+  static const int _maxWeight = 4194304;
 
   final LinkedHashMap<String, CompiledMarkdownDocument> _entries =
       LinkedHashMap<String, CompiledMarkdownDocument>();
@@ -1864,7 +2359,7 @@ class _CompiledMarkdownCache {
       document.estimatedWeight;
 
   void _evictIfNeeded() {
-    while (_entries.length > 32 || _currentWeight > _maxWeight) {
+    while (_entries.length > _maxEntries || _currentWeight > _maxWeight) {
       final firstKey = _entries.keys.first;
       final removed = _entries.remove(firstKey);
       if (removed == null) {

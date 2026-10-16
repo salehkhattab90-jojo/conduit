@@ -1,0 +1,767 @@
+// ignore_for_file: experimental_member_use
+
+import 'dart:async';
+
+import 'package:audio_session/audio_session.dart';
+import 'package:checks/checks.dart';
+import 'package:conduit/features/chat/voice_mode/chat_voice_audio_session_coordinator.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+void main() {
+  group('ChatVoiceAudioSessionCoordinator.isExternalAudioAccessory', () {
+    test('treats attached listening hardware as an accessory', () {
+      for (final type in const [
+        AudioDeviceType.wiredHeadset,
+        AudioDeviceType.wiredHeadphones,
+        AudioDeviceType.headsetMic,
+        AudioDeviceType.bluetoothSco,
+        AudioDeviceType.bluetoothLe,
+        AudioDeviceType.usbAudio,
+        AudioDeviceType.hearingAid,
+        AudioDeviceType.carAudio,
+      ]) {
+        check(
+          because: '$type should keep the call off the loudspeaker',
+          ChatVoiceAudioSessionCoordinator.isExternalAudioAccessory(type),
+        ).isTrue();
+      }
+    });
+
+    test('does not count anything a call cannot play through', () {
+      // A bare phone must fall through to the speakerphone default, so none of
+      // the always-present built-ins may look like something to route to.
+      for (final type in const [
+        AudioDeviceType.builtInEarpiece,
+        AudioDeviceType.builtInSpeaker,
+        AudioDeviceType.builtInSpeakerSafe,
+        AudioDeviceType.builtInMic,
+        AudioDeviceType.telephony,
+        AudioDeviceType.remoteSubmix,
+        AudioDeviceType.unknown,
+        // A call runs in communication mode, which cannot route to either.
+        AudioDeviceType.bluetoothA2dp,
+        AudioDeviceType.airPlay,
+      ]) {
+        check(
+          because: '$type is not somewhere a call can play',
+          ChatVoiceAudioSessionCoordinator.isExternalAudioAccessory(type),
+        ).isFalse();
+      }
+    });
+  });
+
+  group('ChatVoiceAudioSessionCoordinator device changes', () {
+    late ChatVoiceAudioSessionCoordinator coordinator;
+    late List<bool> routeChanges;
+
+    setUp(() {
+      coordinator = ChatVoiceAudioSessionCoordinator();
+      routeChanges = <bool>[];
+      coordinator.speakerphoneRouteChanges.listen(routeChanges.add);
+      addTearDown(coordinator.dispose);
+    });
+
+    Future<void> reportDevices(List<AudioDeviceType> types) async {
+      var id = 0;
+      await coordinator.handleAudioDevicesChangedForTesting({
+        for (final type in types)
+          AudioDevice(
+            id: '${id++}',
+            name: type.name,
+            isInput: false,
+            isOutput: true,
+            type: type,
+          ),
+      });
+      await pumpEventQueue();
+    }
+
+    test('follows accessories plugged in and pulled out mid-call', () async {
+      await reportDevices(const [
+        AudioDeviceType.builtInEarpiece,
+        AudioDeviceType.builtInSpeaker,
+      ]);
+      check(routeChanges).deepEquals(<bool>[true]);
+
+      await reportDevices(const [
+        AudioDeviceType.builtInEarpiece,
+        AudioDeviceType.builtInSpeaker,
+        AudioDeviceType.wiredHeadphones,
+      ]);
+      check(routeChanges).deepEquals(<bool>[true, false]);
+
+      // Headphones pulled out: back to the loudspeaker rather than the earpiece.
+      await reportDevices(const [
+        AudioDeviceType.builtInEarpiece,
+        AudioDeviceType.builtInSpeaker,
+      ]);
+      check(routeChanges).deepEquals(<bool>[true, false, true]);
+    });
+
+    test('reroutes once when one accessory announces several ends', () async {
+      await reportDevices(const [AudioDeviceType.builtInSpeaker]);
+      check(routeChanges).deepEquals(<bool>[true]);
+
+      await reportDevices(const [
+        AudioDeviceType.builtInSpeaker,
+        AudioDeviceType.bluetoothSco,
+      ]);
+      await reportDevices(const [
+        AudioDeviceType.builtInSpeaker,
+        AudioDeviceType.bluetoothSco,
+        AudioDeviceType.wiredHeadphones,
+      ]);
+
+      check(routeChanges).deepEquals(<bool>[true, false]);
+    });
+
+    test('stops second-guessing the route after a manual toggle', () async {
+      await coordinator.setSpeakerphoneEnabled(false);
+
+      await reportDevices(const [
+        AudioDeviceType.builtInEarpiece,
+        AudioDeviceType.builtInSpeaker,
+      ]);
+
+      check(routeChanges).isEmpty();
+    });
+
+    test('lets the hardware back in after a refused button press', () async {
+      coordinator.debugRefuseRouteChanges = true;
+      check(await coordinator.setSpeakerphoneEnabled(false)).isFalse();
+      coordinator.debugRefuseRouteChanges = false;
+
+      // The press moved nothing, so it must not cost the rest of the call its
+      // automatic routing.
+      await reportDevices(const [AudioDeviceType.builtInSpeaker]);
+
+      check(routeChanges).deepEquals(<bool>[true]);
+    });
+
+    test('tries the same accessory again after a refused reroute', () async {
+      coordinator.debugRefuseRouteChanges = true;
+      await reportDevices(const [AudioDeviceType.builtInSpeaker]);
+      check(routeChanges).isEmpty();
+
+      // The hardware never moved, so the phone repeats itself rather than
+      // sending a fresh transition. The refused attempt must not have made this
+      // look like old news.
+      coordinator.debugRefuseRouteChanges = false;
+      await reportDevices(const [AudioDeviceType.builtInSpeaker]);
+
+      check(routeChanges).deepEquals(<bool>[true]);
+    });
+
+    test('ignores a microphone with no output of its own', () async {
+      await coordinator.handleAudioDevicesChangedForTesting({
+        _outputDevice(AudioDeviceType.builtInSpeaker),
+        // A plugged-in mic is not somewhere to play the answer.
+        AudioDevice(
+          id: 'mic',
+          name: 'usb mic',
+          isInput: true,
+          isOutput: false,
+          type: AudioDeviceType.usbAudio,
+        ),
+      });
+      await pumpEventQueue();
+
+      check(routeChanges).deepEquals(<bool>[true]);
+    });
+
+    test('ignores the speaker button once the call is being torn down', () async {
+      final hangingUp = coordinator.deactivate();
+      await coordinator.setSpeakerphoneEnabled(true);
+      await hangingUp;
+
+      // The next call still gets its automatic default: the press was rejected
+      // outright rather than latched as a manual choice.
+      await reportDevices(const [AudioDeviceType.builtInSpeaker]);
+
+      check(routeChanges).deepEquals(<bool>[true]);
+    });
+
+    test('drops a reroute the speaker button overtakes', () async {
+      // The reroute is in flight, not finished, when the button is pressed.
+      final rerouting = reportDevices(const [AudioDeviceType.builtInEarpiece]);
+      await coordinator.setSpeakerphoneEnabled(false);
+      await rerouting;
+
+      check(
+        because: 'the button press is newer than the accessory scan',
+        routeChanges,
+      ).isEmpty();
+    });
+
+    test('tears the call down when disposal beats hanging up', () async {
+      await reportDevices(const [AudioDeviceType.builtInSpeaker]);
+      check(routeChanges).deepEquals(<bool>[true]);
+
+      // Riverpod gives no order to provider disposal, so the coordinator can go
+      // first and never see the controller's `deactivate`. Disposing has to
+      // hand the route back on its own.
+      await coordinator.dispose();
+
+      check(coordinator.debugRouteTeardowns).deepEquals(<String>['dispose']);
+      check(
+        because: 'a disposed coordinator has no call left to route',
+        await coordinator.setSpeakerphoneEnabled(true),
+      ).isFalse();
+      await reportDevices(const [AudioDeviceType.wiredHeadphones]);
+      check(routeChanges).deepEquals(<bool>[true]);
+    });
+
+    test('survives hanging up and disposal both arriving', () async {
+      await coordinator.deactivate();
+      await coordinator.dispose();
+
+      check(coordinator.debugRouteTeardowns)
+          .deepEquals(<String>['deactivate', 'dispose']);
+    });
+
+    test('keeps the shutter down until the last teardown is done', () async {
+      final first = coordinator.deactivate();
+      final second = coordinator.deactivate();
+      await first;
+
+      // The second teardown is still putting the platform route back. A button
+      // press slipping in behind it would put communication mode back on a call
+      // that is already over.
+      final pressed = coordinator.setSpeakerphoneEnabled(true);
+      await second;
+
+      check(await pressed).isFalse();
+    });
+
+    test('stays shut once disposed, however late hanging up is', () async {
+      await coordinator.dispose();
+      // Teardown normally lifts the shutter for the next call. A disposed
+      // coordinator has no next call, so this must not leave the button able to
+      // put the phone back into communication mode.
+      await coordinator.deactivate();
+
+      check(await coordinator.setSpeakerphoneEnabled(true)).isFalse();
+    });
+
+    test('drops a speaker press that hanging up overtakes', () async {
+      // The press is queued, not finished, when the call ends. Moving the route
+      // behind the teardown would be work for a call nobody is on, and the
+      // answer would light the speaker button up on the way out.
+      final pressed = coordinator.setSpeakerphoneEnabled(true);
+      await coordinator.deactivate();
+
+      check(await pressed).isFalse();
+    });
+
+    test('drops a reroute that hanging up overtakes', () async {
+      final rerouting = reportDevices(const [AudioDeviceType.builtInEarpiece]);
+      await coordinator.deactivate();
+      await rerouting;
+
+      check(routeChanges).isEmpty();
+    });
+
+    test('reroutes once to the newest route when events overlap', () async {
+      // Start the call on a headset, so the loudspeaker is genuinely off.
+      await reportDevices(const [
+        AudioDeviceType.builtInSpeaker,
+        AudioDeviceType.wiredHeadphones,
+      ]);
+      check(routeChanges).isEmpty();
+
+      // A loose jack: out, in, out again, all before the first reroute has
+      // finished talking to the platform. Rerouting three times in a row would
+      // leave whichever call finished last owning the route, so the coordinator
+      // collapses the flapping into the one move that matches the hardware now.
+      final flapping = <Future<void>>[
+        coordinator.handleAudioDevicesChangedForTesting({
+          _outputDevice(AudioDeviceType.builtInSpeaker),
+        }),
+        coordinator.handleAudioDevicesChangedForTesting({
+          _outputDevice(AudioDeviceType.builtInSpeaker),
+          _outputDevice(AudioDeviceType.wiredHeadphones),
+        }),
+        coordinator.handleAudioDevicesChangedForTesting({
+          _outputDevice(AudioDeviceType.builtInSpeaker),
+        }),
+      ];
+      await Future.wait(flapping);
+      await pumpEventQueue();
+
+      check(
+        because: 'the headset is out, so the call belongs on the loudspeaker',
+        routeChanges,
+      ).deepEquals(<bool>[true]);
+    });
+  });
+  group('ChatVoiceAudioSessionCoordinator Android loudspeaker route', () {
+    late ChatVoiceAudioSessionCoordinator coordinator;
+    late _FakeAndroidAudioManagerChannel audioManager;
+    late List<bool> routeChanges;
+
+    setUp(() {
+      TestWidgetsFlutterBinding.ensureInitialized();
+      audioManager = _FakeAndroidAudioManagerChannel()..install();
+      addTearDown(audioManager.uninstall);
+      coordinator = ChatVoiceAudioSessionCoordinator()
+        ..debugTreatAsAndroid = true;
+      routeChanges = <bool>[];
+      coordinator.speakerphoneRouteChanges.listen(routeChanges.add);
+      addTearDown(coordinator.dispose);
+    });
+
+    test(
+      'reports a refused move off the loudspeaker when the read-back disagrees',
+      () async {
+        check(await coordinator.setSpeakerphoneEnabled(true)).isTrue();
+
+        // The platform takes every call to leave the loudspeaker and keeps the
+        // call there anyway. Trusting those calls let the button show the
+        // earpiece while audio stayed on the speaker, and then refuse the
+        // press that would have matched it (issue #716).
+        audioManager.honourEarpiece = false;
+        check(await coordinator.setSpeakerphoneEnabled(false)).isFalse();
+
+        // A refusal is not a latch: once the platform lets go, the same press
+        // lands, and so does the one after it.
+        audioManager.honourEarpiece = true;
+        check(await coordinator.setSpeakerphoneEnabled(false)).isTrue();
+        check(await coordinator.setSpeakerphoneEnabled(true)).isTrue();
+      },
+    );
+
+    test('reports the route it reads back on every configure pass', () async {
+      check(await coordinator.setSpeakerphoneEnabled(true)).isTrue();
+      await pumpEventQueue();
+      check(because: 'the press answered for itself', routeChanges).isEmpty();
+
+      // Mid-call, the platform stops honouring the loudspeaker. The button has
+      // to come back down rather than keep promising the speaker.
+      audioManager.honourLoudspeaker = false;
+      await coordinator.configureForSpeaking();
+      await pumpEventQueue();
+      check(routeChanges).deepEquals(<bool>[false]);
+
+      // The choice itself survives the refusal, so the next pass tries the
+      // loudspeaker again and reports it once it lands.
+      audioManager.honourLoudspeaker = true;
+      await coordinator.configureForListening();
+      await pumpEventQueue();
+      check(routeChanges).deepEquals(<bool>[false, true]);
+    });
+
+    test('re-reads the route when hardware changes after a press', () async {
+      check(await coordinator.setSpeakerphoneEnabled(true)).isTrue();
+
+      // The press holds the route, so the device event does not reroute, but
+      // the platform has moved the call to the earpiece on its own.
+      audioManager.communicationDeviceId =
+          _FakeAndroidAudioManagerChannel.earpieceId;
+      await coordinator.handleAudioDevicesChangedForTesting({
+        _outputDevice(AudioDeviceType.builtInEarpiece),
+        _outputDevice(AudioDeviceType.builtInSpeaker),
+      });
+      await pumpEventQueue();
+
+      check(routeChanges).deepEquals(<bool>[false]);
+    });
+
+    test(
+      'reports a refused move when the read-back is not the speaker',
+      () async {
+        // The platform says yes to setCommunicationDevice and takes the legacy
+        // setSpeakerphoneOn call without complaint, but neither moves the route
+        // (issue #716). Only the read-back can tell, and it says earpiece.
+        audioManager.honourLoudspeaker = false;
+
+        check(await coordinator.setSpeakerphoneEnabled(true)).isFalse();
+        // The rejected selection is released before the legacy fallback, so
+        // the system is not left holding a device the read-back disowned.
+        check(audioManager.communicationDeviceId).isNull();
+      },
+    );
+
+    test(
+      'reports an applied move once the read-back confirms the speaker',
+      () async {
+        check(await coordinator.setSpeakerphoneEnabled(true)).isTrue();
+        check(audioManager.communicationDeviceId)
+            .isNotNull()
+            .equals(_FakeAndroidAudioManagerChannel.speakerId);
+      },
+    );
+
+    test(
+      'speaking passes re-select the speaker after it was cleared',
+      () async {
+        check(await coordinator.setSpeakerphoneEnabled(true)).isTrue();
+
+        // Something else (the recorder plugin's Bluetooth manager, the system)
+        // cleared the communication device between listening and speaking.
+        audioManager.communicationDeviceId = null;
+        await coordinator.configureForSpeaking();
+        check(audioManager.communicationDeviceId)
+            .isNotNull()
+            .equals(_FakeAndroidAudioManagerChannel.speakerId);
+
+        audioManager.communicationDeviceId = null;
+        await coordinator.configureForBargeInSpeaking();
+        check(audioManager.communicationDeviceId)
+            .isNotNull()
+            .equals(_FakeAndroidAudioManagerChannel.speakerId);
+      },
+    );
+  });
+
+  group('ChatVoiceAudioSessionCoordinator after a call', () {
+    late _FakeAndroidAudioManagerChannel audioManager;
+
+    setUp(() {
+      TestWidgetsFlutterBinding.ensureInitialized();
+      audioManager = _FakeAndroidAudioManagerChannel()..install();
+      addTearDown(audioManager.uninstall);
+    });
+
+    Future<AudioSessionConfiguration?> sessionConfiguration() async =>
+        (await AudioSession.instance).configuration;
+
+    test('hands the shared session back in its idle configuration', () async {
+      final coordinator = ChatVoiceAudioSessionCoordinator();
+      addTearDown(coordinator.dispose);
+
+      await coordinator.configureForListening();
+      check((await sessionConfiguration())?.androidAudioAttributes?.usage)
+          .equals(AndroidAudioUsage.voiceCommunication);
+
+      await coordinator.deactivate();
+
+      // Whatever plays next (read-aloud, server TTS, the notes player) takes
+      // its route from this configuration. Left on the call's, iOS stays in
+      // play-and-record on the earpiece and just_audio on Android keeps
+      // voice-communication attributes (issue #716).
+      final idle = await sessionConfiguration();
+      check(idle?.avAudioSessionCategory)
+          .equals(AVAudioSessionCategory.playback);
+      check(idle?.androidAudioAttributes?.usage)
+          .equals(AndroidAudioUsage.media);
+    });
+
+    test('leaves alone a call configured while hanging up', () async {
+      final coordinator = ChatVoiceAudioSessionCoordinator()
+        ..debugTreatAsAndroid = true;
+      addTearDown(coordinator.dispose);
+      final replacement = ChatVoiceAudioSessionCoordinator();
+      addTearDown(replacement.dispose);
+
+      await coordinator.configureForListening();
+      final gate = audioManager.setModeGate = Completer<void>();
+      final hangingUp = coordinator.deactivate();
+      await pumpEventQueue();
+
+      // The next call configures the shared session while the old one is
+      // still putting the Android route back. The old teardown finishing must
+      // not pull the session out from under it.
+      await replacement.configureForSpeaking();
+      gate.complete();
+      await hangingUp;
+
+      check((await sessionConfiguration())?.avAudioSessionMode)
+          .equals(AVAudioSessionMode.spokenAudio);
+    });
+
+    test('replacement call wins after an in-flight idle restore', () async {
+      const channel = MethodChannel('com.ryanheise.audio_session');
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      final restoring = Completer<void>();
+      final releaseRestore = Completer<void>();
+      AudioSessionConfiguration? platformConfiguration;
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        if (call.method != 'setConfiguration') return null;
+        final values = (call.arguments as List).single as Map;
+        final configuration = AudioSessionConfiguration.fromJson(
+          values.cast<String, dynamic>(),
+        );
+        if (configuration.avAudioSessionCategory ==
+                AVAudioSessionCategory.playback &&
+            !restoring.isCompleted) {
+          restoring.complete();
+          await releaseRestore.future;
+        }
+        platformConfiguration = configuration;
+        return null;
+      });
+      addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+      final coordinator = ChatVoiceAudioSessionCoordinator();
+      addTearDown(coordinator.dispose);
+      final replacement = ChatVoiceAudioSessionCoordinator();
+      addTearDown(replacement.dispose);
+
+      await coordinator.configureForListening();
+      final hangingUp = coordinator.deactivate();
+      await restoring.future;
+      final starting = replacement.configureForSpeaking();
+      // audio_session's Darwin setCategory runs on a concurrent queue.
+      // Hold the old configuration while the new call requests its own.
+      await pumpEventQueue();
+      releaseRestore.complete();
+      await Future.wait([hangingUp, starting]);
+
+      check(platformConfiguration?.avAudioSessionMode)
+          .equals(AVAudioSessionMode.spokenAudio);
+      check((await sessionConfiguration())?.avAudioSessionMode)
+          .equals(AVAudioSessionMode.spokenAudio);
+    });
+
+    for (final bluetooth in [false, true]) {
+      test(
+        'hands the Android ${bluetooth ? 'Bluetooth' : 'speaker'} route over '
+        'to a call placed while hanging up',
+        () async {
+          final coordinator = ChatVoiceAudioSessionCoordinator()
+            ..debugTreatAsAndroid = true;
+          addTearDown(coordinator.dispose);
+          final replacement = ChatVoiceAudioSessionCoordinator()
+            ..debugTreatAsAndroid = true;
+          addTearDown(replacement.dispose);
+          final idleMode = audioManager.mode;
+
+          await coordinator.configureForListening();
+          final callMode = audioManager.mode;
+          check(callMode).not((it) => it.equals(idleMode));
+          final gate = Completer<void>();
+          if (bluetooth) {
+            audioManager.bluetoothScoGate = gate;
+          } else {
+            audioManager.speakerphoneGate = gate;
+          }
+          final hangingUp = coordinator.deactivate();
+          await pumpEventQueue();
+
+          // The next call takes the route while the old teardown is part-way
+          // through putting it back.
+          await replacement.setSpeakerphoneEnabled(!bluetooth);
+          if (bluetooth) check(audioManager.bluetoothScoActive).isTrue();
+          gate.complete();
+          await hangingUp;
+
+          // The old teardown must not stop the new call's Bluetooth connection
+          // or restore the phone's idle mode under its selected route.
+          check(audioManager.mode).equals(callMode);
+          if (bluetooth) {
+            check(audioManager.bluetoothScoActive).isTrue();
+          } else {
+            check(audioManager.communicationDeviceId)
+                .equals(_FakeAndroidAudioManagerChannel.speakerId);
+          }
+
+          // The new call restores what the phone had before either call, not
+          // the call mode it found when it started.
+          await replacement.deactivate();
+          check(audioManager.mode).equals(idleMode);
+          check(audioManager.bluetoothScoActive).isFalse();
+        },
+      );
+    }
+
+    test('drops a configure pass that arrives while hanging up', () async {
+      final coordinator = ChatVoiceAudioSessionCoordinator()
+        ..debugTreatAsAndroid = true;
+      addTearDown(coordinator.dispose);
+
+      await coordinator.configureForListening();
+      final gate = audioManager.setModeGate = Completer<void>();
+      final hangingUp = coordinator.deactivate();
+      await pumpEventQueue();
+
+      // A turn already on its way asks for the speaking configuration after
+      // the call has ended. Applying it would leave the call's configuration
+      // on the session for everything that plays next.
+      await coordinator.configureForSpeaking();
+      gate.complete();
+      await hangingUp;
+
+      check((await sessionConfiguration())?.avAudioSessionCategory)
+          .equals(AVAudioSessionCategory.playback);
+    });
+  });
+  group('iosSpeakerphoneChangeApplied', () {
+    Map<Object?, Object?> route(List<String> outputs) => {
+      'currentOutputs': [
+        for (final type in outputs) {'type': type},
+      ],
+    };
+
+    test('follows the route read back, not just the override', () {
+      check(
+        ChatVoiceAudioSessionCoordinator.iosSpeakerphoneChangeApplied(
+          route(['Speaker']),
+          enabled: true,
+        ),
+      ).isTrue();
+      check(
+        ChatVoiceAudioSessionCoordinator.iosSpeakerphoneChangeApplied(
+          route(['Receiver']),
+          enabled: false,
+        ),
+      ).isTrue();
+      // No receiver to fall back to: the override succeeded, the call did not
+      // leave the loudspeaker.
+      check(
+        ChatVoiceAudioSessionCoordinator.iosSpeakerphoneChangeApplied(
+          route(['Speaker']),
+          enabled: false,
+        ),
+      ).isFalse();
+      check(
+        ChatVoiceAudioSessionCoordinator.iosSpeakerphoneChangeApplied(
+          route(['Receiver']),
+          enabled: true,
+        ),
+      ).isFalse();
+    });
+
+    test('fails on errors and trusts the override without outputs', () {
+      check(
+        ChatVoiceAudioSessionCoordinator.iosSpeakerphoneChangeApplied(
+          null,
+          enabled: true,
+        ),
+      ).isFalse();
+      check(
+        ChatVoiceAudioSessionCoordinator.iosSpeakerphoneChangeApplied({
+          ...route(['Speaker']),
+          'error': 'override failed',
+        }, enabled: true),
+      ).isFalse();
+      check(
+        ChatVoiceAudioSessionCoordinator.iosSpeakerphoneChangeApplied(
+          route(const []),
+          enabled: false,
+        ),
+      ).isTrue();
+    });
+  });
+}
+
+/// Stands in for audio_session's Android audio manager on a test host.
+///
+/// Keeps just enough state to answer the route calls the coordinator makes and
+/// to read the route back: which communication device is selected, and whether
+/// legacy speakerphone is on.
+class _FakeAndroidAudioManagerChannel {
+  static const MethodChannel _channel = MethodChannel(
+    'com.ryanheise.android_audio_manager',
+  );
+  static const int earpieceId = 1;
+  static const int speakerId = 2;
+
+  /// When false, the platform accepts every loudspeaker request but leaves the
+  /// call on the earpiece, which is what the report in issue #716 describes.
+  bool honourLoudspeaker = true;
+
+  /// When false, the platform accepts every request to leave the loudspeaker
+  /// but keeps the call there, like a phone with no earpiece to move to.
+  bool honourEarpiece = true;
+
+  /// While set, `setMode` waits for it, which parks a teardown part-way
+  /// through putting the platform route back.
+  Completer<void>? setModeGate;
+
+  /// While set, `setSpeakerphoneOn` waits for it, which parks a teardown
+  /// before it restores the mode.
+  Completer<void>? speakerphoneGate;
+
+  /// Only the next SCO flag call waits, so a replacement call can route while
+  /// an old teardown waits for the platform response.
+  Completer<void>? bluetoothScoGate;
+  bool bluetoothScoActive = false;
+  Object? mode = 0;
+  int? communicationDeviceId;
+  bool speakerphoneOn = false;
+
+  void install() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(_channel, _handle);
+  }
+
+  void uninstall() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(_channel, null);
+  }
+
+  Future<Object?> _handle(MethodCall call) async {
+    final args = call.arguments as List<dynamic>? ?? const <dynamic>[];
+    switch (call.method) {
+      case 'setBluetoothScoOn':
+        final gate = bluetoothScoGate;
+        bluetoothScoGate = null;
+        await gate?.future;
+        return null;
+      case 'startBluetoothSco':
+        bluetoothScoActive = true;
+        return null;
+      case 'stopBluetoothSco':
+        bluetoothScoActive = false;
+        return null;
+      case 'getMode':
+        return mode;
+      case 'setMode':
+        await setModeGate?.future;
+        mode = args[0];
+        return null;
+      case 'isSpeakerphoneOn':
+        return speakerphoneOn;
+      case 'setSpeakerphoneOn':
+        await speakerphoneGate?.future;
+        final enabled = args[0] as bool;
+        if (enabled ? honourLoudspeaker : honourEarpiece) {
+          speakerphoneOn = enabled;
+        }
+        return null;
+      case 'getAvailableCommunicationDevices':
+        return [_device(earpieceId, 1), _device(speakerId, 2)];
+      case 'setCommunicationDevice':
+        final id = args[0] as int;
+        communicationDeviceId = id == speakerId && !honourLoudspeaker
+            ? earpieceId
+            : id;
+        return true;
+      case 'getCommunicationDevice':
+        final id = communicationDeviceId;
+        if (id == null) return null;
+        return _device(id, id == speakerId ? 2 : 1);
+      case 'clearCommunicationDevice':
+        if (honourEarpiece || communicationDeviceId != speakerId) {
+          communicationDeviceId = null;
+        }
+        return null;
+      default:
+        return null;
+    }
+  }
+
+  /// [type] is the [AndroidAudioDeviceType] index: 1 earpiece, 2 speaker.
+  Map<String, Object?> _device(int id, int type) => <String, Object?>{
+    'id': id,
+    'productName': 'device-$id',
+    'address': null,
+    'isSource': false,
+    'isSink': true,
+    'sampleRates': <int>[],
+    'channelMasks': <int>[],
+    'channelIndexMasks': <int>[],
+    'channelCounts': <int>[],
+    'encodings': <int>[],
+    'type': type,
+  };
+}
+
+AudioDevice _outputDevice(AudioDeviceType type) => AudioDevice(
+  id: type.name,
+  name: type.name,
+  isInput: false,
+  isOutput: true,
+  type: type,
+);

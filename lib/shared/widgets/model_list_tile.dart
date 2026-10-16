@@ -1,18 +1,37 @@
 import 'dart:io' show Platform;
 
 import 'package:conduit/l10n/app_localizations.dart';
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:conduit/core/services/haptic_service.dart';
 
-import '../../core/models/model.dart';
+import 'package:conduit_core/models/model.dart';
+
 import '../theme/theme_extensions.dart';
 import 'model_avatar.dart';
+import 'horizontal_gesture_ownership.dart';
+import 'horizontal_overflow_fade.dart';
 
 /// Whether a [Model] supports reasoning based on its parameters.
 bool modelSupportsReasoning(Model model) {
   final params = model.supportedParameters ?? const [];
-  return params.any((p) => p.toLowerCase().contains('reasoning'));
+  if (params.any((p) => p.toLowerCase().contains('reasoning'))) return true;
+  if (model.capabilities?['thinking'] == true) return true;
+  final native = model.capabilities?['capabilities'];
+  return native is Iterable &&
+      native.any((value) => value.toString().toLowerCase() == 'thinking');
+}
+
+/// Human-readable source label for locally configured direct models.
+///
+/// The direct registry owns these metadata keys. Remote Open WebUI model
+/// metadata is not treated as direct unless it carries the reserved backend
+/// marker.
+String? directModelSourceLabel(Model model) {
+  final metadata = model.metadata;
+  if (metadata?['backend'] != 'direct') return null;
+  final profileName = metadata?['profileName']?.toString().trim();
+  return profileName == null || profileName.isEmpty ? 'Direct' : profileName;
 }
 
 /// Small chip that displays a model capability (e.g. multimodal, reasoning).
@@ -91,6 +110,42 @@ class ModelTagChip extends StatelessWidget {
   }
 }
 
+/// Runtime status chip for an Ollama model currently resident in memory.
+class ModelLoadedChip extends StatelessWidget {
+  const ModelLoadedChip({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = context.conduitTheme;
+    return Container(
+      margin: const EdgeInsets.only(right: Spacing.xs),
+      padding: const EdgeInsets.symmetric(horizontal: Spacing.xs, vertical: 2),
+      decoration: BoxDecoration(
+        color: theme.successBackground,
+        borderRadius: BorderRadius.circular(AppBorderRadius.chip),
+        border: Border.all(
+          color: theme.success.withValues(alpha: 0.45),
+          width: BorderWidth.thin,
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.memory_rounded, size: 12, color: theme.success),
+          const SizedBox(width: 4),
+          Text(
+            AppLocalizations.of(context)!.ollamaModelLoaded,
+            style: AppTypography.labelSmallStyle.copyWith(
+              color: theme.success,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// Compact list tile for model selection, styled like the sidebar
 /// conversation tiles — no card borders, rounded active highlight.
 class ModelListTile extends StatelessWidget {
@@ -107,6 +162,12 @@ class ModelListTile extends StatelessWidget {
   /// Whether this model is pinned in model selectors.
   final bool isPinned;
 
+  /// Whether the model is currently resident in its provider's memory.
+  final bool isLoaded;
+
+  /// Optional row-level action that does not select the model.
+  final Widget? trailing;
+
   const ModelListTile({
     super.key,
     required this.model,
@@ -115,6 +176,8 @@ class ModelListTile extends StatelessWidget {
     this.iconUrl,
     this.isAutoSelect = false,
     this.isPinned = false,
+    this.isLoaded = false,
+    this.trailing,
   });
 
   @override
@@ -123,27 +186,19 @@ class ModelListTile extends StatelessWidget {
     final l10n = AppLocalizations.of(context)!;
     final borderRadius = BorderRadius.circular(AppBorderRadius.card);
 
-    final baseBackground = theme.surfaceBackground;
-    final background = isSelected
-        ? Color.alphaBlend(
-            theme.buttonPrimary.withValues(alpha: 0.1),
-            baseBackground,
-          )
-        : Colors.transparent;
+    // Selection is carried by the trailing checkmark, as in the native iOS
+    // picker; rows themselves stay unfilled.
+    const background = Colors.transparent;
 
     final Widget leading;
     if (isAutoSelect) {
-      leading = Container(
+      leading = SizedBox(
         width: 32,
         height: 32,
-        decoration: BoxDecoration(
-          color: theme.buttonPrimary.withValues(alpha: 0.15),
-          borderRadius: BorderRadius.circular(AppBorderRadius.xs),
-        ),
         child: Icon(
           Platform.isIOS ? CupertinoIcons.wand_stars : Icons.auto_awesome,
-          color: theme.buttonPrimary,
-          size: IconSize.small,
+          color: theme.textPrimary,
+          size: IconSize.medium,
         ),
       );
     } else {
@@ -152,10 +207,23 @@ class ModelListTile extends StatelessWidget {
 
     final hasCapabilities =
         !isAutoSelect && (model.isMultimodal || modelSupportsReasoning(model));
-    final modelTags = <String>[if (!isAutoSelect) ...model.modelTags]
+    final directSource = isAutoSelect ? null : directModelSourceLabel(model);
+    final modelTagsByLowercase = <String, String>{};
+    if (!isAutoSelect) {
+      for (final tag in model.modelTags) {
+        modelTagsByLowercase.putIfAbsent(tag.toLowerCase(), () => tag);
+      }
+    }
+    if (directSource != null) {
+      modelTagsByLowercase.putIfAbsent(
+        directSource.toLowerCase(),
+        () => directSource,
+      );
+    }
+    final modelTags = modelTagsByLowercase.values.toList()
       ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
     final hasTags = modelTags.isNotEmpty;
-    final hasMetadataRow = hasCapabilities || hasTags;
+    final hasMetadataRow = hasCapabilities || hasTags || isLoaded;
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: Spacing.xxs),
@@ -185,13 +253,11 @@ class ModelListTile extends StatelessWidget {
                   children: [
                     Text(
                       isAutoSelect ? l10n.autoSelect : model.name,
-                      style: AppTypography.bodyMediumStyle.copyWith(
-                        color: isSelected
-                            ? theme.textPrimary
-                            : theme.textSecondary,
-                        fontWeight: isSelected
-                            ? FontWeight.w600
-                            : FontWeight.w400,
+                      style: AppTypography.bodyLargeStyle.copyWith(
+                        fontSize: 16,
+                        height: 1.35,
+                        color: theme.textPrimary,
+                        fontWeight: FontWeight.w400,
                       ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -210,28 +276,33 @@ class ModelListTile extends StatelessWidget {
                       const SizedBox(height: 2),
                       ConstrainedBox(
                         constraints: const BoxConstraints(minHeight: 22),
-                        child: SingleChildScrollView(
-                          scrollDirection: Axis.horizontal,
-                          physics: const ClampingScrollPhysics(),
-                          child: Row(
-                            children: [
-                              for (final tag in modelTags)
-                                ModelTagChip(label: tag),
-                              if (model.isMultimodal)
-                                ModelCapabilityChip(
-                                  icon: Platform.isIOS
-                                      ? CupertinoIcons.photo
-                                      : Icons.image,
-                                  label: l10n.modelCapabilityMultimodal,
-                                ),
-                              if (modelSupportsReasoning(model))
-                                ModelCapabilityChip(
-                                  icon: Platform.isIOS
-                                      ? CupertinoIcons.lightbulb
-                                      : Icons.psychology_alt,
-                                  label: l10n.modelCapabilityReasoning,
-                                ),
-                            ],
+                        child: HorizontalOverflowFade(
+                          child: HorizontalScrollGestureBoundary(
+                            child: SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              physics: const ClampingScrollPhysics(),
+                              child: Row(
+                                children: [
+                                  if (isLoaded) const ModelLoadedChip(),
+                                  for (final tag in modelTags)
+                                    ModelTagChip(label: tag),
+                                  if (model.isMultimodal)
+                                    ModelCapabilityChip(
+                                      icon: Platform.isIOS
+                                          ? CupertinoIcons.photo
+                                          : Icons.image,
+                                      label: l10n.modelCapabilityMultimodal,
+                                    ),
+                                  if (modelSupportsReasoning(model))
+                                    ModelCapabilityChip(
+                                      icon: Platform.isIOS
+                                          ? CupertinoIcons.lightbulb
+                                          : Icons.psychology_alt,
+                                      label: l10n.modelCapabilityReasoning,
+                                    ),
+                                ],
+                              ),
+                            ),
                           ),
                         ),
                       ),
@@ -239,6 +310,10 @@ class ModelListTile extends StatelessWidget {
                   ],
                 ),
               ),
+              if (trailing != null) ...[
+                const SizedBox(width: Spacing.xxs),
+                trailing!,
+              ],
               if (isPinned && !isAutoSelect) ...[
                 const SizedBox(width: Spacing.xs),
                 Icon(
