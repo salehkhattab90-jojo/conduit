@@ -216,20 +216,23 @@ final imageGenerationAvailableProvider = Provider<bool>((ref) {
         selectedModel.capabilities?['image_generation'] == true;
   }
 
+  // Respect the per-model capability, mirroring webSearchAvailableProvider.
+  // Open WebUI treats an unset capability as available, so only an explicit
+  // `image_generation: false` on the model hides the feature.
+  if (!_modelSupportsFeature(selectedModel, 'image_generation')) {
+    return false;
+  }
+
+  final user = ref
+      .watch(currentUserProvider)
+      .maybeWhen(data: (value) => value, orElse: () => null);
   final perms = ref.watch(userPermissionsProvider);
   return perms.maybeWhen(
-    data: (data) {
-      final features = data['features'];
-      if (features is Map<String, dynamic>) {
-        final value = features['image_generation'];
-        if (value is bool) return value;
-        if (value is String) return value.toLowerCase() != 'false';
-      }
-      // No explicit permission — default to available. Open WebUI defaults
-      // image_generation to true and the server will ignore the flag if the
-      // feature is not configured.
-      return true;
-    },
+    data: (data) => _userCanUseFeature(
+      user: user,
+      permissions: data,
+      featureKey: 'image_generation',
+    ),
     // Permissions unavailable (loading, error, older server) — assume available.
     orElse: () => true,
   );
