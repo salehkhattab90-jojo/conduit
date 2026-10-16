@@ -1,55 +1,51 @@
-# Conduit × Open WebUI 0.12 — FADI layer
+# Conduit rebuild on upstream v4.2.0 — FADI layer
 
 Customer notes for `PLAN.md` / `ARCHITECTURE.md` (same folder; those stay
 customer-agnostic on `saas-base`). This file lives only on `fadi`.
-Server-side counterpart: `open-webui` repo, `docs/upgrade-v0.12.2/` (PLAN.md decision
-**G-5**, FADI.md).
+Server counterpart: `open-webui` repo, `docs/upgrade-v0.12.2/`.
 
-## 1. Ordering (G-5)
-1. Track A ships as a new FADI APK/IPA **before** the server upgrade's step 3.4.
-   It is dual-version, so it can go out while fadi.furqaan.ai is still on 0.9.2.
-2. Server upgrade deploys. No flag day: if the server rolls back to 0.9.2, the app
-   keeps working.
-3. Old app builds still in users' hands after the server upgrade get today's
-   degraded behaviour (no live text, no cards). Keep the server-side protections
-   below until the owner confirms everyone updated.
+## 1. Ordering
+Nobody uses the app yet (owner, 2026-10-16), so the app no longer gates the server
+upgrade (server plan decision **G-5** resolves to "deploy the server; the app
+follows"). The rebuilt app is tested against a local Open WebUI 0.12.2 first, then
+against fadi.furqaan.ai once that server is upgraded.
 
-## 2. Server settings this app build assumes (fadi.furqaan.ai, 0.12.2)
+## 2. Customer layer on the rebuilt base (`fadi-v4`, then joined into `fadi`)
 
-| setting | value | why (plan row) |
+| piece | value |
+|---|---|
+| `lib/core/deployment/deployment.dart` → `DeploymentPolicy` | locked server `id: 'locked-server'`, name `fadi.furqaan.ai`, urls `['https://fadi.furqaan.ai']`; `allowedBackends: {owui}`; `allowAccountManagement: false`; `authModes: {credentials, sso}`; `ssoProviders: ['google']` (straight to `/oauth/google/login`, as today); on-device web search off |
+| `BrandConfig` | appName `FADI`; tagline `FADI (Furqaan AI Data & Intelligence)`; no GitHub / donation / store-review links; release notes off; CallKit and license name `FADI` |
+| ARB product name (R-10) | run `tool/apply_brand_strings.dart` with `FADI` (today's branch localises "FADI" in all locales; upstream now has 14) |
+| Android | `applicationId "app.furqaan.fadi"` (+ upstream's debug suffix), labels `FADI` / `Ask FADI`, widget name; `namespace` unchanged |
+| iOS | bundle ids `app.furqaan.fadi`, `.debug`, `.ShareExtension`, `.ConduitWidget`, `.RunnerTests` (and debug variants) across the 12 pbxproj entries; app group to match `home_widget_service.dart`; `CFBundleDisplayName FADI` + 13 `InfoPlist.strings`; Share extension "Ask FADI" |
+| icons, splash, sign-in mark | the faceted-gem kit (`/Users/smk/Dev/logo`): Android adaptive + legacy mipmaps (debug variant too), iOS AppIcon (+ AppIcon-Debug), splash, `assets/icons/brand_mark.png`; generated with `flutter_launcher_icons` (G0) |
+| Email | default `<server>/email/app`; no `EMAIL_APP_URL` define needed |
+| Firebase (push) | `android/app/google-services.json` and `ios/Runner/GoogleService-Info.plist` from the FADI Firebase project — **gitignored**, supplied at build time; APNs key uploaded to that project for iOS (R-12, owner) |
+
+## 3. Server settings the app expects (fadi.furqaan.ai on 0.12.2)
+
+| setting | value | why |
 |---|---|---|
-| Model controls on **vini-1.0**, **vidi-1.0** | key `thinking`, options off / auto / on, default auto (server FADI.md §2) | the app's Model controls sheet shows them (#6) |
-| Model controls on **vici-1.0** | same key, GLM params (`extra_body.thinking.type`) (T-3) | with controls present the app stops sending Qwen `chat_template_kwargs` to GLM |
-| `meta.capabilities.thinking` | stays `true` on all three | the legacy pill uses it while the server is still 0.9.2 |
-| Permissions `chat.controls` + `chat.params` | granted to user groups (T-2) | otherwise the server silently drops the app's choice → default (Auto) |
-| User-input builtin (`ask_user`) | off (C-6) — on only if D-2 adds the native sheet | #2 / #13 |
-| Tool permissions ("ask") | off (C-5) | old builds can't render approvals |
-| Default interface settings | `memory: true` (server ARCHITECTURE §3.8) | reaches the app through `GET /users/user/settings` (#7) |
-| Open Terminal context | shared (not per chat) | per-chat context is unsupported (Track B) |
-| MFA, enforced temporary chats | off | unsupported (Track B) |
-| `WEBSOCKET_EVENT_CALLER_TIMEOUT` | 600 (email release) | send_email confirmations on mobile wait for the human |
+| Model controls on vini-1.0, vidi-1.0, vici-1.0 | key `thinking`, options off / auto / on (server FADI.md §2, T-3) | replaces the app's thinking toggle (G8) |
+| `chat.controls` + `chat.params` for user groups | granted (T-2) | otherwise the server drops the app's choice |
+| Default interface settings | `memory: true` | memory default (G9) |
+| Email service | reachable at `/email/app` and `/email/devices/*` through the same origin | Email tab + push (G3/G4) |
+| `WEBSOCKET_EVENT_CALLER_TIMEOUT` | 600 | send_email confirmations wait for the human (G7) |
+| Tool permissions / `ask_user` / MFA / enforced temporary chats | any — the rebuilt app supports them (upstream) | no longer restricted for the app's sake |
 
-The Email tab is unaffected (webview keys on `localStorage.token`; 0.12 frontend
-still does). The send_email / email_settings confirmation dialog path is unchanged.
+## 4. Test setup
+- Development: local Open WebUI 0.12.2 via `uv` with a mock model; a debug build
+  with `deployment.dart` pointed at `http://10.0.2.2:<port>` — **never committed**.
+- Android emulator `Pixel_10_Pro` (adb `~/Library/Android/sdk/platform-tools/adb`,
+  screenshots via `screencap` + `pull`); iOS simulator after the Xcode licence.
+- Push is only testable with the real Firebase config on a device or emulator with
+  Google Play services.
+- Final pass: release build against the upgraded fadi.furqaan.ai, PLAN §7.3 matrix.
 
-## 3. Test setup (phase 1 + 6)
-- `kLockedServerUrl` (`lib/core/constants/locked_server.dart`) is temporarily
-  pointed at the local test servers for emulator runs (`http://10.0.2.2:8092` for
-  0.9.2, `http://10.0.2.2:8122` for 0.12.2) and **reverted before any commit**.
-- Debug build without `android/app/google-services.json` (FCM off), `flutter build apk
-  --debug`, `adb install -r`; emulator `Pixel_10_Pro` (adb at
-  `~/Library/Android/sdk/platform-tools/adb`, screenshots via `screencap` + `pull`).
-- iOS simulator needs the Xcode licence accepted first (`sudo xcodebuild -license`,
-  owner).
-- Acceptance (D-4): the server runbook's rehearsal (open-webui FADI.md §3.3) runs
-  migrations on a copy of the data; booting that copy on a side port (LAN/VPN only,
-  pinned `WEBUI_SECRET_KEY`, image by sha tag) gives a 0.12.2 server with the real
-  vidi/vini/vici models and real 0.9.2-era chats. Point a debug build's
-  `kLockedServerUrl` at it for one pass of the PLAN §4 matrix. Owner-run.
-
-## 4. Post-upgrade smoke test on fadi.furqaan.ai (owner, ~10 min)
-Vidi plain reply streams live · Vini with thinking On shows the thinking card ·
-a docgen document shows one card with preview + download · an Open Terminal
-`display_file` shows an artifact card · delete a message, reopen, still gone ·
-sign out, sign back in · Email tab opens and Discuss works · send_email
-confirmation dialog appears and both buttons work.
+## 5. Smoke test after the server upgrade (owner, ~10 min)
+Sign in with Google · Vidi reply streams live · Vini with thinking On shows the
+thinking block · a generated document shows one card, preview and download · an
+Open Terminal `display_file` shows an artifact card · Email tab opens, Discuss
+works, an attachment downloads · a send_email confirmation shows the whole draft
+and both buttons work · a push notification opens the right email.
