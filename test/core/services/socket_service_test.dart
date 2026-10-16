@@ -71,6 +71,7 @@ void main() {
       ),
       ('request:terminal:state', {'terminal_id': 't1', 'session_id': 'local-session'}),
       ('request:elicitation', {'mode': 'form', 'message': 'Pick one', 'server_name': 'mcp'}),
+      ('voice:play_animation', {'name': 'wave', 'model_id': 'model-1'}),
     ]) {
       service.debugHandleChatEvent({
         'chat_id': 'background-chat',
@@ -82,6 +83,7 @@ void main() {
     expect(replies['request:terminal'], isEmpty);
     expect(replies['request:terminal:state'], {'connected': false});
     expect(replies['request:elicitation'], {'action': 'cancel'});
+    expect(replies['voice:play_animation'], {'status': 'unavailable'});
 
     // The server's note that such a request is over needs no handling.
     var delivered = 0;

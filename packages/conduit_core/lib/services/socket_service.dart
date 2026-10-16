@@ -1597,6 +1597,11 @@ class SocketService {
       'request:terminal:state' => const <String, dynamic>{'connected': false},
       // MCP elicitation has no form here; cancelling lets the tool go on.
       'request:elicitation' => const <String, dynamic>{'action': 'cancel'},
+      // Open WebUI 0.12.1's voice-avatar gesture tool waits up to 3 s per
+      // call for the client to play it. Conduit draws no avatar.
+      'voice:play_animation' => const <String, dynamic>{
+        'status': 'unavailable',
+      },
       _ => null,
     };
     if (unsupported != null &&
