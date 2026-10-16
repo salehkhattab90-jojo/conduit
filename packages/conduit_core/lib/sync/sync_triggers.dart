@@ -9,6 +9,7 @@ import 'package:conduit_core/providers/app_providers.dart';
 import 'package:conduit_core/providers/host_ports.dart';
 import 'package:conduit_core/services/connectivity_service.dart';
 import 'package:conduit_core/utils/debug_logger.dart';
+import 'package:conduit_core/sync/clock.dart';
 import 'package:conduit_core/sync/pull_sync.dart';
 import 'package:conduit_core/sync/sync_api_client.dart';
 import 'package:conduit_core/sync/sync_engine.dart';
@@ -17,6 +18,10 @@ part 'sync_triggers.g.dart';
 
 /// Periodic foreground pull interval (RFC §7.6).
 const Duration kPeriodicPullInterval = Duration(minutes: 5);
+
+/// Minimum spacing between start/resume deletion reconciles, so rapid
+/// app-switching doesn't re-enumerate the full server chat set each resume.
+const Duration kResumeReconcileMinInterval = Duration(minutes: 5);
 
 /// Pull triggers ONLY (CDT-RFC-001 §7.6). Installed by being `ref.watch`ed
 /// from the startup listener block in `app_startup_providers.dart`.
@@ -36,6 +41,7 @@ class SyncTriggers extends _$SyncTriggers {
   bool _postCertificationPending = false;
   Object? _startDatabase;
   Object? _startClient;
+  int? _lastResumeReconcileAt;
 
   @override
   void build() {
@@ -93,6 +99,7 @@ class SyncTriggers extends _$SyncTriggers {
         case AppLifecyclePhase.resumed:
           _isForeground = true;
           _request('foreground');
+          _maybeReconcileDeletions('resume');
           _restartPeriodicTimer();
         case AppLifecyclePhase.paused:
         case AppLifecyclePhase.detached:
@@ -168,7 +175,34 @@ class SyncTriggers extends _$SyncTriggers {
     if (currentPairAlreadyStarted) return;
     if (_request('start')) {
       _recordStartedPair(db, client);
+      // Cold start never sees a `resumed` event (see build()), so the
+      // deletion reconcile for chats deleted on another client runs here.
+      _maybeReconcileDeletions('start');
     }
+  }
+
+  /// Runs the full-id deletion reconcile (chats and notes) on app start and
+  /// resume. A watermark-delta pull can't see a chat deleted on another client
+  /// (an absence, not a change), so without this such chats linger until the
+  /// 24h background reconcile or a pull-to-refresh. Spaced to at most once per
+  /// [kResumeReconcileMinInterval]; skipped (and not counted) until the
+  /// database and API client exist.
+  void _maybeReconcileDeletions(String reason) {
+    if (ref.read(appDatabaseProvider) == null ||
+        ref.read(syncApiClientProvider) == null) {
+      return;
+    }
+    final now = ref.read(syncClockProvider).nowEpochSeconds();
+    final last = _lastResumeReconcileAt;
+    if (last != null && now - last < kResumeReconcileMinInterval.inSeconds) {
+      return;
+    }
+    _lastResumeReconcileAt = now;
+    _runEngineOperation(
+      'reconcile',
+      reason: reason,
+      run: (engine) => engine.reconcileNow(),
+    );
   }
 
   void _recordStartedPair(Object database, Object client) {

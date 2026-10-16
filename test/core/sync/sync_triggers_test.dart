@@ -13,6 +13,7 @@ import 'package:conduit_core/models/conversation.dart';
 import 'package:conduit_core/providers/app_providers.dart';
 import 'package:conduit_core/providers/host_ports.dart';
 import 'package:conduit_core/services/connectivity_service.dart';
+import 'package:conduit_core/sync/clock.dart';
 import 'package:conduit_core/sync/pull_sync.dart';
 import 'package:conduit_core/sync/sync_api_client.dart';
 import 'package:conduit_core/sync/sync_engine.dart';
@@ -58,10 +59,16 @@ final _clientProvider =
 /// Recreated (with the same shared list) whenever its watched dependencies
 /// flap, exactly like the production engine.
 class _RecordingSyncEngine extends SyncEngine {
-  _RecordingSyncEngine(this.pulls, this.drains);
+  _RecordingSyncEngine(this.pulls, this.drains, [this.reconciles]);
 
   final List<String> pulls;
   final List<String> drains;
+  final List<String>? reconciles;
+
+  @override
+  Future<void> reconcileNow() async {
+    reconciles?.add('now');
+  }
 
   @override
   Future<PullResult?> requestPull({required String reason}) {
@@ -78,6 +85,14 @@ class _RecordingSyncEngine extends SyncEngine {
   Future<void> drainOutbox() async {
     drains.add('outbox');
   }
+}
+
+/// Settable epoch-seconds clock for the reconcile debounce.
+class _ManualSyncClock implements SyncClock {
+  int seconds = 1700000000;
+
+  @override
+  int nowEpochSeconds() => seconds;
 }
 
 void main() {
@@ -445,6 +460,60 @@ void main() {
 
         container.dispose();
       });
+    });
+  });
+  group('deletion reconcile on start and resume', () {
+    test('runs once on start, is debounced on a quick resume, and runs again '
+        'after the minimum interval', () async {
+      final reconciles = <String>[];
+      final clock = _ManualSyncClock();
+      final container = ProviderContainer(
+        overrides: [
+          appLifecycleProvider.overrideWithValue(lifecycle),
+          isAuthenticatedProvider2.overrideWith(
+            (ref) => ref.watch(_authProvider),
+          ),
+          isOnlineProvider.overrideWith((ref) => ref.watch(_onlineProvider)),
+          appDatabaseProvider.overrideWith((ref) => ref.watch(_dbProvider)),
+          syncApiClientProvider.overrideWith(
+            (ref) => ref.watch(_clientProvider),
+          ),
+          syncClockProvider.overrideWithValue(clock),
+          syncEngineProvider.overrideWith(
+            () => _RecordingSyncEngine(pulls, drains, reconciles),
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+      materializeReadiness(container);
+      container.read(syncTriggersProvider);
+      await flushMicrotasks();
+
+      // Not ready yet: a resume neither reconciles nor starts the debounce.
+      binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await flushMicrotasks();
+      check(reconciles).isEmpty();
+
+      // Start (auth + db + client ready) reconciles once.
+      container.read(_dbProvider.notifier).set(db);
+      container.read(_clientProvider.notifier).set(client);
+      container.read(_authProvider.notifier).set(true);
+      await flushMicrotasks();
+      check(reconciles).length.equals(1);
+
+      // A quick background/foreground round-trip is debounced.
+      binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      clock.seconds += 60;
+      binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await flushMicrotasks();
+      check(reconciles).length.equals(1);
+
+      // After the minimum interval, the next resume reconciles again.
+      binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      clock.seconds += kResumeReconcileMinInterval.inSeconds;
+      binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await flushMicrotasks();
+      check(reconciles).length.equals(2);
     });
   });
 }
