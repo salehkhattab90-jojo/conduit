@@ -1,5 +1,6 @@
 import 'package:conduit/shared/widgets/platform_ui/platform_ui.dart';
 import 'package:conduit/shared/widgets/platform_ui/vocabulary.dart';
+import 'package:conduit_core/deployment/deployment_policy.dart';
 import 'package:conduit_core/features/direct_connections/controllers/direct_connection_editor_draft.dart';
 import 'package:conduit_core/features/hermes/providers/hermes_providers.dart';
 import 'package:conduit_core/providers/app_providers.dart';
@@ -46,14 +47,23 @@ final class EditDirectConnectionRequest extends AccountSheetRequest {
   final String profileId;
 }
 
-/// Opens the account sheet for [request].
+/// Opens the account sheet for [request]; nothing opens where the
+/// deployment does not allow managing accounts and connections.
 Future<void> showAccountSheet(
   BuildContext context,
   AccountSheetRequest request,
-) => ThemedSheets.showCustom<void>(
-  context: context,
-  builder: (_) => AccountSheet(request: request),
-);
+) {
+  if (!ProviderScope.containerOf(
+    context,
+    listen: false,
+  ).read(deploymentPolicyProvider).allowAccountManagement) {
+    return Future<void>.value();
+  }
+  return ThemedSheets.showCustom<void>(
+    context: context,
+    builder: (_) => AccountSheet(request: request),
+  );
+}
 
 /// A sheet that adds or edits an account or connection. It opens part way
 /// and grows as its form scrolls; an editor's further options open as pages

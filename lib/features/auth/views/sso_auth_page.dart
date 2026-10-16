@@ -117,7 +117,12 @@ int? nextSsoAuthRefreshGeneration({
 class SsoAuthPage extends ConsumerStatefulWidget {
   final ServerConfig? serverConfig;
 
-  const SsoAuthPage({super.key, this.serverConfig});
+  /// Where on the server the WebView starts: Open WebUI's sign-in page, or
+  /// a deployment's one provider (`/oauth/<provider>/login`), which skips
+  /// that page and its second "Continue with ..." tap.
+  final String initialPath;
+
+  const SsoAuthPage({super.key, this.serverConfig, this.initialPath = '/auth'});
 
   @override
   ConsumerState<SsoAuthPage> createState() => _SsoAuthPageState();
@@ -238,7 +243,7 @@ class _SsoAuthPageState extends ConsumerState<SsoAuthPage> {
 
     try {
       await controller.loadUrl(
-        urlRequest: URLRequest(url: WebUri('$serverUrl/auth')),
+        urlRequest: URLRequest(url: WebUri('$serverUrl${widget.initialPath}')),
       );
     } catch (error, stackTrace) {
       DebugLogger.error(
@@ -727,7 +732,7 @@ class _SsoAuthPageState extends ConsumerState<SsoAuthPage> {
             return;
           }
 
-          final replacementUrl = '$serverUrl/auth';
+          final replacementUrl = '$serverUrl${widget.initialPath}';
           _expectedReplacementLoadUrl = replacementUrl;
           _releasePendingSessionReset = releaseSessionReset;
           try {

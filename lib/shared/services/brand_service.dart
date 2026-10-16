@@ -7,6 +7,7 @@ import 'package:cupertino_ui/cupertino_ui.dart';
 
 import 'dart:io' show Platform;
 
+import '../../core/deployment/deployment.dart';
 import '../theme/color_tokens.dart';
 import '../theme/tweakcn_themes.dart';
 
@@ -260,7 +261,7 @@ class BrandService {
   }
 
   /// Brand-specific semantic labels for accessibility
-  static String get brandName => 'Conduit';
+  static String get brandName => kDeployment.brand.appName;
   static String get brandDescription => 'Your AI Conversation Hub';
   static String get connectionLabel => 'Hub Connection';
   static String get networkLabel => 'Network Hub';

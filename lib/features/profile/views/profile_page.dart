@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:conduit/l10n/app_localizations.dart';
 
+import '../../../core/deployment/deployment_providers.dart';
 import '../../../shared/widgets/conduit_loading.dart';
 import '../../../shared/widgets/adaptive_route_shell.dart';
 import '../../../shared/widgets/adaptive_toolbar_components.dart';
@@ -47,9 +48,6 @@ import '../widgets/account_actions.dart';
 /// Profile page (You tab) showing user info and main actions
 /// Enhanced with production-grade design tokens for better cohesion
 class ProfilePage extends ConsumerWidget {
-  static const _githubSponsorsUrl = 'https://github.com/sponsors/cogwheel0';
-  static const _buyMeACoffeeUrl = 'https://www.buymeacoffee.com/cogwheel0';
-
   const ProfilePage({super.key});
 
   @override
@@ -147,6 +145,11 @@ class ProfilePage extends ConsumerWidget {
     final accountsAsync = ref.watch(openWebUiAccountsProvider);
     final accounts = accountsAsync.value ?? const <OpenWebUiAccountEntry>[];
     final activeAccount = accounts.where((entry) => entry.isActive).firstOrNull;
+    final locked = ref.watch(deploymentPolicyProvider).isLocked;
+    final donationSection = _buildDonationSection(
+      context,
+      ref.watch(brandConfigProvider).donationUrls,
+    );
     return ListView(
       physics: const BouncingScrollPhysics(
         parent: AlwaysScrollableScrollPhysics(),
@@ -167,18 +170,23 @@ class ProfilePage extends ConsumerWidget {
         ),
         const SizedBox(height: Spacing.lg),
         ...items,
-        const SizedBox(height: Spacing.xl),
-        _buildDonationSection(context),
+        if (donationSection != null) ...[
+          const SizedBox(height: Spacing.xl),
+          donationSection,
+        ],
         if (hasOpenWebUiAccount) const SizedBox(height: Spacing.xl),
         if (hasOpenWebUiAccount)
           InsetGroupedList(
             children: [
+              // A locked build has its one account, kept server and all.
+              if (locked)
+                _buildSignOutOption(context, ref)
               // With several accounts, Sign out leaves this one and the next
               // takes over; signing out of all is on the Accounts page. With
               // one, it is what it always was -- and until the accounts are
               // read, or when they cannot be, there may be several, and it
               // signs out of every one: say so.
-              if (accounts.length > 1 && activeAccount != null)
+              else if (accounts.length > 1 && activeAccount != null)
                 _buildSignOutOfAccountOption(context, ref, activeAccount)
               else
                 _buildSignOutOption(context, ref, all: !accountsAsync.hasValue),
@@ -192,32 +200,38 @@ class ProfilePage extends ConsumerWidget {
     return Spacing.lg;
   }
 
-  Widget _buildDonationSection(BuildContext context) {
+  /// The brand's donation links; null when it has none.
+  Widget? _buildDonationSection(BuildContext context, DonationUrls? urls) {
+    final buyMeACoffeeUrl = urls?.buyMeACoffee;
+    final githubSponsorsUrl = urls?.githubSponsors;
+    if (buyMeACoffeeUrl == null && githubSponsorsUrl == null) return null;
     final theme = context.conduitTheme;
     final l10n = AppLocalizations.of(context)!;
     final donationOptions = [
-      _buildSupportOption(
-        context,
-        icon: UiUtils.platformIcon(
-          ios: CupertinoIcons.gift,
-          android: Icons.coffee,
+      if (buyMeACoffeeUrl != null)
+        _buildSupportOption(
+          context,
+          icon: UiUtils.platformIcon(
+            ios: CupertinoIcons.gift,
+            android: Icons.coffee,
+          ),
+          title: l10n.buyMeACoffeeTitle,
+          subtitle: l10n.buyMeACoffeeSubtitle,
+          url: buyMeACoffeeUrl,
+          color: theme.warning,
         ),
-        title: l10n.buyMeACoffeeTitle,
-        subtitle: l10n.buyMeACoffeeSubtitle,
-        url: _buyMeACoffeeUrl,
-        color: theme.warning,
-      ),
-      _buildSupportOption(
-        context,
-        icon: UiUtils.platformIcon(
-          ios: CupertinoIcons.heart,
-          android: Icons.favorite_border,
+      if (githubSponsorsUrl != null)
+        _buildSupportOption(
+          context,
+          icon: UiUtils.platformIcon(
+            ios: CupertinoIcons.heart,
+            android: Icons.favorite_border,
+          ),
+          title: l10n.githubSponsorsTitle,
+          subtitle: l10n.githubSponsorsSubtitle,
+          url: githubSponsorsUrl,
+          color: theme.success,
         ),
-        title: l10n.githubSponsorsTitle,
-        subtitle: l10n.githubSponsorsSubtitle,
-        url: _githubSponsorsUrl,
-        color: theme.success,
-      ),
     ];
 
     return InsetGroupedList(
@@ -307,6 +321,10 @@ class ProfilePage extends ConsumerWidget {
       ),
     };
 
+    // Without account management the card only says who is signed in.
+    final manageAccounts = ref
+        .watch(deploymentPolicyProvider)
+        .allowAccountManagement;
     return InsetGroupedList(
       key: const Key('settings-account-card'),
       children: [
@@ -315,20 +333,23 @@ class ProfilePage extends ConsumerWidget {
           leading: leading,
           title: card.title,
           subtitle: card.subtitle,
-          showChevron: true,
-          onTap: () => context.pushNamed(RouteNames.accounts),
+          showChevron: manageAccounts,
+          onTap: manageAccounts
+              ? () => context.pushNamed(RouteNames.accounts)
+              : null,
         ),
-        UtilityRow(
-          key: const Key('settings-add-account'),
-          title: l10n.accountsAddAccount,
-          foregroundColor: theme.buttonPrimary,
-          leading: _buildIconBadge(
-            context,
-            UiUtils.platformIcon(ios: CupertinoIcons.add, android: Icons.add),
-            color: theme.buttonPrimary,
+        if (manageAccounts)
+          UtilityRow(
+            key: const Key('settings-add-account'),
+            title: l10n.accountsAddAccount,
+            foregroundColor: theme.buttonPrimary,
+            leading: _buildIconBadge(
+              context,
+              UiUtils.platformIcon(ios: CupertinoIcons.add, android: Icons.add),
+              color: theme.buttonPrimary,
+            ),
+            onTap: () => showAddAccountSheet(context, ref),
           ),
-          onTap: () => showAddAccountSheet(context, ref),
-        ),
       ],
     );
   }

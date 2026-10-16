@@ -9,9 +9,8 @@ import '../../shared/theme/theme_extensions.dart';
 import '../../shared/utils/external_link_launcher.dart';
 import '../../shared/widgets/themed_sheets.dart';
 
-import 'package:conduit_core/features/support/support_links.dart';
-
-import 'data/release_links.dart';
+import '../../core/deployment/deployment.dart';
+import '../../core/deployment/deployment_config.dart';
 import 'models/release_note.dart';
 import 'widgets/release_notes_sheet.dart';
 
@@ -23,6 +22,7 @@ typedef ReviewUrlLauncher = Future<bool> Function(String url);
 Future<void> requestReleaseNotesReview({
   TargetPlatform? platform,
   ReviewUrlLauncher? launchReviewUrl,
+  BrandConfig? brand,
 }) async {
   final resolvedPlatform = platform ?? defaultTargetPlatform;
   final urlLauncher =
@@ -33,7 +33,12 @@ Future<void> requestReleaseNotesReview({
         mode: LaunchMode.externalApplication,
       );
 
-  await urlLauncher(reviewUrlForPlatform(resolvedPlatform));
+  // The brand's store pages; a brand without one has nothing to review.
+  final url = (brand ?? kDeployment.brand).storeReviewUrls?.forPlatform(
+    resolvedPlatform,
+  );
+  if (url == null) return;
+  await urlLauncher(url);
 }
 
 Future<void> showReleaseNotesSheet({
@@ -55,11 +60,10 @@ Future<void> showReleaseNotesSheet({
       }
 
       void openSupport() {
+        final supportUrl = kDeployment.brand.donationUrls?.buyMeACoffee;
+        if (supportUrl == null) return;
         unawaited(
-          launchInAppBrowserLink(
-            buyMeACoffeeUrl,
-            scope: 'release-notes/support',
-          ),
+          launchInAppBrowserLink(supportUrl, scope: 'release-notes/support'),
         );
       }
 

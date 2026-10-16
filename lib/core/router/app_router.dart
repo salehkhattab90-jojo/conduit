@@ -8,6 +8,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../shared/services/navigation_service.dart';
 
+import 'package:conduit_core/deployment/deployment_policy.dart';
 import 'package:conduit_core/services/performance_profiler.dart';
 import 'package:conduit_core/utils/debug_logger.dart';
 
@@ -263,6 +264,7 @@ final goRouterProvider = Provider<GoRouter>((ref) {
           state: state,
           child: SsoAuthPage(
             serverConfig: config is ServerConfig ? config : null,
+            initialPath: ref.read(deploymentPolicyProvider).ssoInitialPath,
           ),
         );
       },

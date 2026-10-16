@@ -22,6 +22,7 @@ import 'package:conduit/l10n/conduit_localizations.dart';
 import 'package:conduit/shared/widgets/platform_ui/platform_ui.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
@@ -48,6 +49,7 @@ class AdaptiveAuthHarness {
     this.accountsController,
     this.savedServersError,
     this.replyBeingWritten = false,
+    this.extraOverrides = const [],
   }) {
     when(() => _storage.getSavedCredentials()).thenAnswer(
       (_) async => savedUsername == null ? null : {'username': savedUsername!},
@@ -121,6 +123,9 @@ class AdaptiveAuthHarness {
 
   /// How many times the replies being written were stopped.
   int repliesStopped = 0;
+
+  /// More provider overrides, such as a deployment policy.
+  final List<Override> extraOverrides;
 
   /// The device storage, for a test to see what was saved.
   OptimizedStorageService get storage => _storage;
@@ -228,6 +233,7 @@ class AdaptiveAuthHarness {
         applePccStatusProvider.overrideWith(
           (_) async => applePccStatus ?? _unavailableAppleStatus(),
         ),
+        ...extraOverrides,
       ],
       child: MaterialApp.router(
         theme: ThemeData(platform: platform),

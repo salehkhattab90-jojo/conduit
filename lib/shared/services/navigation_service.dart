@@ -2,6 +2,7 @@ import 'package:conduit/l10n/app_localizations.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/deployment/deployment.dart';
 import '../widgets/themed_dialogs.dart';
 
 import 'package:conduit_core/navigation/routes.dart';
@@ -189,15 +190,20 @@ class NavigationService {
   static Future<void> navigateToChat() => navigateTo(Routes.chat);
   static Future<void> navigateToFolder(String folderId) =>
       navigateTo(Routes.folderPath(folderId));
-  static Future<void> navigateToLogin() => navigateTo(Routes.serverConnection);
+  static Future<void> navigateToLogin() => navigateTo(_signInRoute);
   static Future<void> navigateToProfile() => navigateTo(Routes.profile);
-  static Future<void> navigateToServerConnection() =>
-      navigateTo(Routes.serverConnection);
+  static Future<void> navigateToServerConnection() => navigateTo(_signInRoute);
+
+  /// Where signing in starts: server setup, or straight to sign-in when the
+  /// build is locked to its server.
+  static String get _signInRoute => kDeployment.policy.isLocked
+      ? Routes.authentication
+      : Routes.serverConnection;
 
   /// Clear navigation history. With GoRouter this becomes a simple go call.
   static void clearNavigationStack() {
     final router = _router;
     if (router == null) return;
-    router.go(Routes.serverConnection);
+    router.go(_signInRoute);
   }
 }

@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
+import 'package:conduit_core/deployment/deployment_policy.dart';
 import 'package:conduit_core/models/model.dart';
 import 'package:conduit_core/providers/backend_mode_providers.dart';
 
@@ -207,7 +208,10 @@ class _DirectConnectionsPageState extends ConsumerState<DirectConnectionsPage>
             UiUtils.showMessage(context, l10n.applePccUnavailable);
           }
         },
-        webSearchSettings: const OnDeviceWebSearchSettingsSection(),
+        webSearchSettings:
+            ref.watch(deploymentPolicyProvider).allowOnDeviceWebSearch
+            ? const OnDeviceWebSearchSettingsSection()
+            : null,
         modelsWithoutContextLimit: modelsWithoutContextLimit,
         contextLengthOverrides: contextLengthOverrides,
         onContextLengthChanged: (modelId, contextLength) => unawaited(

@@ -51,6 +51,12 @@ import 'package:conduit_core/providers/app_providers.dart';
 
 import 'package:conduit_core/providers/host_ports.dart';
 
+import 'package:conduit_core/deployment/ensure_locked_server.dart';
+
+import 'core/deployment/deployment.dart';
+import 'core/deployment/deployment_providers.dart';
+import 'core/deployment/native_sheet_deployment.dart';
+
 import 'package:conduit_core/network/conduit_user_agent.dart';
 
 import 'core/persistence/hive_bootstrap.dart';
@@ -383,6 +389,8 @@ void main() {
 
       final providerContainer = ProviderContainer(
         overrides: [
+          // The deployment this build is made for (lib/core/deployment).
+          deploymentPolicyProvider.overrideWithValue(kDeployment.policy),
           // Host ports. `lib/core` declares these without a value so it
           // stays free of Flutter plugins; each host binds its own.
           databaseOpenerProvider.overrideWithValue(
@@ -534,6 +542,17 @@ void main() {
 
       installConduitErrorWidgetBuilder();
 
+      // A locked deployment's server is saved before the first redirect, so
+      // the app opens on its sign-in. Bounded like the Keychain warm-up: a
+      // slow Keychain finishes the seeding after first paint, behind the
+      // splash the router holds until the server is there.
+      if (kDeployment.policy.isLocked) {
+        await providerContainer
+            .read(lockedServerBootstrapProvider)
+            .ensure()
+            .timeout(const Duration(seconds: 5), onTimeout: () => false);
+      }
+
       await modelLogosLoaded;
       runApp(
         UncontrolledProviderScope(
@@ -574,6 +593,7 @@ class _ConduitAppState extends ConsumerState<ConduitApp> {
     ref.read(userScopedProviderCleanupProvider);
     ref.read(openWebUiDuplicateAccountReconcilerProvider);
     ref.read(openWebUiRouteResolverProvider);
+    ref.read(lockedServerGuardProvider);
     ref.read(quickActionsCoordinatorProvider);
     ref.read(chatWakelockCoordinatorProvider);
     _nativeSheetSubscription = NativeSheetBridge.instance.events.listen(
@@ -618,6 +638,12 @@ class _ConduitAppState extends ConsumerState<ConduitApp> {
   /// [actionId] was one of them.
   Future<bool> _handleNativeAccountAction(String actionId, Object? value) async {
     final context = NavigationService.context;
+    // A locked build's Sign out row signs out keeping its server.
+    if (actionId == nativeAccountSignOutActionId &&
+        ref.read(deploymentPolicyProvider).isLocked) {
+      await _handleNativeSheetLogoutRequested();
+      return true;
+    }
     switch (actionId) {
       case nativeAccountSwitchActionId:
         if (context == null || value is! String) return true;
@@ -754,6 +780,14 @@ class _ConduitAppState extends ConsumerState<ConduitApp> {
   ) async {
     final value = event.value;
     try {
+      // Rows the deployment does not offer do nothing, should one arrive.
+      if (deploymentClosesNativeAction(
+        ref.read(deploymentPolicyProvider),
+        event.id,
+      )) {
+        return;
+      }
+
       // Accountless (Hermes, Direct, Apple) "Connect to Open WebUI" row.
       // Dismiss the native sheet and route into the OWUI connect flow (the
       // router allows the serverConnection route for accountless users).
@@ -860,7 +894,10 @@ class _ConduitAppState extends ConsumerState<ConduitApp> {
       if (event.id == NativeSheetRoutes.openSourceLicenses) {
         final context = NavigationService.context;
         if (context == null || !context.mounted) return;
-        showLicensePage(context: context, applicationName: 'Conduit');
+        showLicensePage(
+          context: context,
+          applicationName: ref.read(brandConfigProvider).licenseAppName,
+        );
         return;
       }
 
@@ -1580,9 +1617,12 @@ class _ConduitAppState extends ConsumerState<ConduitApp> {
           data: materialTheme,
           child: Builder(
             builder: (context) => LegacyDesignCompatibility(
-              child: ReleaseNotesCoordinator(
-                child: _KeyboardDismissOnScroll(child: safeChild),
-              ),
+              // Without it no release notes are offered (banner included).
+              child: ref.read(brandConfigProvider).showReleaseNotes
+                  ? ReleaseNotesCoordinator(
+                      child: _KeyboardDismissOnScroll(child: safeChild),
+                    )
+                  : _KeyboardDismissOnScroll(child: safeChild),
             ),
           ),
         );

@@ -12,7 +12,11 @@ import 'package:conduit_core/models/account_metadata.dart';
 import 'package:conduit_core/models/model.dart';
 import 'package:conduit_core/models/server_memory.dart';
 import 'package:conduit_core/models/socket_health.dart';
+import 'package:conduit_core/providers/backend_mode_providers.dart'
+    show PreferredBackend;
 
+import '../deployment/deployment.dart';
+import '../deployment/deployment_config.dart';
 import '../services/native_sheet_bridge.dart';
 
 import 'package:conduit_core/services/settings_service.dart';
@@ -43,12 +47,14 @@ String nativeDataConnectionTitle(AppLocalizations l10n) =>
     l10n.settingsDataAndConnection;
 
 /// Rows of the native About page. The server rows are left out when there
-/// is no Open WebUI server (Hermes-only).
+/// is no Open WebUI server (Hermes-only), and the release notes and source
+/// rows when [brand] (by default the build's) has none.
 List<NativeSheetItemConfig> buildNativeAboutItems(
   AppLocalizations l10n, {
   required String appVersion,
   String? serverName,
   String? serverVersion,
+  BrandConfig? brand,
 }) => [
   NativeSheetItemConfig(
     id: 'app-version',
@@ -75,19 +81,21 @@ List<NativeSheetItemConfig> buildNativeAboutItems(
     ),
   // Release notes and the licenses open Flutter pages, so they close the
   // sheet like the other rows that leave it, and say so with a chevron.
-  NativeSheetItemConfig(
-    id: NativeSheetRoutes.releaseNotesManual,
-    title: l10n.releaseNotesTitle,
-    sfSymbol: 'sparkles',
-    showsDisclosure: true,
-    dismissOnSelect: true,
-  ),
-  NativeSheetItemConfig(
-    id: 'github',
-    title: l10n.githubRepository,
-    sfSymbol: 'chevron.left.forwardslash.chevron.right',
-    url: 'https://github.com/cogwheel0/conduit',
-  ),
+  if ((brand ?? kDeployment.brand).showReleaseNotes)
+    NativeSheetItemConfig(
+      id: NativeSheetRoutes.releaseNotesManual,
+      title: l10n.releaseNotesTitle,
+      sfSymbol: 'sparkles',
+      showsDisclosure: true,
+      dismissOnSelect: true,
+    ),
+  if ((brand ?? kDeployment.brand).githubUrl case final githubUrl?)
+    NativeSheetItemConfig(
+      id: 'github',
+      title: l10n.githubRepository,
+      sfSymbol: 'chevron.left.forwardslash.chevron.right',
+      url: githubUrl,
+    ),
   NativeSheetItemConfig(
     id: NativeSheetRoutes.openSourceLicenses,
     title: l10n.openSourceLicenses,
@@ -161,27 +169,45 @@ class NativeProfileRootAccount {
 /// active one, and is null when they could not be read in time. There may
 /// be several then, and signing out signs out of every one, so the sign-out
 /// row says so.
+///
+/// [policy] and [brand] default to the build's. Without account management
+/// the card only names the account; a locked build's Sign out keeps its
+/// server.
 List<NativeSheetSectionConfig> buildNativeProfileRootSections(
   AppLocalizations l10n, {
   required NativeProfileRootAccount? account,
   required NativeProfileRootVisibility visibility,
   required ({String title, String? subtitle}) card,
   int? otherAccountCount = 0,
+  DeploymentPolicy? policy,
+  BrandConfig? brand,
 }) {
+  final deployment = policy ?? kDeployment.policy;
+  final supportItems = buildNativeSupportItems(l10n, brand: brand);
   final hasAccount = account != null;
   final cardItems = <NativeSheetItemConfig>[
-    NativeSheetItemConfig(
-      id: nativeAccountsDetailId,
-      title: card.title,
-      subtitle: card.subtitle,
-      sfSymbol: 'person.crop.circle',
-      usesProfileAvatar: true,
-    ),
-    _nativeAddItem(
-      nativeAccountAddActionId,
-      title: l10n.accountsAddAccount,
-      kind: null,
-    ),
+    if (deployment.allowAccountManagement) ...[
+      NativeSheetItemConfig(
+        id: nativeAccountsDetailId,
+        title: card.title,
+        subtitle: card.subtitle,
+        sfSymbol: 'person.crop.circle',
+        usesProfileAvatar: true,
+      ),
+      _nativeAddItem(
+        nativeAccountAddActionId,
+        title: l10n.accountsAddAccount,
+        kind: null,
+      ),
+    ] else
+      NativeSheetItemConfig(
+        id: nativeAccountCardId,
+        title: card.title,
+        subtitle: card.subtitle,
+        sfSymbol: 'person.crop.circle',
+        usesProfileAvatar: true,
+        kind: NativeSheetItemKind.info,
+      ),
   ];
   // What belongs to the Open WebUI account signed in.
   final accountItems = <NativeSheetItemConfig>[
@@ -293,8 +319,10 @@ List<NativeSheetSectionConfig> buildNativeProfileRootSections(
         items: [
           // With several accounts, Sign out leaves this one and the next
           // takes over; signing out of all is on the Accounts page. With
-          // one, it is what it always was.
-          if (otherAccountCount != null && otherAccountCount > 0)
+          // one, it is what it always was. A locked build has no choice to
+          // offer about its server: the Flutter side confirms and keeps it.
+          if (deployment.isLocked ||
+              (otherAccountCount != null && otherAccountCount > 0))
             NativeSheetItemConfig(
               id: nativeAccountSignOutActionId,
               title: l10n.signOut,
@@ -314,12 +342,14 @@ List<NativeSheetSectionConfig> buildNativeProfileRootSections(
             ),
         ],
       ),
-    NativeSheetSectionConfig(
-      title: l10n.supportConduit,
-      items: buildNativeSupportItems(l10n),
-    ),
+    if (supportItems.isNotEmpty)
+      NativeSheetSectionConfig(title: l10n.supportConduit, items: supportItems),
   ];
 }
+
+/// Id of the account card row where accounts cannot be managed: it only
+/// names the account, and opens nothing.
+const nativeAccountCardId = 'account-card';
 
 /// Id of the native Accounts page, pushed from the account card.
 const nativeAccountsDetailId = 'accounts';
@@ -340,6 +370,7 @@ NativeSheetDetailConfig buildNativeAccountsDetail(
   required List<DirectConnectionProfile>? directProfiles,
   bool appleOnDevice = false,
   bool applePcc = false,
+  DeploymentPolicy? policy,
 }) {
   final byServer = <String, List<OpenWebUiAccountEntry>>{};
   for (final entry in accounts ?? const <OpenWebUiAccountEntry>[]) {
@@ -351,7 +382,7 @@ NativeSheetDetailConfig buildNativeAccountsDetail(
     title: l10n.accountsTitle,
     trailingActionId: nativeAccountAddActionId,
     trailingActionSfSymbol: 'plus',
-    sections: [
+    sections: _withAllowedBackendCards(policy ?? kDeployment.policy, [
       if (accounts == null)
         NativeSheetSectionConfig(
           items: [
@@ -485,9 +516,26 @@ NativeSheetDetailConfig buildNativeAccountsDetail(
         NativeSheetSectionConfig(
           items: [_nativeSignOutItem(l10n, title: l10n.accountsSignOutAll)],
         ),
-    ],
+    ]),
   );
 }
+
+/// [sections] of the Accounts page without the Hermes and Direct cards the
+/// deployment ([policy]) does not allow. A card is known by its first row.
+List<NativeSheetSectionConfig> _withAllowedBackendCards(
+  DeploymentPolicy policy,
+  List<NativeSheetSectionConfig> sections,
+) => [
+  for (final section in sections)
+    if (switch (section.items.firstOrNull?.id) {
+      'accounts-hermes' => policy.allowsBackend(PreferredBackend.hermes),
+      NativeSheetRoutes.directConnections => policy.allowsBackend(
+        PreferredBackend.direct,
+      ),
+      _ => true,
+    })
+      section,
+];
 
 /// A saved Open WebUI account under its server: switched to on a tap, but
 /// the one in use, signed in, stays put.
@@ -606,21 +654,30 @@ const nativeAccountServerActionId = 'account-server';
 const nativeHermesUseActionId = 'account-hermes-use';
 const nativeDirectEditActionId = 'account-direct-edit';
 
-/// The donation rows at the bottom of the native Settings root.
-List<NativeSheetItemConfig> buildNativeSupportItems(AppLocalizations l10n) => [
-  NativeSheetItemConfig(
-    id: 'buy-me-a-coffee',
-    title: l10n.buyMeACoffeeTitle,
-    sfSymbol: 'gift',
-    url: 'https://www.buymeacoffee.com/cogwheel0',
-  ),
-  NativeSheetItemConfig(
-    id: 'github-sponsors',
-    title: l10n.githubSponsorsTitle,
-    sfSymbol: 'heart',
-    url: 'https://github.com/sponsors/cogwheel0',
-  ),
-];
+/// The donation rows at the bottom of the native Settings root: the ones
+/// [brand] (by default the build's) has.
+List<NativeSheetItemConfig> buildNativeSupportItems(
+  AppLocalizations l10n, {
+  BrandConfig? brand,
+}) {
+  final urls = (brand ?? kDeployment.brand).donationUrls;
+  return [
+    if (urls?.buyMeACoffee case final url?)
+      NativeSheetItemConfig(
+        id: 'buy-me-a-coffee',
+        title: l10n.buyMeACoffeeTitle,
+        sfSymbol: 'gift',
+        url: url,
+      ),
+    if (urls?.githubSponsors case final url?)
+      NativeSheetItemConfig(
+        id: 'github-sponsors',
+        title: l10n.githubSponsorsTitle,
+        sfSymbol: 'heart',
+        url: url,
+      ),
+  ];
+}
 
 /// A root row that closes the sheet and opens a Flutter page; it sends its
 /// own id as the control id.

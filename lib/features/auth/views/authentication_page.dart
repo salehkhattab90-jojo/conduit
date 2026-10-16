@@ -10,6 +10,7 @@ import 'package:conduit_core/providers/app_providers.dart';
 import 'package:conduit_core/providers/openwebui_accounts_controller.dart';
 import 'package:conduit_core/services/api_service.dart';
 
+import '../../../core/deployment/deployment_providers.dart';
 import '../../../shared/services/input_validation_service.dart';
 import '../../../shared/services/navigation_service.dart';
 import '../../../core/services/haptic_service.dart';
@@ -39,6 +40,17 @@ enum AuthMode {
   sso, // OAuth/OIDC via WebView
   ldap, // LDAP username/password
 }
+
+/// [modes] without the sign-in methods [policy] leaves out.
+@visibleForTesting
+List<AuthMode> filterAuthModesForDeployment(
+  List<AuthMode> modes,
+  DeploymentPolicy policy,
+) => [
+  for (final mode in modes)
+    if (policy.allowsSignInMode(DeploymentSignInMode.values.byName(mode.name)))
+      mode,
+];
 
 @visibleForTesting
 String normalizeAuthenticationServerUrl(String value) {
@@ -144,9 +156,15 @@ class _AuthenticationPageState extends ConsumerState<AuthenticationPage> {
     return const ConnectionAttemptState.idle();
   }
 
-  /// Whether the server has OAuth/SSO providers configured.
-  bool get _hasSsoEnabled =>
-      isWebViewSupported && (_backendConfig?.hasSsoEnabled ?? true);
+  late final DeploymentPolicy _policy = ref.read(deploymentPolicyProvider);
+
+  /// Whether the server has OAuth/SSO providers configured. A locked
+  /// deployment goes by the server's own config only, and by the providers
+  /// it allows.
+  bool get _hasSsoEnabled => _policy.isLocked
+      ? isWebViewSupported &&
+            _oauthProviders.enabledProviders.any(_policy.allowsSsoProvider)
+      : isWebViewSupported && (_backendConfig?.hasSsoEnabled ?? true);
 
   /// Whether LDAP authentication is enabled on the server.
   bool get _hasLdapEnabled => _backendConfig?.enableLdap == true;
@@ -158,6 +176,11 @@ class _AuthenticationPageState extends ConsumerState<AuthenticationPage> {
   OAuthProviders get _oauthProviders =>
       _backendConfig?.oauthProviders ?? const OAuthProviders();
 
+  /// The server's OAuth providers this deployment lets SSO use.
+  List<String> get _allowedSsoProviders => _oauthProviders.enabledProviders
+      .where(_policy.allowsSsoProvider)
+      .toList(growable: false);
+
   /// Available sign-in methods for this server.
   List<AuthMode> get _availableAuthModes {
     final modes = <AuthMode>[];
@@ -165,7 +188,7 @@ class _AuthenticationPageState extends ConsumerState<AuthenticationPage> {
     if (_hasSsoEnabled) modes.add(AuthMode.sso);
     if (_hasLdapEnabled) modes.add(AuthMode.ldap);
     modes.add(AuthMode.token);
-    return modes;
+    return filterAuthModesForDeployment(modes, _policy);
   }
 
   /// Label for each auth mode segment.
@@ -194,6 +217,27 @@ class _AuthenticationPageState extends ConsumerState<AuthenticationPage> {
       _ldapPasswordController,
     ]) {
       controller.addListener(_resetTransientLogin);
+    }
+    if (_policy.isLocked && _backendConfig == null) {
+      // Reached by redirect, with no connection page to hand the server's
+      // config over: read it, and pick the method again once it arrives.
+      _backendConfig = ref.read(backendConfigProvider).value;
+      ref.listenManual<AsyncValue<BackendConfig?>>(backendConfigProvider, (
+        _,
+        next,
+      ) {
+        final config = next.value;
+        if (!mounted || config == null || widget.backendConfig != null) {
+          return;
+        }
+        final firstConfig = _backendConfig == null;
+        setState(() {
+          _backendConfig = config;
+          if (firstConfig || !_availableAuthModes.contains(_authMode)) {
+            _setDefaultAuthMode();
+          }
+        });
+      });
     }
     _setDefaultAuthMode();
     // Hydrate programmatic field values before surfacing auth errors so the
@@ -233,7 +277,7 @@ class _AuthenticationPageState extends ConsumerState<AuthenticationPage> {
   /// Set the default auth mode based on what the server supports.
   void _setDefaultAuthMode() {
     // Priority: SSO > Credentials > LDAP > Token
-    if (_hasSsoEnabled && _oauthProviders.enabledProviders.length == 1) {
+    if (_hasSsoEnabled && _allowedSsoProviders.length == 1) {
       // If only one SSO provider, that's probably the intended method
       _authMode = AuthMode.sso;
     } else if (_hasLoginFormEnabled) {
@@ -247,8 +291,10 @@ class _AuthenticationPageState extends ConsumerState<AuthenticationPage> {
 
     // Keep the selected segment and rendered form in sync with the methods
     // supported by both the server and this platform.
+    // (Stock always offers more than one method or exactly the one picked;
+    // a deployment can leave just one, which must then be the one shown.)
     final selectableModes = _availableAuthModes;
-    if (selectableModes.length > 1 && !selectableModes.contains(_authMode)) {
+    if (selectableModes.isNotEmpty && !selectableModes.contains(_authMode)) {
       _authMode = selectableModes.first;
     }
   }
@@ -388,7 +434,7 @@ class _AuthenticationPageState extends ConsumerState<AuthenticationPage> {
   /// Back to server setup, except while adding another account: then back
   /// to where that began, or -- once this sign-in has become the active
   /// account -- Cancel, which drops it and returns to the previous account.
-  UtilityBackNavigation _backNavigation(
+  UtilityBackNavigation? _backNavigation(
     AppLocalizations l10n, {
     required bool abandonable,
   }) {
@@ -407,6 +453,8 @@ class _AuthenticationPageState extends ConsumerState<AuthenticationPage> {
         onPressed: () => context.pop(),
       );
     }
+    // A locked deployment has no server setup to go back to.
+    if (_policy.isLocked) return null;
     return UtilityBackNavigation(
       label: l10n.backToServerSetup,
       buttonKey: key,
@@ -613,6 +661,18 @@ class _AuthenticationPageState extends ConsumerState<AuthenticationPage> {
   }
 
   Widget _buildHeader() {
+    // A branded build names itself rather than the server address.
+    final tagline = ref.watch(brandConfigProvider).tagline;
+    if (tagline != null) {
+      return Text(
+        tagline,
+        key: const ValueKey<String>('authentication-brand-tagline'),
+        textAlign: TextAlign.center,
+        style: AppTypography.bodyMediumStyle.copyWith(
+          color: context.conduitTheme.textSecondary,
+        ),
+      );
+    }
     return Text(
       _serverAddressForDisplay(_resolvedServerConfig?.url),
       textAlign: TextAlign.center,
@@ -663,7 +723,7 @@ class _AuthenticationPageState extends ConsumerState<AuthenticationPage> {
   }
 
   String _ssoSubtitle(AppLocalizations l10n) {
-    final providers = _oauthProviders.enabledProviders;
+    final providers = _allowedSsoProviders;
     if (providers.length > 1) {
       return providers.map(_oauthProviders.getProviderDisplayName).join(' · ');
     }

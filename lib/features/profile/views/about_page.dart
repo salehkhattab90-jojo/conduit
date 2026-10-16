@@ -6,6 +6,7 @@ import 'package:conduit_core/models/server_about_info.dart';
 
 import 'package:conduit_core/providers/app_providers.dart';
 
+import '../../../core/deployment/deployment_providers.dart';
 import '../../../features/release_notes/data/release_notes_repository.dart';
 import '../../../features/release_notes/release_notes_presenter.dart';
 import '../../../l10n/app_localizations.dart';
@@ -19,8 +20,6 @@ import '../../../shared/services/app_package_info.dart';
 
 class AboutPage extends ConsumerStatefulWidget {
   const AboutPage({super.key});
-
-  static const _githubUrl = 'https://github.com/cogwheel0/conduit';
 
   @override
   ConsumerState<AboutPage> createState() => _AboutPageState();
@@ -109,6 +108,8 @@ class _AboutPageState extends ConsumerState<AboutPage> {
     PackageInfo info,
   ) {
     final theme = context.conduitTheme;
+    final brand = ref.watch(brandConfigProvider);
+    final githubUrl = brand.githubUrl;
     final versionLabel = info.buildNumber.isEmpty
         ? info.version
         : '${info.version} (${info.buildNumber})';
@@ -117,31 +118,33 @@ class _AboutPageState extends ConsumerState<AboutPage> {
       title: l10n.appInformation,
       children: [
         UtilityValueRow(label: l10n.appVersion, value: versionLabel),
-        UtilityRow(
-          leading: Icon(
-            Icons.new_releases_rounded,
-            size: IconSize.medium,
-            color: theme.buttonPrimary,
+        if (brand.showReleaseNotes)
+          UtilityRow(
+            leading: Icon(
+              Icons.new_releases_rounded,
+              size: IconSize.medium,
+              color: theme.buttonPrimary,
+            ),
+            title: l10n.releaseNotesTitle,
+            showChevron: true,
+            onTap: () => _openReleaseNotes(context, info),
           ),
-          title: l10n.releaseNotesTitle,
-          showChevron: true,
-          onTap: () => _openReleaseNotes(context, info),
-        ),
-        UtilityRow(
-          leading: Icon(
-            Icons.code_rounded,
-            size: IconSize.medium,
-            color: theme.buttonPrimary,
+        if (githubUrl != null)
+          UtilityRow(
+            leading: Icon(
+              Icons.code_rounded,
+              size: IconSize.medium,
+              color: theme.buttonPrimary,
+            ),
+            title: l10n.githubRepository,
+            subtitle: brand.githubLabel,
+            trailing: Icon(
+              Icons.open_in_new_rounded,
+              size: IconSize.small,
+              color: theme.iconSecondary,
+            ),
+            onTap: () => _openGithub(context, githubUrl),
           ),
-          title: l10n.githubRepository,
-          subtitle: 'github.com/cogwheel0/conduit',
-          trailing: Icon(
-            Icons.open_in_new_rounded,
-            size: IconSize.small,
-            color: theme.iconSecondary,
-          ),
-          onTap: () => _openGithub(context),
-        ),
         UtilityRow(
           leading: Icon(
             Icons.description_outlined,
@@ -172,18 +175,18 @@ class _AboutPageState extends ConsumerState<AboutPage> {
     );
   }
 
-  Future<void> _openGithub(BuildContext context) async {
-    final launched = await launchExternalLink(
-      AboutPage._githubUrl,
-      scope: 'about/github',
-    );
+  Future<void> _openGithub(BuildContext context, String url) async {
+    final launched = await launchExternalLink(url, scope: 'about/github');
     if (!launched && context.mounted) {
       UiUtils.showMessage(context, AppLocalizations.of(context)!.errorMessage);
     }
   }
 
   void _showLicenses(BuildContext context) {
-    showLicensePage(context: context, applicationName: 'Conduit');
+    showLicensePage(
+      context: context,
+      applicationName: ref.read(brandConfigProvider).licenseAppName,
+    );
   }
 
   Future<void> _openReleaseNotes(BuildContext context, PackageInfo info) async {
