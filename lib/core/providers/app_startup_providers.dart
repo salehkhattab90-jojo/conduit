@@ -16,6 +16,7 @@ import 'package:conduit_core/auth/auth_state_manager.dart';
 
 import 'package:conduit_core/features/hermes/services/hermes_session_provenance.dart';
 import 'package:conduit_core/providers/app_providers.dart';
+import 'package:conduit_core/providers/socket_access_refresh_provider.dart';
 
 import 'package:conduit_core/sync/sync_triggers.dart';
 
@@ -1178,6 +1179,9 @@ class AppStartupFlow extends _$AppStartupFlow {
     // fetch) so the sidebar generating spinner is correct app-wide, including
     // for generations started by other sessions. keepAlive keeps it running.
     ref.read(activeChatsSyncProvider);
+    // Re-read permissions and models when the server says this account's
+    // access changed (Open WebUI 0.12 `access:updated`).
+    ref.read(socketAccessRefreshProvider);
     // Match Open WebUI's layout-scoped direct-completion RPC handler. It must
     // be listening before a completion POST can ask this client to contact the
     // saved provider and relay its stream through the server.

@@ -82,6 +82,31 @@ class SocketService {
   Timer? _resumeReconnectWatchdogTimer;
   bool _forcePollingFallback = false;
 
+  // Socket.IO does not reconnect by itself after the server ends the session
+  // (`io server disconnect`), which Open WebUI 0.12 does on password, MFA,
+  // role and group changes. These drive that recovery.
+  Timer? _serverDisconnectReconnectTimer;
+  int _serverDisconnectReconnectAttempts = 0;
+  static const int _maxServerDisconnectReconnectAttempts = 6;
+
+  // Set by `access:updated` (sent just before such a disconnect when the
+  // account's access changed); published once the next session is up.
+  bool _accessUpdatePending = false;
+  final _accessUpdatedController = StreamController<void>.broadcast();
+
+  /// Emits once a session is back up after the server said this account's
+  /// access changed (`access:updated`), so permissions and models can be
+  /// read again, as the web client does on its next `connect`.
+  Stream<void> get onAccessUpdated => _accessUpdatedController.stream;
+
+  /// How long to wait before reconnection attempt [attempt] (from 0) after
+  /// the server ended the session: 0.5 s, doubling, at most 30 s.
+  @visibleForTesting
+  static Duration serverDisconnectReconnectDelay(int attempt) {
+    final ms = 500 * math.pow(2, attempt.clamp(0, 16)).toInt();
+    return Duration(milliseconds: math.min(ms, 30000));
+  }
+
   /// Heartbeat interval matching OpenWebUI's 30-second interval.
   static const Duration _heartbeatInterval = Duration(seconds: 30);
   static const Duration _defaultResumeReconnectWatchdogTimeout = Duration(
@@ -1137,6 +1162,9 @@ class SocketService {
     _backgroundLeaseHandlerIds.clear();
     _reconnectController.close();
     _healthController.close();
+    _serverDisconnectReconnectTimer?.cancel();
+    _serverDisconnectReconnectTimer = null;
+    _accessUpdatedController.close();
     _connectionCompleter?.completeError(StateError('Service disposed'));
     _connectionCompleter = null;
     final pendingForcedConnect = _pendingForcedConnect;
@@ -1200,7 +1228,8 @@ class SocketService {
       ..on('reconnect_attempt', _handleReconnectAttempt)
       ..on('reconnect', _handleReconnect)
       ..on('reconnect_failed', _handleReconnectFailed)
-      ..on('disconnect', _handleDisconnect);
+      ..on('disconnect', _handleDisconnect)
+      ..on('access:updated', _handleAccessUpdated);
   }
 
   void _unbindCoreSocketHandlers(io.Socket socket) {
@@ -1214,7 +1243,8 @@ class SocketService {
       ..off('reconnect_attempt', _handleReconnectAttempt)
       ..off('reconnect', _handleReconnect)
       ..off('reconnect_failed', _handleReconnectFailed)
-      ..off('disconnect', _handleDisconnect);
+      ..off('disconnect', _handleDisconnect)
+      ..off('access:updated', _handleAccessUpdated);
   }
 
   void _bindDynamicSocketHandlers(io.Socket? socket) {
@@ -1293,6 +1323,7 @@ class SocketService {
     _emitHealthUpdate();
 
     _publishPendingResumeReconciliation();
+    _onSessionEstablished();
   }
 
   void _handleReconnectAttempt(dynamic attempt) {
@@ -1367,6 +1398,7 @@ class SocketService {
 
     // Emit health update
     _emitHealthUpdate();
+    _onSessionEstablished();
   }
 
   void _handleConnectError(dynamic err) {
@@ -1392,6 +1424,11 @@ class SocketService {
         reason: 'websocket-polling-fallback',
       );
       return;
+    }
+    // A reconnection after the server ended the session was refused (for
+    // example while the server still settles the change): try again later.
+    if (_serverDisconnectReconnectAttempts > 0) {
+      _scheduleServerDisconnectReconnect();
     }
     _runPendingForcedConnectBestEffort(reason: 'connect-error');
   }
@@ -1433,6 +1470,53 @@ class SocketService {
     // Emit health update
     _emitHealthUpdate();
     _runPendingForcedConnectBestEffort(reason: 'disconnected');
+
+    // The server ended this session itself; Socket.IO leaves it closed.
+    if (reason?.toString() == 'io server disconnect') {
+      _scheduleServerDisconnectReconnect();
+    }
+  }
+
+  void _scheduleServerDisconnectReconnect() {
+    if (_disposed || !_mayMaintainTransport) return;
+    if (_serverDisconnectReconnectAttempts >=
+        _maxServerDisconnectReconnectAttempts) {
+      DebugLogger.warning(
+        'Giving up reconnecting after a server-initiated disconnect',
+        scope: 'socket/reconnect',
+        data: {'attempts': _serverDisconnectReconnectAttempts},
+      );
+      return;
+    }
+    final delay = serverDisconnectReconnectDelay(
+      _serverDisconnectReconnectAttempts++,
+    );
+    _serverDisconnectReconnectTimer?.cancel();
+    _serverDisconnectReconnectTimer = Timer(delay, () {
+      _serverDisconnectReconnectTimer = null;
+      if (_disposed || !_mayMaintainTransport || isConnected || _isConnecting) {
+        return;
+      }
+      connectBestEffort(force: true, reason: 'server-disconnect');
+    });
+  }
+
+  void _handleAccessUpdated(dynamic _) {
+    _accessUpdatePending = true;
+  }
+
+  /// A session is up: recovery after a server-initiated disconnect is over,
+  /// and an access change the server announced can now be read.
+  void _onSessionEstablished() {
+    _serverDisconnectReconnectTimer?.cancel();
+    _serverDisconnectReconnectTimer = null;
+    _serverDisconnectReconnectAttempts = 0;
+    if (_accessUpdatePending) {
+      _accessUpdatePending = false;
+      if (!_accessUpdatedController.isClosed) {
+        _accessUpdatedController.add(null);
+      }
+    }
   }
 
   /// Starts the heartbeat timer to keep the connection alive.

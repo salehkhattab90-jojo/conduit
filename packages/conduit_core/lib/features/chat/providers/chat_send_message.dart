@@ -1394,6 +1394,7 @@ Future<void> _sendMessageInternal(
         backgroundTasks: bgTasks,
         responseMessageId: assistantMessageId,
         userSettings: userSettingsData,
+        memoriesDefault: ref.read(serverMemoriesDefaultProvider),
         chatParams: turnSettings.chatParams,
         reasoningEffort: turnSettings.reasoningEffort,
         parentId: userMessageMap?['parentId']?.toString(),

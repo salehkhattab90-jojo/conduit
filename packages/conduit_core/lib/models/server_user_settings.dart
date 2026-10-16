@@ -7,7 +7,7 @@ import 'model_controls.dart';
 class ServerUserSettings {
   const ServerUserSettings({
     this.systemPrompt,
-    this.memoryEnabled = false,
+    this.memoryEnabled,
     this.defaultModelIds = const <String>[],
     this.pinnedModelIds = const <String>[],
     this.reasoningEffort,
@@ -18,7 +18,10 @@ class ServerUserSettings {
   });
 
   final String? systemPrompt;
-  final bool memoryEnabled;
+
+  /// The user's own memory switch (`ui.memory`), or null when they have not
+  /// set it and the server's default applies; see [effectiveMemoryEnabled].
+  final bool? memoryEnabled;
   final List<String> defaultModelIds;
   final List<String> pinnedModelIds;
   final String? reasoningEffort;
@@ -34,6 +37,12 @@ class ServerUserSettings {
   /// `{modelId: {key: option}}`), shared with the web client.
   final Map<String, Map<String, String>> modelControls;
 
+  /// Whether memory is on: the user's own switch, else the server's default
+  /// (`features.enable_memories`), else off, as the web client decides
+  /// (`$settings.memory ?? $config.features.enable_memories ?? false`).
+  bool effectiveMemoryEnabled(bool? serverDefault) =>
+      memoryEnabled ?? serverDefault ?? false;
+
   /// The user's preferred default model, if one is configured.
   String? get defaultModelId =>
       defaultModelIds.isEmpty ? null : defaultModelIds.first;
@@ -47,7 +56,7 @@ class ServerUserSettings {
 
     return ServerUserSettings(
       systemPrompt: uiSystem ?? rootSystem,
-      memoryEnabled: _coerceBool(ui?['memory']) ?? false,
+      memoryEnabled: _coerceBool(ui?['memory']),
       defaultModelIds: _coerceStringList(ui?['models']),
       pinnedModelIds: _coerceUniqueStringList(ui?['pinnedModels']),
       reasoningEffort: _normalizeString(params?['reasoning_effort']),

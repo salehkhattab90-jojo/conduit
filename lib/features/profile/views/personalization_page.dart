@@ -11,6 +11,7 @@ import 'package:conduit_core/models/server_user_settings.dart';
 import 'package:conduit_core/models/server_memory.dart';
 
 import 'package:conduit_core/providers/app_providers.dart';
+import 'package:conduit_core/providers/server_memories_default_provider.dart';
 
 import '../../../core/services/haptic_service.dart';
 import '../../../core/services/native_sheet_bridge.dart';
@@ -274,7 +275,9 @@ class _PersonalizationPageState extends ConsumerState<PersonalizationPage> {
       children: [
         settingsAsync.when(
           data: (settings) {
-            final enabled = settings.memoryEnabled;
+            final enabled = settings.effectiveMemoryEnabled(
+              ref.watch(serverMemoriesDefaultProvider),
+            );
             return CustomizationTile(
               leading: SettingsIconBadge(
                 icon: UiUtils.platformIcon(

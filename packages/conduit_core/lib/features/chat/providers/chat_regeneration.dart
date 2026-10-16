@@ -1143,6 +1143,7 @@ Future<void> regenerateMessage(
         backgroundTasks: bgTasks,
         responseMessageId: assistantMessageId,
         userSettings: userSettingsData,
+        memoriesDefault: ref.read(serverMemoriesDefaultProvider),
         chatParams: turnSettings.chatParams,
         reasoningEffort: turnSettings.reasoningEffort,
         parentId: parentMsgMap?['parentId']?.toString(),

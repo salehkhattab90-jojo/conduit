@@ -928,6 +928,7 @@ Future<void> runComparisonCompletion(
       backgroundTasks: bgTasks,
       responseMessageId: primary.assistantMessageId,
       userSettings: userSettingsData,
+      memoriesDefault: ref.read(serverMemoriesDefaultProvider),
       globalParams: turnSettings.baseline?.globalParams,
       chatParams: turnSettings.chatParams,
       reasoningEffort: turnSettings.reasoningEffort,

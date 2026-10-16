@@ -122,6 +122,7 @@ class BackendConfig {
     this.enableAutomations,
     this.enableCalendar,
     this.enableEmail,
+    this.enableMemories,
     this.enableAudioInput,
     this.enableAudioOutput,
     this.sttProvider,
@@ -203,6 +204,12 @@ class BackendConfig {
   /// treat only `true` as enabled.
   final bool? enableEmail;
 
+  /// Mirrors `features.enable_memories` (the server's `memories.enable`),
+  /// reported only to a signed-in account: whether memory is on for a user
+  /// who has not set it (`ui.memory`) themselves. Null means the server did
+  /// not say, which the web client reads as off.
+  final bool? enableMemories;
+
   final bool? enableAudioInput;
   final bool? enableAudioOutput;
   final String? sttProvider;
@@ -258,6 +265,7 @@ class BackendConfig {
     bool? enableAutomations,
     bool? enableCalendar,
     bool? enableEmail,
+    bool? enableMemories,
     bool? enableAudioInput,
     bool? enableAudioOutput,
     String? sttProvider,
@@ -294,6 +302,7 @@ class BackendConfig {
       enableAutomations: enableAutomations ?? this.enableAutomations,
       enableCalendar: enableCalendar ?? this.enableCalendar,
       enableEmail: enableEmail ?? this.enableEmail,
+      enableMemories: enableMemories ?? this.enableMemories,
       enableAudioInput: enableAudioInput ?? this.enableAudioInput,
       enableAudioOutput: enableAudioOutput ?? this.enableAudioOutput,
       sttProvider: sttProvider ?? this.sttProvider,
@@ -348,6 +357,7 @@ class BackendConfig {
       'enable_automations': enableAutomations,
       'enable_calendar': enableCalendar,
       'enable_email': enableEmail,
+      'enable_memories': enableMemories,
       'enable_audio_input': enableAudioInput,
       'enable_audio_output': enableAudioOutput,
       'stt_provider': sttProvider,
@@ -382,6 +392,7 @@ class BackendConfig {
     bool? enableAutomations;
     bool? enableCalendar;
     bool? enableEmail;
+    bool? enableMemories;
     bool? enableAudioInput;
     bool? enableAudioOutput;
     String? sttProvider;
@@ -451,6 +462,10 @@ class BackendConfig {
     final emailValue = json['enable_email'];
     if (emailValue is bool) {
       enableEmail = emailValue;
+    }
+    final memoriesValue = json['enable_memories'];
+    if (memoriesValue is bool) {
+      enableMemories = memoriesValue;
     }
 
     final audioIn = json['enable_audio_input'];
@@ -576,6 +591,10 @@ class BackendConfig {
       if (nestedEmail is bool && enableEmail == null) {
         enableEmail = nestedEmail;
       }
+      final nestedMemories = features['enable_memories'];
+      if (nestedMemories is bool && enableMemories == null) {
+        enableMemories = nestedMemories;
+      }
       final nestedAudioIn = features['enable_audio_input'];
       if (nestedAudioIn is bool && enableAudioInput == null) {
         enableAudioInput = nestedAudioIn;
@@ -655,6 +674,7 @@ class BackendConfig {
       enableAutomations: enableAutomations,
       enableCalendar: enableCalendar,
       enableEmail: enableEmail,
+      enableMemories: enableMemories,
       enableAudioInput: enableAudioInput,
       enableAudioOutput: enableAudioOutput,
       sttProvider: sttProvider,
@@ -674,6 +694,15 @@ class BackendConfig {
       enableLoginForm: enableLoginForm,
     );
   }
+}
+
+/// The memory default ([BackendConfig.enableMemories]) of the server
+/// [serverId], or null when [config] is not known to come from that server.
+bool? openWebUiMemoriesDefault(BackendConfig? config, String? serverId) {
+  if (config == null || serverId == null || config.serverId != serverId) {
+    return null;
+  }
+  return config.enableMemories;
 }
 
 Map<String, dynamic>? _coerceJsonMap(dynamic value) {

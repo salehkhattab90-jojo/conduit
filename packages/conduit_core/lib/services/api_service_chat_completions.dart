@@ -128,6 +128,10 @@ mixin _ChatCompletionsApi on _ApiServiceBase {
     /// The `model_item` of each further model in [messageIds], by model id,
     /// so the user's model-control picks can be sent for those models too.
     Map<String, Map<String, dynamic>>? targetModelItems,
+
+    /// The server's memory default (`features.enable_memories`), used when
+    /// the user has not set memory themselves.
+    bool? memoriesDefault,
   }) async {
     // Generate unique IDs
     final messageId =
@@ -205,6 +209,7 @@ mixin _ChatCompletionsApi on _ApiServiceBase {
         files: files,
         messageIds: messageIds,
         targetModelItems: targetModelItems,
+        memoriesDefault: memoriesDefault,
         metadataFormat: metadataFormat,
       );
 
@@ -446,6 +451,7 @@ mixin _ChatCompletionsApi on _ApiServiceBase {
     bool useLegacyChatMetadata = false,
     List<ChatCompletionTarget>? messageIds,
     Map<String, Map<String, dynamic>>? targetModelItems,
+    bool? memoriesDefault,
   }) {
     return _buildChatCompletionPayload(
       messages: messages,
@@ -469,6 +475,7 @@ mixin _ChatCompletionsApi on _ApiServiceBase {
       files: files,
       messageIds: messageIds,
       targetModelItems: targetModelItems,
+      memoriesDefault: memoriesDefault,
       metadataFormat: useLegacyChatMetadata
           ? _ChatRequestMetadataFormat.legacyPreV09
           : _ChatRequestMetadataFormat.modernV09,

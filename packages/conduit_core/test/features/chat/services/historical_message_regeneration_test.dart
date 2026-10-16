@@ -240,6 +240,7 @@ class _RecordingCompletionApi extends ApiService {
     List<Map<String, dynamic>>? files,
     List<ChatCompletionTarget>? messageIds,
     Map<String, Map<String, dynamic>>? targetModelItems,
+    bool? memoriesDefault,
   }) async {
     completionCalls += 1;
     lastEnableImageGeneration = enableImageGeneration;

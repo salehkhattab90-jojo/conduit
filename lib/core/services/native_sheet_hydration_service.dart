@@ -28,6 +28,7 @@ import 'package:conduit_core/models/tool.dart';
 import '../network/image_header_utils.dart';
 
 import 'package:conduit_core/providers/app_providers.dart';
+import 'package:conduit_core/providers/server_memories_default_provider.dart';
 import 'package:conduit_core/features/hermes/providers/hermes_providers.dart';
 import 'package:conduit_core/features/hermes/models/hermes_model.dart';
 import 'package:conduit_core/features/automations/providers/automation_providers.dart'
@@ -227,6 +228,10 @@ class NativeSheetHydrationService {
   }
 
   final Ref _ref;
+
+  /// The server's memory default, for an account that has not switched
+  /// memory itself.
+  bool? get _memoriesDefault => _ref.read(serverMemoriesDefaultProvider);
   bool _appearanceDetailPresented = false;
   MemoryOwner? _memoryOwner;
   _NativeProfileRoot? _profileRoot;
@@ -881,7 +886,7 @@ class NativeSheetHydrationService {
               NativeSheetItemConfig(
                 id: 'personalization-memory',
                 title: l10n.memoryTitle,
-                subtitle: settings.memoryEnabled
+                subtitle: settings.effectiveMemoryEnabled(_memoriesDefault)
                     ? l10n.memoryEnabledDescription
                     : l10n.memoryDisabledDescription,
                 sfSymbol: 'bookmark',
@@ -922,7 +927,7 @@ class NativeSheetHydrationService {
               l10n: l10n,
               id: 'personalization-memory',
               title: l10n.memoryTitle,
-              subtitle: settings.memoryEnabled
+              subtitle: settings.effectiveMemoryEnabled(_memoriesDefault)
                   ? l10n.memoryEnabledDescription
                   : l10n.memoryDisabledDescription,
             ),
@@ -978,7 +983,7 @@ class NativeSheetHydrationService {
                   NativeSheetItemConfig(
                     id: 'personalization-memory',
                     title: l10n.memoryTitle,
-                    subtitle: settings.memoryEnabled
+                    subtitle: settings.effectiveMemoryEnabled(_memoriesDefault)
                         ? l10n.enabled
                         : l10n.disabled,
                     sfSymbol: 'bookmark',
@@ -999,7 +1004,7 @@ class NativeSheetHydrationService {
               l10n: l10n,
               id: 'personalization-memory',
               title: l10n.memoryTitle,
-              subtitle: settings.memoryEnabled
+              subtitle: settings.effectiveMemoryEnabled(_memoriesDefault)
                   ? l10n.memoryEnabledDescription
                   : l10n.memoryDisabledDescription,
             ),
@@ -1737,19 +1742,19 @@ class NativeSheetHydrationService {
         NativeSheetDetailConfig(
           id: 'personalization-memory',
           title: l10n.memoryTitle,
-          subtitle: settings.memoryEnabled
+          subtitle: settings.effectiveMemoryEnabled(_memoriesDefault)
               ? l10n.memoryEnabledDescription
               : l10n.memoryDisabledDescription,
           items: [
             NativeSheetItemConfig(
               id: 'memory-enabled',
               title: l10n.memoryTitle,
-              subtitle: settings.memoryEnabled
+              subtitle: settings.effectiveMemoryEnabled(_memoriesDefault)
                   ? l10n.memoryEnabledDescription
                   : l10n.memoryDisabledDescription,
               sfSymbol: 'bookmark',
               kind: NativeSheetItemKind.toggle,
-              value: settings.memoryEnabled,
+              value: settings.effectiveMemoryEnabled(_memoriesDefault),
             ),
             NativeSheetItemConfig(
               id: 'memory-manage',

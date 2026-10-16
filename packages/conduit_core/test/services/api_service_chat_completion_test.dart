@@ -1421,6 +1421,33 @@ void main() {
   // Payload builder
   // -----------------------------------------------------------------------
   group('buildChatCompletionPayloadForTest', () {
+    test('memory is the user switch, else the server default, else off', () {
+      final api = _buildApiServiceForTest(_FakeAdapter.json({}));
+      bool memory({Object? userSwitch, bool? serverDefault}) {
+        final features =
+            api.buildChatCompletionPayloadForTest(
+                  messages: [
+                    {'role': 'user', 'content': 'hello'},
+                  ],
+                  model: 'm1',
+                  messageId: 'msg-1',
+                  sessionId: 'sess-1',
+                  userSettings: {
+                    'ui': {'memory': ?userSwitch},
+                  },
+                  memoriesDefault: serverDefault,
+                )['features']
+                as Map<String, dynamic>;
+        return features['memory'] == true;
+      }
+
+      expect(memory(), isFalse);
+      expect(memory(serverDefault: false), isFalse);
+      expect(memory(serverDefault: true), isTrue);
+      expect(memory(userSwitch: true), isTrue);
+      expect(memory(userSwitch: true, serverDefault: false), isTrue);
+      expect(memory(userSwitch: false, serverDefault: true), isFalse);
+    });
     group('model controls', () {
       Map<String, dynamic> modelItem(String id, Map<String, dynamic> options) =>
           {

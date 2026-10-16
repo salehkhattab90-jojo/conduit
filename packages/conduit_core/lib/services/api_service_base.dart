@@ -1561,6 +1561,7 @@ abstract class _ApiServiceBase {
     List<Map<String, dynamic>>? files,
     List<ChatCompletionTarget>? messageIds,
     Map<String, Map<String, dynamic>>? targetModelItems,
+    bool? memoriesDefault,
     _ChatRequestMetadataFormat metadataFormat =
         _ChatRequestMetadataFormat.modernV09,
   }) {
@@ -1743,8 +1744,12 @@ abstract class _ApiServiceBase {
     // Feature flags via 'features' object (not top-level params).
     // Mirror the web client by always sending the base feature flags, even
     // when disabled, so pipes receive a stable request shape.
+    // Memory is the user's own switch (`ui.memory`), else the server's
+    // default (`features.enable_memories`), else off, as in the web client.
     final uiMemorySettings = userSettings?['ui'] as Map<String, dynamic>?;
-    final bool memoryEnabled = uiMemorySettings?['memory'] == true;
+    final uiMemory = uiMemorySettings?['memory'];
+    final bool memoryEnabled =
+        (uiMemory is bool ? uiMemory : null) ?? memoriesDefault ?? false;
 
     final features = <String, dynamic>{
       'voice': isVoiceMode,

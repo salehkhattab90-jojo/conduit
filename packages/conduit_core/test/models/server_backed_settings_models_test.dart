@@ -20,7 +20,7 @@ void main() {
       });
 
       check(settings.systemPrompt).equals('preferred prompt');
-      check(settings.memoryEnabled).isTrue();
+      check(settings.memoryEnabled).equals(true);
       check(settings.defaultModelIds).deepEquals(['gpt-4.1', 'fallback-model']);
       check(settings.defaultModelId).equals('gpt-4.1');
       check(settings.pinnedModelIds).deepEquals(['gpt-4.1', 'claude-sonnet']);
@@ -33,7 +33,7 @@ void main() {
       });
 
       check(settings.systemPrompt).equals('root prompt');
-      check(settings.memoryEnabled).isFalse();
+      check(settings.memoryEnabled).equals(false);
       check(settings.defaultModelIds).isEmpty();
       check(settings.pinnedModelIds).isEmpty();
     });
@@ -49,11 +49,26 @@ void main() {
       final updated = original.copyWith(pinnedModelIds: ['new-model']);
 
       check(updated.systemPrompt).equals('prompt');
-      check(updated.memoryEnabled).isTrue();
+      check(updated.memoryEnabled).equals(true);
       check(updated.defaultModelIds).deepEquals(['gpt-4.1']);
       check(updated.pinnedModelIds).deepEquals(['new-model']);
     });
 
+    test('an unset memory switch follows the server default', () {
+      final settings = ServerUserSettings.fromJson({'ui': <String, dynamic>{}});
+
+      check(settings.memoryEnabled).isNull();
+      check(settings.effectiveMemoryEnabled(true)).isTrue();
+      check(settings.effectiveMemoryEnabled(false)).isFalse();
+      check(settings.effectiveMemoryEnabled(null)).isFalse();
+      // The user's own switch wins either way.
+      check(
+        settings.copyWith(memoryEnabled: false).effectiveMemoryEnabled(true),
+      ).isFalse();
+      check(
+        settings.copyWith(memoryEnabled: true).effectiveMemoryEnabled(false),
+      ).isTrue();
+    });
     test('parses top-level notification preferences', () {
       final settings = ServerUserSettings.fromJson({
         'notificationEnabled': true,
@@ -228,6 +243,28 @@ void main() {
       check(cached.realtimeCallVoice).equals('marin');
     });
 
+    test('reads the memory default and keeps it cached', () {
+      final config = BackendConfig.fromJson({
+        'features': {'enable_memories': true},
+      }).copyWith(serverId: 'A');
+
+      check(config.enableMemories).equals(true);
+      check(BackendConfig.fromJson(config.toJson()).enableMemories)
+          .equals(true);
+      check(openWebUiMemoriesDefault(config, 'A')).equals(true);
+      // Not known to belong to another server, or to any.
+      check(openWebUiMemoriesDefault(config, 'B')).isNull();
+      check(openWebUiMemoriesDefault(config, null)).isNull();
+      check(
+        openWebUiMemoriesDefault(
+          BackendConfig.fromJson({
+            'features': {'enable_memories': true},
+          }),
+          'A',
+        ),
+      ).isNull();
+      check(BackendConfig.fromJson(const {}).enableMemories).isNull();
+    });
     test('a server without realtime calls leaves them unknown', () {
       // Open WebUI 0.11 and signed-out configs send no `audio.realtime`.
       final config = BackendConfig.fromJson({
