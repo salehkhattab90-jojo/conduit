@@ -67,7 +67,9 @@ android {
         }
         getByName("debug") {
             // signingConfig = signingConfigs.getByName("debug")
-            applicationIdSuffix = ".debug"
+            // FADI: no ".debug" suffix. Debug builds use the release id, which is
+            // the only Android app in FADI's google-services.json, so push works
+            // and a debug build installs over the app.
         }
     }
 }
